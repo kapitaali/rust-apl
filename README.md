@@ -2,7 +2,7 @@
 
 An experimental rewrite of the [GNU APL](https://www.gnu.org/software/apl/) interpreter in Rust. A from-scratch reimplementation of the C++ interpreter that powers GNU APL 1.7+ (ISO/IEC 13751), following a phased migration of the original class hierarchy into idiomatic Rust.
 
-Phase 1–6+ of the migration are substantially complete: a working REPL with **220 tests passing**, zero clippy warnings, release build verified.
+Phase 1–6+ of the migration are substantially complete: a working REPL with **221 tests passing**, zero clippy warnings, release build verified.
 
 ## What works
 
