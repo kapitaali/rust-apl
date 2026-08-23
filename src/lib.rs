@@ -29,5 +29,6 @@ pub mod take_drop;
 pub mod tokenizer;
 pub mod transpose;
 pub mod types;
+pub mod unparse;
 pub mod value;
 pub mod workspace;

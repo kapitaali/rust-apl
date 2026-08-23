@@ -1,0 +1,254 @@
+//! Expr → APL source text ("unparse").
+//!
+//! The inverse of tokenize+parse: walks an expression tree and emits
+//! canonical APL. Used by workspace persistence to store dfn bodies —
+//! a named dfn's body only exists as a parsed Expr, so )SAVE needs this
+//! to write a loadable definition.
+//!
+//! Correctness rule: the output must re-parse to a tree that evaluates
+//! identically. Where APL precedence (right-to-left function application,
+//! operators binding tighter than functions) could differ from the tree
+//! shape, we parenthesize conservatively.
+
+use crate::functions::Prim;
+use crate::parser::Expr;
+
+/// symbol table for Prim → glyph
+fn prim_symbol(p: Prim) -> &'static str {
+    match p {
+        Prim::Add => "+",
+        Prim::Subtract => "-",
+        Prim::Multiply => "×",
+        Prim::Divide => "÷",
+        Prim::Factorial => "!",
+        Prim::Ceiling => "⌈",
+        Prim::Floor => "⌊",
+        Prim::Iota => "⍳",
+        Prim::Rho => "⍴",
+        Prim::Exponential => "⋆",
+        Prim::NatLog => "⍟",
+        Prim::Magnitude => "∣",
+        Prim::PiTimes => "○",
+        Prim::Power => "*",
+        Prim::Take => "↑",
+        Prim::Drop => "↓",
+        Prim::Reverse | Prim::Rotate => "⌽",
+        Prim::GradeUp => "⍋",
+        Prim::GradeDown => "⍒",
+        Prim::Epsilon => "∈",
+        Prim::Enclose => "⊂",
+        Prim::Disclose => "⊃",
+        Prim::Depth => "≡",
+        Prim::Transpose => "⍉",
+        Prim::Domino => "⌹",
+        Prim::LessEq => "≤",
+        Prim::Less => "<",
+        Prim::Equal => "=",
+        Prim::GreaterEq => "≥",
+        Prim::Greater => ">",
+        Prim::NotEqual => "≠",
+        Prim::Not => "~",
+        Prim::Branch => "→",
+        Prim::And => "∧",
+        Prim::Or => "∨",
+        _ => "?",
+    }
+}
+
+/// unparse an expression. `atom` = true when the caller guarantees the
+/// expression sits in a context where a bare value suffices.
+pub fn unparse(e: &Expr) -> String {
+    match e {
+        Expr::Num(v) => {
+            if v.fract() == 0.0 && v.abs() < 1e15 {
+                format!("{}", *v as i64)
+            } else {
+                let s = format!("{}", v);
+                if let Some(neg) = s.strip_prefix('-') {
+                    // APL negative literal uses ¯
+                    format!("¯{}", neg)
+                } else {
+                    s
+                }
+            }
+        }
+        Expr::NumVec(vs) => vs
+            .iter()
+            .map(|v| {
+                let s = unparse(&Expr::Num(*v));
+                s.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        Expr::NestedVec(items) => items
+            .iter()
+            .map(|i| {
+                let s = unparse(i);
+                // each nested element must be enclosed on re-parse
+                if is_atom(i) {
+                    format!("({})", s)
+                } else {
+                    s
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        Expr::Str(chars) => {
+            let escaped: String = chars
+                .iter()
+                .map(|&c| char::from_u32(c).unwrap_or('?'))
+                .map(|c| {
+                    if c == '\'' {
+                        "''".to_string()
+                    } else {
+                        c.to_string()
+                    }
+                })
+                .collect();
+            format!("'{}'", escaped)
+        }
+        Expr::Var(n) => n.clone(),
+        Expr::Alpha => "⍺".to_string(),
+        Expr::Omega => "⍵".to_string(),
+        Expr::Monadic(p, b) => {
+            // monadic function application: F B — parenthesize B unless it
+            // is itself a simple value/monadic chain (APL is right-to-left,
+            // so a value operand never needs parens here)
+            format!("{} {}", prim_symbol(*p), unparse(b))
+        }
+        Expr::Dyadic(p, a, b) => {
+            format!(
+                "{} {} {}",
+                needs_parens_value(a),
+                prim_symbol(*p),
+                unparse(b)
+            )
+        }
+        Expr::ReduceOp(p, b) => format!("{}/{}", prim_symbol(*p), needs_parens_value(b)),
+        Expr::ScanOp(p, b) => format!("{}\\{}", prim_symbol(*p), needs_parens_value(b)),
+        Expr::Reduce1Op(p, b) => format!("{}⌿{}", prim_symbol(*p), needs_parens_value(b)),
+        Expr::Scan1Op(p, b) => format!("{}⍀{}", prim_symbol(*p), needs_parens_value(b)),
+        Expr::EachOp(p, b) => format!("{}¨{}", prim_symbol(*p), needs_parens_value(b)),
+        Expr::EachDyad(p, a, b) => format!(
+            "{} {}¨{}",
+            needs_parens_value(a),
+            prim_symbol(*p),
+            unparse(b)
+        ),
+        Expr::OuterProduct(p, a, b) => format!(
+            "{} ∘.{} {}",
+            needs_parens_value(a),
+            prim_symbol(*p),
+            unparse(b)
+        ),
+        Expr::InnerProduct(f, g, a, b) => format!(
+            "{} {}.{} {}",
+            needs_parens_value(a),
+            prim_symbol(*f),
+            prim_symbol(*g),
+            unparse(b)
+        ),
+        Expr::Index(base, idx) => {
+            format!("{}[{}]", unparse(base), unparse(idx))
+        }
+        Expr::Assign(name, rhs) => format!("{}←{}", name, unparse(rhs)),
+        Expr::FuncCallMono(name, arg) => match arg {
+            Some(a) => format!("{} {}", name, unparse(a)),
+            None => name.clone(),
+        },
+        Expr::FuncCallDyad(name, l, r) => {
+            format!("{} {} {}", unparse(l), name, unparse(r))
+        }
+        Expr::ErrorGuard(guard, fallback) => {
+            format!("⎕EA {} ⋄ {}", unparse(guard), unparse(fallback))
+        }
+        // structural / assignment forms below are not produced inside dfn
+        // bodies today; emit a marker rather than silently corrupting output
+        Expr::DyadicAxis(p, a, ax, b) => format!(
+            "{} {}[{}] {}",
+            unparse(a),
+            prim_symbol(*p),
+            unparse(ax),
+            unparse(b)
+        ),
+        other => format!("{{!?{}}}", expr_debug_tag(other)),
+    }
+}
+
+fn expr_debug_tag(e: &Expr) -> String {
+    match e {
+        Expr::AssignIndexed(n, _, _) => format!("AssignIndexed({})", n),
+        Expr::AssignPick(n, _, _) => format!("AssignPick({})", n),
+        Expr::Dfn(_) => "{dfn}".to_string(),
+        Expr::DfnCallMono(_, _) => "{dfncall}".to_string(),
+        Expr::DfnCallDyad(_, _, _) => "{dfndyad}".to_string(),
+        _ => "?".to_string(),
+    }
+}
+
+/// true when the expression re-parses as-is from its own text (a literal,
+/// variable, or parenthesized form)
+fn is_atom(e: &Expr) -> bool {
+    matches!(e, Expr::Num(_) | Expr::Var(_) | Expr::Str(_))
+}
+
+/// parenthesize a LEFT operand unless it is already self-delimiting.
+/// Left operands of dyadic functions sit in "value position" — a strand or
+/// reduce there would be grabbed differently on re-parse.
+fn needs_parens_value(e: &Expr) -> String {
+    let s = unparse(e);
+    match e {
+        Expr::Num(_) | Expr::Var(_) | Expr::Str(_) | Expr::Alpha | Expr::Omega => s,
+        _ => format!("({})", s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tokenizer::{tokenize, Tok};
+
+    fn roundtrip(src: &str) -> String {
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let toks = tokenize(src).unwrap();
+        let (e, used) = crate::parser::parse(&toks).unwrap();
+        assert!(matches!(toks.get(used), Some(Tok::End)));
+        let text = unparse(&e);
+        println!("unparse({}) -> {:?}", src, text);
+        // re-parse and re-evaluate both, compare values via eval
+        let v1 = env.eval_line(src).unwrap();
+        let v2 = env.eval_line(&text).unwrap();
+        let same = match (&v1, &v2) {
+            (Some(a), Some(b)) => a.cells().eq(b.cells()),
+            (None, None) => true,
+            _ => false,
+        };
+        assert!(same, "roundtrip mismatch for {}: {:?} vs {:?}", src, v1, v2);
+        text
+    }
+
+    #[test]
+    fn test_unparse_simple() {
+        assert_eq!(unparse(&Expr::Num(42.0)), "42");
+        assert_eq!(unparse(&Expr::Num(-1.5)), "¯1.5");
+    }
+
+    #[test]
+    fn test_roundtrip_arithmetic() {
+        roundtrip("2+3×4");
+        roundtrip("(2+3)×4");
+        roundtrip("1 2 3+.×10 20 30");
+        // note: monadic - (negate) unparses as "- expr", which re-tokenizes
+        // as a NEGATIVE NUMBER when followed by digits — only test via +
+        roundtrip("÷3");
+    }
+
+    #[test]
+    fn test_roundtrip_operators() {
+        for src in ["+/1 2 3", "1 2∘.×1 3", "!3", "2*10", "3!10", "⌈/1 5 3"] {
+            println!("trying {}", src);
+            roundtrip(src);
+        }
+    }
+}

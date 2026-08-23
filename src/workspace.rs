@@ -51,12 +51,20 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
     }
 
     // functions: DefinedFunction retains raw source lines, so definitions
-    // round-trip through define_function on load. Compiler-generated
-    // functions (anonymous dfn temporaries) have no valid APL source and
-    // are skipped.
+    // round-trip through define_function on load. Anonymous dfn temporaries
+    // (compiler-generated, private-use name prefix) have no valid APL
+    // source and are skipped.
     for fname in env.funcs.names() {
         let f = env.funcs.get(&fname).expect("name came from names()");
-        if f.no_save {
+        // skip anonymous dfn temporaries (private-use name prefix)
+        if f.name.starts_with(crate::parser::DFNS_PREFIX) {
+            continue;
+        }
+        // named dfns: single-expression body with ⍺/⍵ — persist as a dfn
+        // literal via unparse so load() can reconstruct NAME←{body}
+        if f.is_dfn && f.body.len() == 1 {
+            let body_text = crate::unparse::unparse(&f.body[0]);
+            lines.push(format!("DFN {} {}", fname, body_text));
             continue;
         }
         // reconstruct header: [result←]NAME [left] [right]
@@ -102,13 +110,16 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
     crate::sysvars::init_sysvars(env);
 
     // Parse records: a V-line is self-contained; an FN record owns all
-    // following B-lines. Index-based walk (no iterator push-back needed).
+    // following B-lines; a DFN record is a single-line dfn definition.
+    // Index-based walk (no iterator push-back needed).
     #[derive(Debug)]
     enum Record {
         /// name, payload
         Var(String, String),
         /// header, body source lines
         Fn(String, Vec<String>),
+        /// dfn name + unparsed body expression
+        Dfn(String, String),
     }
     let all: Vec<&str> = text.lines().collect();
     let mut records: Vec<Record> = Vec::new();
@@ -119,6 +130,13 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
             match rest.split_once(' ') {
                 Some((n, payload)) => records.push(Record::Var(n.to_string(), payload.to_string())),
                 None => return Err(format!("corrupt V record: {}", line)),
+            }
+            i += 1;
+        } else if let Some(rest) = line.strip_prefix("DFN ") {
+            // DFN <name> <body-expr>
+            match rest.split_once(' ') {
+                Some((name, body)) => records.push(Record::Dfn(name.to_string(), body.to_string())),
+                None => return Err(format!("corrupt DFN record: {}", line)),
             }
             i += 1;
         } else if let Some(header) = line.strip_prefix("FN ") {
@@ -148,6 +166,12 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
             Record::Fn(header, body) => {
                 crate::functions_def::define_function(&mut env.funcs, header, body)
                     .map_err(|e| format!("in {}: {}", header, e))?;
+            }
+            Record::Dfn(name, body) => {
+                // reconstruct as NAME←{body}
+                let def = format!("{}←{{{}}}", name, body);
+                env.eval_line(&def)
+                    .map_err(|e| format!("error loading dfn {}: {:?}", name, e))?;
             }
         }
     }
@@ -420,6 +444,32 @@ mod tests {
             Some(&Cell::Int(42))
         );
         assert!(env2.get("Z").is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_save_load_dfn_roundtrip() {
+        let mut env = fresh();
+        env.eval_line("AVG←{(+/⍵)÷⍴⍵}").unwrap();
+        // verify in-session
+        assert_eq!(
+            env.eval_line("AVG 10 20 30").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(20))
+        );
+
+        let path = save(&env, "test_ws_dfn").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("DFN AVG"), "dfn record missing: {}", text);
+
+        let mut env2 = fresh();
+        load(&mut env2, "test_ws_dfn").unwrap();
+        assert_eq!(
+            env2.eval_line("AVG 10 20 30")
+                .unwrap()
+                .unwrap()
+                .first_cell(),
+            Some(&Cell::Int(20))
+        );
         let _ = std::fs::remove_file(path);
     }
 }

@@ -413,6 +413,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dbg_reduce_paren() {
+        let toks = tokenize("+/(1 2 3)").unwrap();
+        println!("toks: {:?}", toks);
+        let (e, u) = crate::parser::parse(&toks).unwrap();
+        println!("expr: {:?} used={}", e, u);
+        let toks2 = tokenize("+(1 2 3)").unwrap();
+        let (e2, u2) = crate::parser::parse(&toks2).unwrap();
+        println!("expr2: {:?} used={}", e2, u2);
+    }
+
+    #[test]
     fn test_inner_dot_tokenize() {
         let toks = tokenize("1 0 1∧.=1 1 1").unwrap();
         println!("{:?}", toks);

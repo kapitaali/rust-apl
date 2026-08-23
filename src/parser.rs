@@ -90,6 +90,7 @@ fn dfn_to_function(body: &Expr) -> crate::functions_def::DefinedFunction {
         leave_lines: Vec::new(),
         source: vec![DFN_BODY_MARK.to_string()],
         no_save: true,
+        is_dfn: true,
     }
 }
 

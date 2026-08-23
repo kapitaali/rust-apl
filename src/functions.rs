@@ -100,6 +100,7 @@ impl Prim {
     pub fn eval_monadic(self, b: &ValueP) -> Result<ValueP, ErrorCode> {
         match self {
             // ── arithmetic ────────────────────────────────────────────────
+            Prim::Add => map_cells(b, cell::bif_conjugate),
             Prim::Subtract => map_cells(b, cell::bif_negative),
             Prim::Divide => map_cells(b, cell::bif_reciprocal),
             Prim::Exponential => map_cells(b, cell::bif_exponential),

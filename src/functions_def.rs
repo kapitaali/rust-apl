@@ -39,6 +39,8 @@ pub struct DefinedFunction {
     /// true for compiler-generated functions (dfns) whose pseudo-source is
     /// not valid APL — workspace save() must skip them
     pub no_save: bool,
+    /// true when this function was created from a dfn `{...}` definition
+    pub is_dfn: bool,
 }
 
 /// branch_stack sentinel pushed by :Leave — never a legal branch target
@@ -225,6 +227,7 @@ pub fn define_function(
         leave_lines,
         source: compacted,
         no_save: false,
+        is_dfn: false,
     });
     Ok(())
 }
