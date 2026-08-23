@@ -472,4 +472,70 @@ mod tests {
         );
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn test_dfn_guarded() {
+        let mut env = fresh();
+        env.eval_line("ABS←{⍵<0:(-⍵) ⋄ ⍵}").unwrap();
+        assert_eq!(
+            env.eval_line("ABS ¯5").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(5))
+        );
+        assert_eq!(
+            env.eval_line("ABS 3").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(3))
+        );
+    }
+
+    #[test]
+    fn test_dfn_guarded_multi() {
+        let mut env = fresh();
+        env.eval_line("CLASSIFY←{⍵<0:(-1) ⋄ ⍵>0:(1) ⋄ 0}").unwrap();
+        assert_eq!(
+            env.eval_line("CLASSIFY ¯7").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(-1))
+        );
+        assert_eq!(
+            env.eval_line("CLASSIFY 9").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(1))
+        );
+        assert_eq!(
+            env.eval_line("CLASSIFY 0").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(0))
+        );
+    }
+
+    #[test]
+    fn test_dfn_recursive_nontrivial() {
+        let mut env = fresh();
+        env.eval_line("FAC←{⍵=0:(1) ⋄ ⍵×∇ ⍵-1}").unwrap();
+        assert_eq!(
+            env.eval_line("FAC 5").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(120))
+        );
+        assert_eq!(
+            env.eval_line("FAC 0").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(1))
+        );
+    }
+
+    #[test]
+    fn test_dfn_recursive_fib() {
+        let mut env = fresh();
+        env.eval_line("FIB←{⍵≤1:(1) ⋄ (∇ ⍵-1)+∇ ⍵-2}").unwrap();
+        assert_eq!(
+            env.eval_line("FIB 10").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(89))
+        );
+    }
+
+    #[test]
+    fn test_dfn_nested() {
+        let mut env = fresh();
+        env.eval_line("F←{⍵+{⍵+1}⍵}").unwrap();
+        assert_eq!(
+            env.eval_line("F 3").unwrap().unwrap().first_cell(),
+            Some(&Cell::Int(7))
+        );
+    }
 }

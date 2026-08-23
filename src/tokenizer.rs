@@ -50,10 +50,18 @@ pub enum Tok {
     LBrace,
     /// dfn right brace `}`
     RBrace,
+    /// dfn guard separator `:`
+    Colon,
     /// dfn left argument `⍺`
     Alpha,
     /// dfn right argument `⍵`
     Omega,
+    /// dfn self-reference `∇`
+    SelfRef,
+    /// dfn left operand function `⍺⍺`
+    AlphaAlpha,
+    /// dfn right operand function `⍵⍵`
+    OmegaOmega,
     /// end of input
     End,
 }
@@ -134,12 +142,30 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 toks.push(Tok::RBrace);
                 i += 1;
             }
-            '⍺' => {
-                toks.push(Tok::Alpha);
+            ':' => {
+                toks.push(Tok::Colon);
                 i += 1;
             }
+            '⍺' => {
+                if chars.get(i + 1) == Some(&'⍺') {
+                    toks.push(Tok::AlphaAlpha);
+                    i += 2;
+                } else {
+                    toks.push(Tok::Alpha);
+                    i += 1;
+                }
+            }
             '⍵' => {
-                toks.push(Tok::Omega);
+                if chars.get(i + 1) == Some(&'⍵') {
+                    toks.push(Tok::OmegaOmega);
+                    i += 2;
+                } else {
+                    toks.push(Tok::Omega);
+                    i += 1;
+                }
+            }
+            '∇' => {
+                toks.push(Tok::SelfRef);
                 i += 1;
             }
             '←' => {

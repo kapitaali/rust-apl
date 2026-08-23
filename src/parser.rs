@@ -69,8 +69,23 @@ pub enum Expr {
     /// dfn argument references: ⍺ (left arg) and ⍵ (right arg)
     Alpha,
     Omega,
+    /// dfn self-call: ∇ B (monadic) or A ∇ B (dyadic) — calls the
+    /// enclosing dfn recursively
+    SelfCall(Box<Expr>),
+    SelfCallDyad(Box<Expr>, Box<Expr>),
+    /// dfn left operand function reference `⍺⍺`
+    AlphaAlpha,
+    /// dfn right operand function reference `⍵⍵`
+    OmegaOmega,
     /// NAME ← {BODY} — named dfn definition
     AssignDfn(String, Box<Expr>),
+    /// a sequence of expressions separated by `⋄` (diamond) — used for
+    /// multi-statement dfn bodies: {e1 ⋄ e2 ⋄ e3}. Evaluates each in order,
+    /// returns the last.
+    DiamondList(Vec<Expr>),
+    /// if-then-else: If(cond, then, else) — used for desugaring guarded
+    /// expressions in dfns: {c1:e1 ⋄ c2:e2 ⋄ e3} → If(c1,e1,If(c2,e2,e3))
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
 }
 
 /// compile a dfn body expression into an anonymous DefinedFunction whose
@@ -376,9 +391,10 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
-            // dfn: `{ BODY }` — body is a full expression; ⍺/⍵ reference the
-            // eventual arguments. The whole rest up to the matching brace
-            // (nesting counted) is the body.
+            // dfn: `{ BODY }` — body is one or more expressions separated by
+            // `⋄` (diamond) at the top level; nesting braces don't count.
+            // ⍺/⍵ reference the eventual arguments. Split on top-level
+            // diamonds, desugar guards (`c:e`) to If-then-else.
             let mut depth = 0usize;
             let mut close = None;
             for (i, t) in toks.iter().enumerate() {
@@ -395,11 +411,34 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 }
             }
             let close = close.ok_or(ErrorCode::SyntaxError)?;
-            let (body, _bused) = parse_expr(&toks[1..close])?;
-            Ok((Expr::Dfn(Box::new(body)), close + 1))
+            let body_expr = parse_dfn_body_expr(&toks[1..close])?;
+            Ok((Expr::Dfn(Box::new(body_expr)), close + 1))
         }
         Tok::Alpha => Ok((Expr::Alpha, 1)),
         Tok::Omega => Ok((Expr::Omega, 1)),
+        Tok::AlphaAlpha => Ok((Expr::AlphaAlpha, 1)),
+        Tok::OmegaOmega => Ok((Expr::OmegaOmega, 1)),
+        Tok::SelfRef => {
+            // ∇ is an ambivalent self-call: ∇ B (monadic) or A ∇ B (dyadic)
+            // monadic case: ∇ followed by a value
+            let next_is_value = matches!(
+                toks.get(1),
+                Some(Tok::Num(_))
+                    | Some(Tok::Str(_))
+                    | Some(Tok::Name(_))
+                    | Some(Tok::LParen)
+                    | Some(Tok::LBrace)
+                    | Some(Tok::Alpha)
+                    | Some(Tok::Omega)
+                    | Some(Tok::SelfRef)
+            );
+            if next_is_value {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                Ok((Expr::SelfCall(Box::new(operand)), used + 1))
+            } else {
+                Err(ErrorCode::SyntaxError)
+            }
+        }
         Tok::LParen => {
             let (e, used) = parse_expr(&toks[1..])?;
             if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
@@ -610,6 +649,134 @@ fn index_value(b: &ValueP, idx: &ValueP) -> AplResult<ValueP> {
     Ok(ValueP::from_ravel_like(idx, out))
 }
 
+/// Parse a dfn body (tokens between `{` and `}`) into a single Expr.
+/// Handles:
+/// - single expression: `{e}` → e
+/// - multi-statement: `{e1 ⋄ e2}` → DiamondList[e1, e2]
+/// - guarded expressions: `{c1:e1 ⋄ c2:e2 ⋄ e3}` → If(c1,e1,If(c2,e2,e3))
+///
+/// The last expression (or the last guard's "else" branch) is the fallback.
+fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
+    // split on top-level diamonds (depth 0)
+    let mut stmts: Vec<Vec<Tok>> = Vec::new();
+    let mut cur: Vec<Tok> = Vec::new();
+    let mut depth = 0usize;
+    for t in toks.iter().cloned() {
+        match t {
+            Tok::LBrace => {
+                depth += 1;
+                cur.push(t);
+            }
+            Tok::RBrace => {
+                depth -= 1;
+                cur.push(t);
+            }
+            Tok::Diamond if depth == 0 => {
+                stmts.push(cur);
+                cur = Vec::new();
+            }
+            _ => cur.push(t),
+        }
+    }
+    stmts.push(cur);
+
+    // parse each statement (skip empty)
+    let exprs: Vec<Expr> = stmts
+        .into_iter()
+        .filter(|s| !s.is_empty() && !matches!(s[0], Tok::End))
+        .map(|s| {
+            // check for guard: first colon (at depth 0) splits into cond:body
+            let mut colon_pos = None;
+            let mut d = 0usize;
+            for (i, t) in s.iter().enumerate() {
+                match t {
+                    Tok::LBrace => d += 1,
+                    Tok::RBrace => d -= 1,
+                    Tok::Colon if d == 0 && colon_pos.is_none() => {
+                        colon_pos = Some(i);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(cp) = colon_pos {
+                let (cond, cused) = parse_expr(&s[..cp])?;
+                // after the condition, the next token must be the colon
+                if !matches!(s.get(cused), Some(Tok::Colon)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                // body is everything after the colon
+                let (body, bused) = parse_expr(&s[cp + 1..])?;
+                if cp + 1 + bused != s.len() {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                Ok(Expr::If(
+                    Box::new(cond),
+                    Box::new(body),
+                    Box::new(Expr::Num(0.0)),
+                ))
+            } else {
+                let (e, used) = parse_expr(&s)?;
+                if used != s.len() {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                Ok(e)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if exprs.is_empty() {
+        return Err(ErrorCode::SyntaxError);
+    }
+
+    // If the last statement is an If (from a guard with no else), its
+    // "else" becomes the preceding guard. This is wrong — need to restructure.
+    // Actually, the simplest correct approach: if we have guard statements,
+    // fold them right-to-left into nested Ifs.
+    //
+    // {c1:e1 ⋄ c2:e2 ⋄ e3} → [If(c1,e1,0), If(c2,e2,0), e3]
+    // fold: If(c2,e2,e3), then If(c1,e1,If(c2,e2,e3))
+    //
+    // Detect guards: if any stmt is an If (from guard), fold.
+    let has_guards = exprs.iter().any(|e| matches!(e, Expr::If(_, _, _)));
+
+    if has_guards {
+        // In GNU APL, a dfn body with guards has the form:
+        //   {c1:e1 ⋄ c2:e2 ⋄ ... ⋄ en}
+        // where c1, c2, ... are guard conditions and en is the fallback.
+        // Evaluate: if c1 then e1 else if c2 then e2 else ... else en.
+        let mut guards: Vec<(Expr, Expr)> = Vec::new();
+        let mut fallback: Option<Expr> = None;
+        for e in exprs {
+            match e {
+                Expr::If(c, b, _) => {
+                    if fallback.is_some() {
+                        return Err(ErrorCode::SyntaxError);
+                    }
+                    guards.push((*c, *b));
+                }
+                other => {
+                    if fallback.is_some() {
+                        return Err(ErrorCode::SyntaxError);
+                    }
+                    fallback = Some(other);
+                }
+            }
+        }
+        let fallback = fallback.unwrap_or(Expr::Num(0.0));
+        // fold right-to-left: guards[0] is the first guard (outermost)
+        let mut acc = fallback;
+        for (c, b) in guards.into_iter().rev() {
+            acc = Expr::If(Box::new(c), Box::new(b), Box::new(acc));
+        }
+        return Ok(acc);
+    }
+
+    match exprs.len() {
+        1 => Ok(exprs.into_iter().next().unwrap()),
+        _ => Ok(Expr::DiamondList(exprs)),
+    }
+}
+
 /// collect names assigned anywhere in a body (used to build local scope)
 fn collect_assigned_names(body: &[Expr], out: &mut Vec<String>) {
     for e in body {
@@ -638,6 +805,8 @@ pub struct Environment {
     /// (fn-name, alpha-arg-name) for named dfns that reference ⍺ — used by
     /// call_function to bind ⍺ on dyadic calls
     pub(crate) dfn_alpha_names: Vec<(String, String)>,
+    /// name of the function currently executing (for ∇ self-reference)
+    current_fn_name: Option<String>,
 }
 
 impl Environment {
@@ -648,6 +817,7 @@ impl Environment {
             branch_stack: Vec::new(),
             dfn_counter: 0,
             dfn_alpha_names: Vec::new(),
+            current_fn_name: None,
         }
     }
 
@@ -834,6 +1004,10 @@ impl Environment {
             shadowed.push((l.clone(), self.vars.get(l).cloned()));
         }
 
+        // save the caller's current function name so ∇ can reference this one
+        let caller_fn_name = self.current_fn_name.clone();
+        self.current_fn_name = Some(name.to_string());
+
         // bind args
         if let Some(n) = &f.arg_left {
             if let Some(v) = &left {
@@ -926,6 +1100,9 @@ impl Environment {
         // make sure the sentinel is gone even on error paths
         self.branch_stack.truncate(frame_base);
 
+        // restore current function name to the caller's
+        self.current_fn_name = caller_fn_name;
+
         // capture explicit result var BEFORE restoring shadowed names
         let explicit_result: Option<ValueP> =
             f.result.as_ref().and_then(|rn| self.vars.get(rn).cloned());
@@ -995,6 +1172,36 @@ impl Environment {
                 Ok(ValueP::scalar_from(crate::cell::Cell::Char(
                     fname.chars().next().unwrap() as u32,
                 )))
+            }
+            Expr::If(cond, then_b, else_b) => {
+                let cv = self.eval(cond)?;
+                if cv.first_cell().map_or(false, |c| c.get_near_int() == Ok(0)) {
+                    self.eval(else_b)
+                } else {
+                    self.eval(then_b)
+                }
+            }
+            Expr::AlphaAlpha => Err(ErrorCode::SyntaxError),
+            Expr::OmegaOmega => Err(ErrorCode::SyntaxError),
+            Expr::SelfCall(arg) => {
+                // ∇ B — monadic self-call
+                let fname = self.current_fn_name.clone().ok_or(ErrorCode::SyntaxError)?;
+                let av = self.eval(arg)?;
+                self.call_function(&fname, None, Some(av))
+            }
+            Expr::SelfCallDyad(larg, rarg) => {
+                // A ∇ B — dyadic self-call
+                let fname = self.current_fn_name.clone().ok_or(ErrorCode::SyntaxError)?;
+                let bv = self.eval(rarg)?;
+                let av = self.eval(larg)?;
+                self.call_function(&fname, Some(av), Some(bv))
+            }
+            Expr::DiamondList(exprs) => {
+                let mut last = None;
+                for e in exprs {
+                    last = Some(self.eval(&e)?);
+                }
+                last.ok_or(ErrorCode::SyntaxError)
             }
             Expr::DfnCallMono(body, arg) => {
                 // install + immediately call with ⍵ = arg (⍺ unbound).
@@ -2202,5 +2409,40 @@ mod tests {
             })
             .collect();
         assert_eq!(cells, vec![42, 19, 7, 3]);
+    }
+
+    #[test]
+    fn test_parse_guard() {
+        let toks = tokenize("{⍵<0:(-⍵) ⋄ ⍵}").unwrap();
+        let (e, used) = parse(&toks).unwrap();
+        assert_eq!(used, toks.len() - 1);
+        match &e {
+            Expr::Dfn(body) => match &**body {
+                Expr::If(c, t, _) => {
+                    assert!(matches!(**c, Expr::Dyadic(_, _, _)));
+                    assert!(matches!(**t, Expr::Monadic(_, _)));
+                }
+                _ => panic!("expected If in dfn body, got {:?}", body),
+            },
+            _ => panic!("expected Dfn, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_parse_multi_guard() {
+        let toks = tokenize("{⍵=0:(1) ⋄ ⍵×∇ ⍵-1}").unwrap();
+        let (e, used) = parse(&toks).unwrap();
+        assert_eq!(used, toks.len() - 1);
+        // FAC: outer If has condition ⍵=0, then-branch (1), else-branch
+        // is the body (⍵×∇⍵-1)
+        match &e {
+            Expr::Dfn(body) => match &**body {
+                Expr::If(_, _, else_b) => {
+                    assert!(matches!(**else_b, Expr::Dyadic(_, _, _)));
+                }
+                _ => panic!("expected If, got {:?}", body),
+            },
+            _ => panic!("expected Dfn, got {:?}", e),
+        }
     }
 }
