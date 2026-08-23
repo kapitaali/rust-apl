@@ -6,7 +6,7 @@
 //!   where practical; full re-basing is a larger project, so ⎕IO is
 //!   honored by monadic/dyadic `⍳` and bracket indexing)
 //! - `⎕CT` comparison tolerance (default 1e-13, matching GNU APL's default)
-//! - `⎕PP` print precision (display only for now)
+//! - `⎕PP` print precision (honored by float display in REPL + boxed output)
 //!
 //! System commands (handled in the REPL before expression evaluation):
 //! )VARS — list variable names
@@ -39,6 +39,30 @@ pub fn get_io(env: &crate::parser::Environment) -> AplResult<i64> {
     match env.get(IO_VAR) {
         Some(v) => v.first_cell().unwrap().get_near_int(),
         None => Ok(0),
+    }
+}
+
+/// read ⎕PP (print precision, default 10)
+pub fn get_pp(env: &crate::parser::Environment) -> AplResult<usize> {
+    match env.get(PP_VAR) {
+        Some(v) => match v.first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => {
+                if *i < 1 || *i > 20 {
+                    Ok(10)
+                } else {
+                    Ok(*i as usize)
+                }
+            }
+            crate::cell::Cell::Float(f) => {
+                if *f < 1.0 || *f > 20.0 {
+                    Ok(10)
+                } else {
+                    Ok(*f as usize)
+                }
+            }
+            _ => Ok(10),
+        },
+        None => Ok(10),
     }
 }
 
@@ -162,6 +186,35 @@ mod tests {
         assert_eq!(out[0], "CLEAR WORKSPACE");
         assert!(env.get("ZZZ").is_none());
         assert!(env.funcs.names().is_empty());
+    }
+
+    #[test]
+    fn test_get_pp() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        // default is 10
+        assert_eq!(get_pp(&env).unwrap(), 10);
+        // writable
+        env.set(PP_VAR, ValueP::scalar_from(Cell::Int(3)));
+        assert_eq!(get_pp(&env).unwrap(), 3);
+        // out-of-range falls back to 10
+        env.set(PP_VAR, ValueP::scalar_from(Cell::Int(0)));
+        assert_eq!(get_pp(&env).unwrap(), 10);
+        env.set(PP_VAR, ValueP::scalar_from(Cell::Int(99)));
+        assert_eq!(get_pp(&env).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_pp_honored_in_display() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("⎕PP←4").unwrap();
+        let v = env.eval_line("÷3").unwrap().unwrap();
+        let lines = crate::boxdisplay::render_with_pp(&v, 4);
+        assert_eq!(lines[0], "0.3333");
+        // default render keeps 10
+        let lines = crate::boxdisplay::render(&v);
+        assert_eq!(lines[0], "0.3333333333");
     }
 
     #[test]

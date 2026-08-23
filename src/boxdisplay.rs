@@ -22,8 +22,13 @@
 use crate::cell::Cell;
 use crate::value::ValueP;
 
-/// render a value as a list of lines (boxed if non-simple)
+/// render a value as a list of lines (boxed if non-simple), honoring ⎕PP
 pub fn render(v: &ValueP) -> Vec<String> {
+    render_with_pp(v, 10)
+}
+
+/// render honoring print precision (⎕PP): floats show up to `pp` decimals
+pub fn render_with_pp(v: &ValueP, pp: usize) -> Vec<String> {
     let is_simple = v.cells().iter().all(|c| c.is_simple_cell());
     if v.rank() == 0 {
         // scalar: simple → bare text; pointer → box around inner
@@ -32,9 +37,9 @@ pub fn render(v: &ValueP) -> Vec<String> {
                 let inner = ValueP {
                     inner: p.value.clone(),
                 };
-                box_lines(&render(&inner), '→', is_nested(&inner))
+                box_lines(&render_with_pp(&inner, pp), '→', is_nested(&inner))
             }
-            _ => vec![plain_cell(v.first_cell().unwrap())],
+            _ => vec![plain_cell(v.first_cell().unwrap(), pp)],
         };
     }
     if is_simple && v.rank() == 1 {
@@ -42,7 +47,7 @@ pub fn render(v: &ValueP) -> Vec<String> {
         return vec![v
             .cells()
             .iter()
-            .map(plain_cell)
+            .map(|c| plain_cell(c, pp))
             .collect::<Vec<_>>()
             .join(" ")];
     }
@@ -54,7 +59,7 @@ pub fn render(v: &ValueP) -> Vec<String> {
         for r in 0..(cells.len() / cols.max(1)) {
             let line: Vec<String> = cells[r * cols..(r + 1) * cols]
                 .iter()
-                .map(plain_cell)
+                .map(|c| plain_cell(c, pp))
                 .collect();
             rows.push(line.join(" "));
         }
@@ -71,9 +76,9 @@ pub fn render(v: &ValueP) -> Vec<String> {
                         inner: p.value.clone(),
                     };
                     let nested = is_nested(&inner);
-                    box_lines(&render(&inner), '→', nested)
+                    box_lines(&render_with_pp(&inner, pp), '→', nested)
                 }
-                other => vec![plain_cell(other)],
+                other => vec![plain_cell(other, pp)],
             })
             .collect();
         return join_horizontal(&boxes);
@@ -91,9 +96,9 @@ pub fn render(v: &ValueP) -> Vec<String> {
                         let inner = ValueP {
                             inner: p.value.clone(),
                         };
-                        box_lines(&render(&inner), '→', is_nested(&inner))
+                        box_lines(&render_with_pp(&inner, pp), '→', is_nested(&inner))
                     }
-                    other => vec![plain_cell(other)],
+                    other => vec![plain_cell(other, pp)],
                 })
                 .collect();
             rows.extend(join_horizontal(&row_boxes));
@@ -108,15 +113,15 @@ fn is_nested(v: &ValueP) -> bool {
     !v.cells().iter().all(|c| c.is_simple_cell())
 }
 
-fn plain_cell(c: &Cell) -> String {
+fn plain_cell(c: &Cell, pp: usize) -> String {
     match c {
         Cell::Int(i) => i.to_string(),
         Cell::Float(f) => {
             if f.fract() == 0.0 && f.abs() < 1e15 {
                 format!("{}", *f as i64)
             } else if f.abs() >= 1e-10 {
-                // ⎕PP-ish: up to 10 decimals, trailing zeros trimmed
-                format!("{:.10}", f)
+                // ⎕PP: up to `pp` decimals, trailing zeros trimmed
+                format!("{:.*}", pp, f)
                     .trim_end_matches('0')
                     .trim_end_matches('.')
                     .to_string()

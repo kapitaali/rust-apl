@@ -58,7 +58,7 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
         let mut header = String::new();
         if let Some(r) = &f.result {
             header.push_str(r);
-            header.push_str("←");
+            header.push('←');
         }
         header.push_str(&fname);
         if let Some(l) = &f.arg_left {
@@ -349,7 +349,7 @@ mod tests {
             env2.eval_line("DOUBLE 21").unwrap().unwrap().first_cell(),
             Some(&Cell::Int(42))
         );
-        assert_eq!(env2.get("Z").is_some(), true);
+        assert!(env2.get("Z").is_some());
         let _ = std::fs::remove_file(path);
     }
 }

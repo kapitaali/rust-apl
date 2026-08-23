@@ -6,10 +6,10 @@
 use apl::parser::Environment;
 use std::io::{self, BufRead, Write};
 
-fn format_value(v: &apl::value::ValueP) -> String {
+fn format_value(v: &apl::value::ValueP, pp: usize) -> String {
     // simple one-line formatting for scalars and vectors
     if v.is_scalar() || v.is_vector() {
-        let items: Vec<String> = v.cells().iter().map(format_cell).collect();
+        let items: Vec<String> = v.cells().iter().map(|c| format_cell(c, pp)).collect();
         items.join("  ")
     } else if v.rank() == 2 {
         // matrix: rows on separate lines
@@ -19,7 +19,7 @@ fn format_value(v: &apl::value::ValueP) -> String {
         for row in 0..(cells.len() / cols.max(1)) {
             let items: Vec<String> = cells[row * cols..(row + 1) * cols]
                 .iter()
-                .map(format_cell)
+                .map(|c| format_cell(c, pp))
                 .collect();
             lines.push(items.join(" "));
         }
@@ -29,18 +29,16 @@ fn format_value(v: &apl::value::ValueP) -> String {
     }
 }
 
-fn format_cell(c: &apl::cell::Cell) -> String {
+fn format_cell(c: &apl::cell::Cell, pp: usize) -> String {
     match c {
         apl::cell::Cell::Int(v) => v.to_string(),
         apl::cell::Cell::Float(v) => {
             if v.fract() == 0.0 && v.abs() < 1e15 {
                 format!("{}", *v as i64)
             } else if v.abs() >= 1e-10 {
-                // honor ⎕PP-ish precision: up to 10 significant digits,
-                // trimming trailing zeros
-                let s = format!("{:.10}", v);
-                let t = s.trim_end_matches('0').trim_end_matches('.');
-                t.to_string()
+                // ⎕PP precision: up to `pp` decimals, trailing zeros trimmed
+                let s = format!("{:.*}", pp, v);
+                s.trim_end_matches('0').trim_end_matches('.').to_string()
             } else {
                 format!("{}", v)
             }
@@ -49,7 +47,7 @@ fn format_cell(c: &apl::cell::Cell) -> String {
         apl::cell::Cell::Complex(c) => {
             format!("{}J{}", c.re, c.im)
         }
-        apl::cell::Cell::Pointer(p) => format_nested(p.value.cells()),
+        apl::cell::Cell::Pointer(p) => format_nested(p.value.cells(), pp),
         _ => "<lval>".to_string(),
     }
 }
@@ -57,20 +55,24 @@ fn format_cell(c: &apl::cell::Cell) -> String {
 /// format the cells of a nested value: simple scalars inline, deeper
 /// nesting recurses. A single scalar shows bare; vectors show space-
 /// separated; higher rank shows rows.
-fn format_nested(cells: &[apl::cell::Cell]) -> String {
+fn format_nested(cells: &[apl::cell::Cell], pp: usize) -> String {
     // all-simple vector → space-separated inline
     if cells.iter().all(|c| c.is_simple_cell()) {
         if cells.len() == 1 {
-            return format_cell(&cells[0]);
+            return format_cell(&cells[0], pp);
         }
-        return cells.iter().map(format_cell).collect::<Vec<_>>().join(" ");
+        return cells
+            .iter()
+            .map(|c| format_cell(c, pp))
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     // mixed/nested → recurse per element
     cells
         .iter()
         .map(|c| match c {
-            apl::cell::Cell::Pointer(p) => format_nested(p.value.cells()),
-            other => format_cell(other),
+            apl::cell::Cell::Pointer(p) => format_nested(p.value.cells(), pp),
+            other => format_cell(other, pp),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -156,14 +158,16 @@ fn main() {
 
         match env.eval_line(trimmed) {
             Ok(Some(v)) => {
+                // ⎕PP print precision (default 10)
+                let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
                 // nested/matrix values get boxed display (4⎕CR-style)
                 let has_pointer = v.cells().iter().any(|c| c.is_pointer_cell());
                 if has_pointer || v.rank() >= 2 {
-                    for l in apl::boxdisplay::render(&v) {
+                    for l in apl::boxdisplay::render_with_pp(&v, pp) {
                         println!("{}", l);
                     }
                 } else {
-                    println!("{}", format_value(&v));
+                    println!("{}", format_value(&v, pp));
                 }
             }
             Ok(None) => {} // assignment — no output
