@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# OS / editor cruft
+.DS_Store
+*~
+*.swp
+.vscode/
+.idea/
+
+# Workspace files persisted by the interpreter (user data, not code)
+*.aplws

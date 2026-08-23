@@ -1,0 +1,383 @@
+//! Primitive APL functions.
+//!
+//! Implements monadic and dyadic primitives operating on whole values,
+//! mirroring `src/ScalarFunction.cc` and parts of `src/Bif_F12_*.cc`.
+
+use crate::cell::{self, Cell};
+use crate::shape::Shape;
+use crate::types::ErrorCode;
+use crate::value::ValueP;
+
+/// Which primitive a token refers to (grows as functions are ported).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prim {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Neg,
+    Factorial,
+    Ceiling,
+    Floor,
+    Iota,
+    Rho,
+    Exponential,
+    NatLog,
+    Reciprocal,
+    Magnitude,
+    Direction,
+    PiTimes,
+    PiTimesInverse,
+    Conjugate,
+    Roll,
+    Power,
+    Take,
+    Drop,
+    Reverse,
+    Rotate,
+    GradeUp,
+    GradeDown,
+    Epsilon,
+    Transpose,
+    Enclose,
+    Disclose,
+    Depth,
+    LessEq,
+    Less,
+    Equal,
+    GreaterEq,
+    Greater,
+    NotEqual,
+    Not,
+    Branch,
+    Replicate,
+    Domino,
+    And,
+    Or,
+}
+
+impl Prim {
+    pub fn from_symbol(sym: &str) -> Option<Prim> {
+        Some(match sym {
+            "+" => Prim::Add,
+            "-" => Prim::Subtract,
+            "×" => Prim::Multiply,
+            "÷" => Prim::Divide,
+            "!" => Prim::Factorial,
+            "⌈" => Prim::Ceiling,
+            "⌊" => Prim::Floor,
+            "⍳" => Prim::Iota,
+            "⌹" => Prim::Domino,
+            "∧" => Prim::And,
+            "∨" => Prim::Or,
+            "⍴" => Prim::Rho,
+            "*" | "⋆" => Prim::Exponential,
+            "○" => Prim::PiTimes,
+            "∣" => Prim::Magnitude,
+            "?" | "∼" => Prim::Roll, // ? = roll; ∼ (TILDE OPERATOR) kept as roll alias
+            "~" => Prim::Not,        // ~ (ASCII tilde) = logical not
+            "↑" => Prim::Take,
+            "↓" => Prim::Drop,
+            "⌽" => Prim::Reverse,
+            "⍋" => Prim::GradeUp,
+            "∈" => Prim::Epsilon,
+            "⍉" => Prim::Transpose,
+            "⊂" => Prim::Enclose,
+            "⊃" => Prim::Disclose,
+            "≡" => Prim::Depth,
+            "≤" => Prim::LessEq,
+            "<" => Prim::Less,
+            "=" => Prim::Equal,
+            "≥" => Prim::GreaterEq,
+            ">" => Prim::Greater,
+            "≠" => Prim::NotEqual,
+            "→" => Prim::Branch,
+            _ => return None,
+        })
+    }
+
+    /// apply monadically: `f B`
+    pub fn eval_monadic(self, b: &ValueP) -> Result<ValueP, ErrorCode> {
+        match self {
+            // ── arithmetic ────────────────────────────────────────────────
+            Prim::Subtract => map_cells(b, cell::bif_negative),
+            Prim::Divide => map_cells(b, cell::bif_reciprocal),
+            Prim::Exponential => map_cells(b, cell::bif_exponential),
+            Prim::NatLog => map_cells(b, cell::bif_nat_log),
+            Prim::Ceiling => map_cells(b, cell::bif_ceiling),
+            Prim::Floor => map_cells(b, cell::bif_floor),
+            Prim::Magnitude => map_cells(b, cell::bif_magnitude),
+            Prim::Direction => map_cells(b, cell::bif_direction),
+            Prim::Conjugate => map_cells(b, cell::bif_conjugate),
+            Prim::PiTimes => map_cells(b, cell::bif_pi_times),
+            Prim::PiTimesInverse => map_cells(b, cell::bif_pi_times_inverse),
+            Prim::Factorial => map_cells(b, cell::bif_factorial),
+
+            // ×B = direction (signum) in APL
+            Prim::Multiply => map_cells(b, cell::bif_direction),
+
+            // ⌽B — reverse (last axis)
+            Prim::Reverse => crate::rotate::reverse(b),
+
+            // ⍉B — transpose
+            Prim::Transpose => crate::transpose::transpose(b),
+
+            // ⌹B — matrix inverse
+            Prim::Domino => crate::domino::domino_monadic(b),
+
+            // ~B — not (logical): 1−B elementwise
+            Prim::Not => {
+                let cells = b.cells();
+                let out: Result<Vec<Cell>, ErrorCode> = cells
+                    .iter()
+                    .map(|c| match c {
+                        Cell::Int(v) => Ok(Cell::Int(1 - v)),
+                        Cell::Float(f) => Ok(Cell::Int(1 - *f as i64)),
+                        _ => Err(ErrorCode::DomainError),
+                    })
+                    .collect();
+                Ok(ValueP::from_ravel_like(b, out?))
+            }
+
+            // ⊂B — enclose
+            Prim::Enclose => crate::enclose::enclose(b),
+
+            // ⊃B — disclose
+            Prim::Disclose => crate::enclose::disclose(b),
+
+            // ∊B — enlist
+            Prim::Epsilon => crate::enlist::enlist(b),
+
+            // ≡B — depth
+            Prim::Depth => crate::depth::depth(b),
+
+            // ↑B — disclose (pick first/nested value out of a pointer scalar)
+            Prim::Take if b.first_cell().map(|c| c.is_pointer_cell()).unwrap_or(false) => {
+                Ok(b.disclose())
+            }
+
+            // ⍋B / ⍒B — grade up/down
+            Prim::GradeUp => crate::sort::grade_up(b),
+            Prim::GradeDown => crate::sort::grade_down(b),
+
+            // ── structural ────────────────────────────────────────────────
+            // ⍴B → shape vector
+            Prim::Rho => {
+                let dims: Vec<_> = (0..b.rank() as usize)
+                    .map(|i| b.get_shape_item(i as i16))
+                    .collect();
+                Ok(ValueP::int_vector(&dims))
+            }
+            // ⍳B → index generator
+            Prim::Iota => {
+                if !b.is_scalar() && !(b.is_vector() && b.element_count() == 1) {
+                    return Err(ErrorCode::DomainError);
+                }
+                let n = b
+                    .first_cell()
+                    .and_then(|c| c.get_int_value().ok())
+                    .ok_or(ErrorCode::DomainError)?;
+                ValueP::iota(n)
+            }
+            _ => Err(ErrorCode::SyntaxError),
+        }
+    }
+
+    /// apply dyadically: `A f B`
+    pub fn eval_dyadic(self, a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
+        match self {
+            Prim::Add => elementwise(a, b, cell::bif_add),
+            Prim::Subtract => elementwise(a, b, cell::bif_subtract),
+            Prim::Multiply => elementwise(a, b, cell::bif_multiply),
+            Prim::Divide => elementwise(a, b, cell::bif_divide),
+            Prim::Factorial => elementwise(a, b, cell::bif_binomial_public),
+            Prim::Ceiling => elementwise(a, b, cell::bif_maximum),
+            Prim::Floor => elementwise(a, b, cell::bif_minimum),
+            Prim::Magnitude => elementwise(a, b, cell::bif_residue),
+            Prim::PiTimes => elementwise(a, b, |a, b| {
+                // A ○ B = trigonometric circle function; only sin/cos basics
+                let f = a.get_int_value()?;
+                let x = b.get_real_value()?;
+                Ok(match f {
+                    1 => Cell::Float(x.sin()),
+                    2 => Cell::Float(x.cos()),
+                    3 => Cell::Float(x.tan()),
+                    _ => return Err(ErrorCode::DomainError),
+                })
+            }),
+            Prim::Power => elementwise(a, b, cell::bif_power),
+
+            // comparisons — elementwise 0/1 via tolerant Cell::compare
+            Prim::Less => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(match x.compare(y) {
+                    crate::cell::CompResult::Lt => 1,
+                    _ => 0,
+                }))
+            }),
+            Prim::LessEq => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(match x.compare(y) {
+                    crate::cell::CompResult::Gt => 0,
+                    _ => 1,
+                }))
+            }),
+            Prim::Equal => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(if x.equal(y, Cell::DEFAULT_CT) { 1 } else { 0 }))
+            }),
+            Prim::Greater => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(match x.compare(y) {
+                    crate::cell::CompResult::Gt => 1,
+                    _ => 0,
+                }))
+            }),
+            Prim::GreaterEq => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(match x.compare(y) {
+                    crate::cell::CompResult::Lt => 0,
+                    _ => 1,
+                }))
+            }),
+            Prim::NotEqual => elementwise(a, b, |x, y| {
+                Ok(Cell::Int(if x.equal(y, Cell::DEFAULT_CT) { 0 } else { 1 }))
+            }),
+
+            // A↑B / A↓B — take/drop (last axis)
+            Prim::Take => crate::take_drop::take(a, b),
+            Prim::Drop => crate::take_drop::drop(a, b),
+
+            // A⌽B — rotate (last axis)
+            Prim::Reverse | Prim::Rotate => crate::rotate::rotate(a, b),
+
+            // A⍳B — index of
+            Prim::Iota => crate::index_of::index_of(a, b),
+
+            // A∈B — membership
+            Prim::Epsilon => crate::epsilon::epsilon(a, b),
+
+            // A/B — replicate (compress): the guarded-branch idiom
+            // →cond/line jumps only when cond=1; empty target = fall through.
+            Prim::Replicate => crate::replicate::replicate(a, b),
+
+            // A⍉B — axis permutation
+            Prim::Transpose => crate::transpose::transpose_dyadic(a, b),
+
+            // A⊃B — pick
+            Prim::Disclose => crate::pick::pick(a, b),
+
+            // A⌹B — matrix divide (solve B X = A)
+            Prim::Domino => crate::domino::domino_dyadic(a, b),
+            Prim::And => elementwise(a, b, cell::bif_and),
+            Prim::Or => elementwise(a, b, cell::bif_or),
+
+            // A≡B — match
+            Prim::Depth => crate::depth::equiv(a, b),
+
+            // A ⍴ B → reshape
+            Prim::Rho => {
+                let dims = a
+                    .cells()
+                    .iter()
+                    .map(|c| c.get_int_value())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let shape = Shape::from_dims(&dims)?;
+                reshape(&shape, b)
+            }
+            _ => Err(ErrorCode::SyntaxError),
+        }
+    }
+}
+
+/// monadic `⍳B` honoring ⎕IO: generates io .. io+n-1
+pub fn iota_monadic(b: &ValueP, io: i64) -> Result<ValueP, ErrorCode> {
+    if !b.is_scalar() && !(b.is_vector() && b.element_count() == 1) {
+        return Err(ErrorCode::DomainError);
+    }
+    let n = b
+        .first_cell()
+        .and_then(|c| c.get_int_value().ok())
+        .ok_or(ErrorCode::DomainError)?;
+    if n < 0 {
+        return Ok(ValueP::int_vector(&[]));
+    }
+    Ok(ValueP::int_vector(&(io..io + n).collect::<Vec<_>>()))
+}
+
+/// public wrapper for dyadic primitive dispatch (used by parser for ⎕IO shifts)
+pub fn eval_dyadic_public(p: Prim, a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
+    p.eval_dyadic(a, b)
+}
+
+/// Apply a monadic cell function over every ravel element of `b`.
+fn map_cells(
+    b: &ValueP,
+    f: impl Fn(&Cell) -> Result<Cell, ErrorCode> + Sync + Send,
+) -> Result<ValueP, ErrorCode> {
+    let cells = b.cells();
+    // large arrays: elementwise work is embarrassingly parallel
+    let out: Vec<Cell> = if cells.len() >= PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        cells.par_iter().map(f).collect::<Result<Vec<_>, _>>()?
+    } else {
+        cells.iter().map(f).collect::<Result<Vec<_>, _>>()?
+    };
+    Ok(ValueP::from_ravel_like(b, out))
+}
+
+/// below this many elements, parallel dispatch costs more than it saves
+const PARALLEL_THRESHOLD: usize = 4096;
+
+/// Apply a dyadic cell function element-wise with scalar extension
+/// (mirrors C++ ScalarFunction broadcast rules).
+pub fn elementwise(
+    a: &ValueP,
+    b: &ValueP,
+    f: impl Fn(&Cell, &Cell) -> Result<Cell, ErrorCode> + Sync + Send,
+) -> Result<ValueP, ErrorCode> {
+    let ac = a.element_count();
+    let bc = b.element_count();
+    let len = ac.max(bc);
+
+    if ac != bc && ac != 1 && bc != 1 {
+        return Err(ErrorCode::LengthError);
+    }
+    if ac == 0 || bc == 0 {
+        return Err(ErrorCode::LengthError);
+    }
+
+    let mut out = Vec::with_capacity(len as usize);
+    if len as usize >= PARALLEL_THRESHOLD && ac == bc {
+        // same-shape arrays: each output cell is independent — parallelize
+        use rayon::prelude::*;
+        let a_cells = a.cells();
+        let b_cells = b.cells();
+        let par: Result<Vec<Cell>, ErrorCode> = (0..len as usize)
+            .into_par_iter()
+            .map(|i| f(&a_cells[i], &b_cells[i]))
+            .collect();
+        out = par?;
+    } else {
+        for i in 0..len as usize {
+            let ca = a.cells()[i % ac as usize].clone();
+            let cb = b.cells()[i % bc as usize].clone();
+            out.push(f(&ca, &cb)?);
+        }
+    }
+    Ok(ValueP::from_ravel_like(if ac > 1 { a } else { b }, out))
+}
+
+/// reshape: `A ⍴ B`
+fn reshape(shape: &Shape, b: &ValueP) -> Result<ValueP, ErrorCode> {
+    let count = shape.get_volume();
+    if count < 0 {
+        return Err(ErrorCode::LimitError);
+    }
+    let src = b.cells();
+    if src.is_empty() {
+        return Err(ErrorCode::DomainError);
+    }
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count as usize {
+        out.push(src[i % src.len()].clone());
+    }
+    Ok(ValueP {
+        inner: std::sync::Arc::new(crate::value::ValueInner::new(*shape, out)),
+    })
+}

@@ -1,0 +1,1944 @@
+//! Recursive-descent parser and evaluator for APL expressions.
+//!
+//! Mirrors `src/Parser.cc` + the prefix machine (simplified): handles
+//! monadic/dyadic function application, parentheses, assignment, with
+//! right-to-left (APL) evaluation order.
+
+use std::collections::HashMap;
+
+use crate::functions::Prim;
+use crate::tokenizer::{tokenize, Tok};
+use crate::types::AplResult;
+use crate::types::ErrorCode;
+use crate::value::ValueP;
+
+/// A parsed expression.
+#[derive(Clone, Debug)]
+pub enum Expr {
+    Num(f64),
+    /// a numeric strand: adjacent literals `2 3 4`
+    NumVec(Vec<f64>),
+    /// a nested strand: adjacent parenthesized groups `(1 2)(3 4)` or
+    /// mixed `(1)(2 3)` — each element is enclosed
+    NestedVec(Vec<Expr>),
+    Str(Vec<u32>),
+    Var(String),
+    Monadic(Prim, Box<Expr>),
+    /// `LO/B` — reduce
+    ReduceOp(Prim, Box<Expr>),
+    /// `LO\B` — scan
+    ScanOp(Prim, Box<Expr>),
+    /// `LO⌿B` — first-axis reduce
+    Reduce1Op(Prim, Box<Expr>),
+    /// `LO⍀B` — first-axis scan
+    Scan1Op(Prim, Box<Expr>),
+    /// `F¨B` — each (monadic)
+    EachOp(Prim, Box<Expr>),
+    /// `A F¨B` — each (dyadic)
+    EachDyad(Prim, Box<Expr>, Box<Expr>),
+    /// `A ∘.f B` — outer product
+    OuterProduct(Prim, Box<Expr>, Box<Expr>),
+    /// `A f.g B` — inner product (f = reduction, g = pairwise function)
+    InnerProduct(Prim, Prim, Box<Expr>, Box<Expr>),
+    /// `A F[axis] B` — dyadic with explicit axis (take/drop/rotate)
+    DyadicAxis(Prim, Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `⎕EA guarded ⋄ fallback` — evaluate guarded; on error, evaluate fallback
+    ErrorGuard(Box<Expr>, Box<Expr>),
+    /// `NAME[expr]` — bracket indexing
+    Index(Box<Expr>, Box<Expr>),
+    Dyadic(Prim, Box<Expr>, Box<Expr>),
+    Assign(String, Box<Expr>),
+    /// selective assignment: `NAME[idx] ← expr`
+    AssignIndexed(String, Box<Expr>, Box<Expr>),
+    /// selective pick assignment: `(A⊃NAME) ← expr`
+    AssignPick(String, Box<Expr>, Box<Expr>),
+    /// defined-function call: monadic `FN B` or ambivalent `FN`
+    FuncCallMono(String, Option<Box<Expr>>),
+    /// defined-function call: dyadic `A FN B`
+    FuncCallDyad(String, Box<Expr>, Box<Expr>),
+}
+
+/// A specification target on the left of ← (for future generalization).
+#[derive(Clone, Debug)]
+pub enum SpecTarget {
+    /// NAME[idx] — ravel indexing
+    Bracket(Box<Expr>),
+    /// A⊃NAME — pick path
+    Pick(Box<Expr>),
+}
+
+/// Parse a token slice into an Expr (APL right-to-left precedence).
+pub fn parse(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    parse_expr(toks)
+}
+
+/// expr := name '←' expr | name '[' expr ']' '←' expr
+///       | '(' A⊃name ')' '←' expr | simple
+fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    // error guard: ⎕EA guarded ⋄ fallback
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕EA" {
+            if let Some(diamond_pos) = toks.iter().position(|t| matches!(t, Tok::Diamond)) {
+                // guard expr is toks[1..diamond]; fallback after the diamond.
+                // Nested diamonds in the guard would need smarter splitting —
+                // use the FIRST diamond (guards can't contain ⋄ for now).
+                let guard_toks = &toks[1..diamond_pos];
+                let (guard, _gused) = if guard_toks.is_empty() {
+                    return Err(ErrorCode::SyntaxError);
+                } else {
+                    parse(guard_toks)?
+                };
+                let (fallback, fused) = parse(&toks[diamond_pos + 1..])?;
+                if !matches!(
+                    toks.get(diamond_pos + 1 + fused),
+                    Some(Tok::End) | Some(Tok::Diamond)
+                ) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                return Ok((
+                    Expr::ErrorGuard(Box::new(guard), Box::new(fallback)),
+                    diamond_pos + 1 + fused,
+                ));
+            }
+        }
+    }
+    // selective pick assignment: (A⊃NAME) ← expr — line starts with LParen
+    if matches!(toks.first(), Some(Tok::LParen)) {
+        if let Some((path, name, pused)) = try_parse_pick_target(toks)? {
+            if matches!(toks.get(pused + 1), Some(Tok::Assign)) {
+                let (rhs, rused) = parse_expr(&toks[pused + 2..])?;
+                return Ok((
+                    Expr::AssignPick(name, Box::new(path), Box::new(rhs)),
+                    pused + 2 + rused,
+                ));
+            }
+            // not followed by ←: fall through to normal parse; the
+            // paren group is just a pick expression.
+        }
+    }
+    // assignment: NAME ← expr
+    if let Some(Tok::Name(name)) = toks.first() {
+        let name = name.clone();
+        if let Some(Tok::Assign) = toks.get(1) {
+            let (rhs, used) = parse_expr(&toks[2..])?;
+            return Ok((Expr::Assign(name, Box::new(rhs)), used + 2));
+        }
+        // selective assignment: NAME[expr] ← expr
+        if matches!(toks.get(1), Some(Tok::LBracket)) {
+            let (idx, iused) = parse_expr(&toks[2..])?;
+            if matches!(toks.get(iused + 2), Some(Tok::RBracket))
+                && matches!(toks.get(iused + 3), Some(Tok::Assign))
+            {
+                let (rhs, rused) = parse_expr(&toks[iused + 4..])?;
+                return Ok((
+                    Expr::AssignIndexed(name, Box::new(idx), Box::new(rhs)),
+                    iused + 4 + rused,
+                ));
+            }
+            // fall through: not an assignment — the bracket use is an
+            // ordinary index expression handled by parse_simple
+        }
+    }
+    parse_simple(toks)
+}
+
+/// Try to parse `(A⊃NAME)` starting at toks[0] == LParen.
+/// Returns Ok(None) if the pattern doesn't match (caller falls through).
+fn try_parse_pick_target(toks: &[Tok]) -> AplResult<Option<(Expr, String, usize)>> {
+    // inside the parens we expect: <index-expr> ⊃ NAME
+    // toks[0] IS the opening paren of the target group; track inner depth.
+    let mut depth = 0usize; // nesting INSIDE the target group
+    let mut i = 1usize; // skip toks[0], the opening paren
+    let mut disclose_at: Option<usize> = None;
+
+    while let Some(t) = toks.get(i) {
+        match t {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                // closing paren of the pick target group
+                if let (Some(pos), Some(Tok::Name(n))) = (disclose_at, toks.get(i - 1)) {
+                    if depth == 0 && disclose_at == Some(i - 2) && i >= 3 {
+                        // parse the index expression between '(' and '⊃'
+                        let (idx_expr, _) = parse_expr(&toks[1..pos])?;
+                        return Ok(Some((idx_expr, n.clone(), i)));
+                    }
+                }
+                return Ok(None);
+            }
+            Tok::Prim(crate::functions::Prim::Disclose) if depth == 0 => {
+                disclose_at = Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(None)
+}
+
+/// simple := term | term prim simple   (right-associative)
+fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    let (lhs, mut used) = parse_term(toks)?;
+
+    // commute operator: F⍨ after a value means the NEXT function is
+    // commuted: `A F⍨ B` = B F A. We detect PRIM COMMUTE here.
+    if let (Some(Tok::Prim(p)), Some(Tok::Commute)) = (toks.get(used), toks.get(used + 1)) {
+        let p = *p;
+        // the commuted derived function takes B (the whole rest)
+        let (rhs, rused) = parse_simple(&toks[used + 2..])?;
+        used += 2 + rused;
+        return Ok((Expr::Dyadic(p, Box::new(rhs), Box::new(lhs)), used));
+    }
+
+    // dyadic each: A F¨ B — pair elements of A and B.
+    // The tokenizer emits Each(F) directly (merging F+¨), so a bare
+    // Tok::Each after the lhs means dyadic each.
+    if let Some(Tok::Each(p)) = toks.get(used) {
+        let p = *p;
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::EachDyad(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // outer product: A ∘.f B
+    if let Some(Tok::OuterDot(p)) = toks.get(used) {
+        let p = *p;
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::OuterProduct(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // inner product: A f.g B
+    if let Some(Tok::InnerDot(f, g)) = toks.get(used) {
+        let (f, g) = (*f, *g);
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::InnerProduct(f, g, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic with axis: A F[n] B — e.g. 1↑[0]M (take along first axis).
+    // MUST be checked before the plain dyadic arm below (which would
+    // otherwise consume the Prim and leave the bracket dangling).
+    if matches!(toks.get(used), Some(Tok::Prim(_)))
+        && matches!(toks.get(used + 1), Some(Tok::LBracket))
+    {
+        if let Some(Tok::Prim(p)) = toks.get(used) {
+            let p = *p;
+            // axis functions we support
+            if matches!(
+                p,
+                crate::functions::Prim::Take
+                    | crate::functions::Prim::Drop
+                    | crate::functions::Prim::Rotate
+                    | crate::functions::Prim::Reverse
+            ) {
+                // parse the axis expression inside brackets
+                if let Some(Tok::LBracket) = toks.get(used + 1) {
+                    let (ax, aused) = parse_expr(&toks[used + 2..])?;
+                    if !matches!(toks.get(used + 2 + aused), Some(Tok::RBracket)) {
+                        return Err(ErrorCode::SyntaxError);
+                    }
+                    let after = used + 3 + aused;
+                    let (rhs, rused) = parse_simple(&toks[after..])?;
+                    return Ok((
+                        Expr::DyadicAxis(p, Box::new(lhs), Box::new(ax), Box::new(rhs)),
+                        after + rused,
+                    ));
+                }
+            }
+        }
+    }
+
+    // check for dyadic function: lhs PRIM rest
+    if let Some(Tok::Prim(p)) = toks.get(used) {
+        let p = *p;
+        // APL operators bind tighter than functions: `×/20⍴2` means
+        // `×/(20⍴2)`, NOT `(×/20)⍴2`. So if the next token after the
+        // operator is another Prim, our lhs is actually the function's
+        // monadic context — but since APL has no currying here, the
+        // correct reading is: this lhs was consumed by an operator that
+        // should have grabbed the whole following expression. That case
+        // can only arise if lhs came from an OP1 with no operand — a
+        // syntax error in real APL.
+        if matches!(lhs, Expr::ReduceOp(_, _) | Expr::ScanOp(_, _)) {
+            return Err(ErrorCode::SyntaxError);
+        }
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::Dyadic(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic defined-function call: A FN B (Name in infix position)
+    if let Some(Tok::Name(fname)) = toks.get(used) {
+        // not an assignment (handled in parse_expr) and followed by an expr
+        if !matches!(
+            toks.get(used + 1),
+            Some(Tok::Assign) | None | Some(Tok::End)
+        ) {
+            let fname = fname.clone();
+            let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+            used += 1 + rused;
+            return Ok((
+                Expr::FuncCallDyad(fname, Box::new(lhs), Box::new(rhs)),
+                used,
+            ));
+        }
+    }
+
+    Ok((lhs, used))
+}
+
+/// term := '(' expr ')' | PRIM term | OP1 term | strand | atom
+fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    match toks.first().ok_or(ErrorCode::SyntaxError)? {
+        Tok::LParen => {
+            let (e, used) = parse_expr(&toks[1..])?;
+            if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
+                return Err(ErrorCode::SyntaxError);
+            }
+            let total = used + 2;
+
+            // nested strand: `(expr)(expr)...` — adjacent paren groups form
+            // a vector of enclosed values
+            if matches!(toks.get(total), Some(Tok::LParen)) {
+                return parse_nested_strand_from(toks, vec![(e, total)]);
+            }
+            // single group followed by another atom also strands: (1) 2
+            if is_strand_atom(toks.get(total)) {
+                return parse_nested_strand_from(toks, vec![(e, total)]);
+            }
+            Ok((e, total))
+        }
+        Tok::Prim(p) => {
+            let p = *p;
+            // branch arrow consumes the WHOLE expression to its right
+            // (like reduce/scan operators): →A×B is →(A×B)
+            if p == crate::functions::Prim::Branch {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                return Ok((Expr::Monadic(p, Box::new(operand)), used + 1));
+            }
+            let (operand, used) = parse_term(&toks[1..])?;
+            Ok((Expr::Monadic(p, Box::new(operand)), used + 1))
+        }
+        Tok::Commute => {
+            // ⍨ must follow a function: F⍨ ... (syntax error otherwise)
+            Err(ErrorCode::SyntaxError)
+        }
+        Tok::Each(p) => {
+            // monadic operator: F¨ B — apply F to each ravel element of B,
+            // nesting each result. Binds the whole expression to its right.
+            let p = *p;
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::EachOp(p, Box::new(operand)), used + 1))
+        }
+        Tok::Reduce(p) => {
+            // monadic operator: LO/B — the derived function LO/ applies to
+            // the WHOLE expression to its right (operators bind tighter
+            // than functions): ×/20⍴2 = ×/(20⍴2)
+            let p = *p;
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::ReduceOp(p, Box::new(operand)), used + 1))
+        }
+        Tok::Scan(p) => {
+            let p = *p;
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::ScanOp(p, Box::new(operand)), used + 1))
+        }
+        Tok::Reduce1(p) => {
+            let p = *p;
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::Reduce1Op(p, Box::new(operand)), used + 1))
+        }
+        Tok::Scan1(p) => {
+            let p = *p;
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::Scan1Op(p, Box::new(operand)), used + 1))
+        }
+        Tok::Num(_) => parse_strand(toks),
+        _ => parse_atom(toks),
+    }
+}
+
+/// strand := atom atom atom ...   (adjacent literals form a vector)
+///
+/// In APL, `2 3 4` is a 3-element vector (numeric strand) and `1 'a' 2`
+/// is a mixed strand (each item becomes an enclosed element when types
+/// differ). This handles the left argument of reshape (`2 3⍴⍳6`) and
+/// similar constructs.
+fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    // gather consecutive literal atoms (Num / Str)
+    let mut items: Vec<Expr> = Vec::new();
+    let mut used = 0;
+    while let Some(t) = toks.get(used) {
+        match t {
+            Tok::Num(v) => {
+                items.push(Expr::Num(*v));
+                used += 1;
+            }
+            Tok::Str(s) => {
+                items.push(Expr::Str(s.clone()));
+                used += 1;
+            }
+            _ => break,
+        }
+    }
+
+    if items.is_empty() {
+        return Err(ErrorCode::SyntaxError);
+    }
+    if items.len() == 1 {
+        // single literal — return it directly
+        return Ok((items.pop().unwrap(), used));
+    }
+
+    // homogeneous all-number strand stays a flat numeric vector
+    let all_nums = items.iter().all(|e| matches!(e, Expr::Num(_)));
+    if all_nums {
+        let nums: Vec<f64> = items
+            .into_iter()
+            .map(|e| match e {
+                Expr::Num(v) => v,
+                _ => unreachable!(),
+            })
+            .collect();
+        return Ok((Expr::NumVec(nums), used));
+    }
+
+    // mixed strand: each item enclosed
+    Ok((Expr::NestedVec(items), used))
+}
+
+/// true if the token can continue a nested strand (a bare atom)
+fn is_strand_atom(t: Option<&Tok>) -> bool {
+    matches!(
+        t,
+        Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::Name(_))
+    )
+}
+
+/// Continue a nested strand starting after the first paren-group has been
+/// consumed. `acc` holds already-parsed (expr, tokens-consumed) pairs.
+///
+/// Grammar: strand_item := '(' expr ')' | atom
+///         nested_strand := strand_item strand_item ...
+fn parse_nested_strand_from(toks: &[Tok], mut acc: Vec<(Expr, usize)>) -> AplResult<(Expr, usize)> {
+    let mut used = acc.last().map(|(_, u)| *u).unwrap_or(0);
+
+    loop {
+        match toks.get(used) {
+            // another paren group
+            Some(Tok::LParen) => {
+                let (e, gu) = parse_expr(&toks[used + 1..])?;
+                if !matches!(toks.get(used + gu + 1), Some(Tok::RParen)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                acc.push((e, used + gu + 2));
+                used += gu + 2;
+            }
+            // bare atoms strand too: (1) 2 3 → 3-element nested vector
+            t @ (Some(Tok::Num(_)) | Some(Tok::Str(_))) => {
+                let (e, au) = parse_atom(&[t.unwrap().clone()])?;
+                acc.push((e, used + au));
+                used += au;
+            }
+            _ => break,
+        }
+    }
+
+    // each element evaluates to an enclosed value; build NestedVec
+    let items: Vec<Expr> = acc.into_iter().map(|(e, _)| e).collect();
+    Ok((Expr::NestedVec(items), used))
+}
+
+fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    match toks.first().ok_or(ErrorCode::SyntaxError)? {
+        Tok::Num(v) => Ok((Expr::Num(*v), 1)),
+        Tok::Str(s) => Ok((Expr::Str(s.clone()), 1)),
+        Tok::Name(n) => {
+            let n = n.clone();
+            // bracket indexing: NAME[expr] (selective assignment not yet supported)
+            if matches!(toks.get(1), Some(Tok::LBracket)) {
+                let (idx, used) = parse_expr(&toks[2..])?;
+                match toks.get(used + 2) {
+                    Some(Tok::RBracket) => {
+                        return Ok((Expr::Index(Box::new(Expr::Var(n)), Box::new(idx)), used + 3))
+                    }
+                    _ => return Err(ErrorCode::SyntaxError),
+                }
+            }
+            // monadic defined-function call: NAME <value> (name in function
+            // position). Only when the next token starts a VALUE — a Prim
+            // after a name is much more likely `X+1` (variable + prim) than
+            // a monadic call with a prim operand. Resolved at eval time.
+            let next_is_value = matches!(
+                toks.get(1),
+                Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::Name(_)) | Some(Tok::LParen)
+            );
+            if next_is_value {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                return Ok((Expr::FuncCallMono(n, Some(Box::new(operand))), used + 1));
+            }
+            // bare name — ambivalent call FN (no args) or a variable reference;
+            // resolved at eval time.
+            Ok((Expr::FuncCallMono(n, None), 1))
+        }
+        _ => Err(ErrorCode::SyntaxError),
+    }
+}
+
+/// bracket indexing: `B[idx]` — pick ravel elements by index vector.
+/// Indices are 0-based (matching our `⍳` which generates 0..n).
+fn index_value(b: &ValueP, idx: &ValueP) -> AplResult<ValueP> {
+    let cells = b.cells();
+    let mut out = Vec::with_capacity(idx.element_count() as usize);
+    for c in idx.cells() {
+        let i = c.get_int_value()?;
+        if i < 0 || i as usize >= cells.len() {
+            return Err(ErrorCode::IndexError);
+        }
+        out.push(cells[i as usize].clone());
+    }
+    Ok(ValueP::from_ravel_like(idx, out))
+}
+
+/// collect names assigned anywhere in a body (used to build local scope)
+fn collect_assigned_names(body: &[Expr], out: &mut Vec<String>) {
+    for e in body {
+        match e {
+            Expr::Assign(n, _) | Expr::AssignIndexed(n, _, _) | Expr::AssignPick(n, _, _)
+                if !out.contains(n) =>
+            {
+                out.push(n.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The evaluator environment: variable bindings + function table.
+#[derive(Default)]
+pub struct Environment {
+    vars: HashMap<String, ValueP>,
+    pub funcs: crate::functions_def::FunctionTable,
+    /// stack of pending branch targets, one slot per active call frame.
+    /// `→N` pushes N (0 = exit, empty target = no-op); call_function's body
+    /// loop pops the top. The stack keeps recursive frames independent.
+    branch_stack: Vec<Option<i64>>,
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&ValueP> {
+        self.vars.get(name)
+    }
+
+    pub fn set(&mut self, name: &str, val: ValueP) {
+        self.vars.insert(name.to_string(), val);
+    }
+
+    /// all variable names (including system ⎕ vars)
+    pub fn var_names(&self) -> Vec<String> {
+        self.vars.keys().cloned().collect()
+    }
+
+    /// wipe all variables and functions (system command )CLEAR)
+    pub fn clear_workspace(&mut self) {
+        self.vars.clear();
+        self.funcs.clear();
+    }
+
+    /// read ⎕IO (index origin; 0 if unset)
+    pub fn get_io(&self) -> AplResult<i64> {
+        crate::sysvars::get_io(self)
+    }
+
+    /// true if body line pc is the :Leave control marker
+    fn is_leave_line(&self, f: &crate::functions_def::DefinedFunction, pc: usize) -> bool {
+        // :Leave lines occupy a body slot as Expr::Num(0.0) no-ops (they are
+        // control markers), so match on the raw source kept out-of-band.
+        f.leave_lines.contains(&pc)
+    }
+
+    /// consume a pending :Leave signal from branch_stack (if any).
+    /// Returns true when the innermost enclosing loop should stop.
+    fn consume_leave(&mut self) -> AplResult<bool> {
+        if let Some(Some(t)) = self.branch_stack.last() {
+            if *t == crate::functions_def::LEAVE_SENTINEL {
+                self.branch_stack.pop();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// execute body lines [from..to), honoring nested control blocks that
+    /// start within the range. Used by :If/:While branch execution.
+    ///
+    /// A `:Leave` inside a loop body pushes LEAVE_SENTINEL onto
+    /// branch_stack; the innermost While/Repeat arm consumes it and breaks.
+    fn run_lines(
+        &mut self,
+        f: &crate::functions_def::DefinedFunction,
+        from: usize,
+        to: usize,
+    ) -> AplResult<()> {
+        let mut pc = from;
+        while pc < to {
+            // :Leave marker line — signal the enclosing loop to stop
+            if self.is_leave_line(f, pc) {
+                self.branch_stack
+                    .push(Some(crate::functions_def::LEAVE_SENTINEL));
+                return Ok(());
+            }
+            // find a control block starting at this line; capture its end
+            let block_end = f.control.iter().find_map(|b| match b {
+                crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::While { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::Repeat { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                _ => None,
+            });
+            if let Some(block_end) = block_end {
+                let block = f
+                    .control
+                    .iter()
+                    .find(|b| match b {
+                        crate::functions_def::ControlBlock::If { start, .. } => *start == pc,
+                        crate::functions_def::ControlBlock::While { start, .. } => *start == pc,
+                        crate::functions_def::ControlBlock::Repeat { start, .. } => *start == pc,
+                    })
+                    .cloned()
+                    .unwrap();
+                match block {
+                    crate::functions_def::ControlBlock::If {
+                        cond, else_start, ..
+                    } => {
+                        let c = self.eval(&cond)?;
+                        let truthy = c.first_cell().unwrap().get_int_value()? != 0;
+                        if truthy {
+                            let stop = else_start.unwrap_or(block_end - 1);
+                            self.run_lines(f, pc + 1, stop)?;
+                        } else if let Some(es) = else_start {
+                            self.run_lines(f, es + 1, block_end - 1)?;
+                        }
+                    }
+                    crate::functions_def::ControlBlock::While { start, cond, .. } => loop {
+                        let c = self.eval(&cond)?;
+                        if c.first_cell().unwrap().get_int_value()? == 0 {
+                            break;
+                        }
+                        self.run_lines(f, start + 1, block_end - 1)?;
+                        // :Leave inside the body → exit this loop
+                        if self.consume_leave()? {
+                            break;
+                        }
+                    },
+                    crate::functions_def::ControlBlock::Repeat {
+                        start,
+                        until_pos,
+                        ref until_cond,
+                        ..
+                    } => loop {
+                        let stop = until_pos.unwrap_or(block_end - 1);
+                        self.run_lines(f, start + 1, stop)?;
+                        // :Leave inside the body → exit this loop
+                        // (before :Until is checked)
+                        if self.consume_leave()? {
+                            break;
+                        }
+                        if let Some(uc) = until_cond {
+                            let c = self.eval(uc)?;
+                            // :Until cond → repeat while cond is FALSE
+                            if c.first_cell().unwrap().get_int_value()? != 0 {
+                                break;
+                            }
+                        }
+                    },
+                }
+                pc = block_end; // jump past this block
+                continue;
+            }
+            self.eval(&f.body[pc])?;
+            pc += 1;
+        }
+        Ok(())
+    }
+
+    /// call a defined function by name (monadic or dyadic).
+    /// Creates a child scope with the args bound; recursion works because
+    /// the function table is shared.
+    pub fn call_function(
+        &mut self,
+        name: &str,
+        left: Option<ValueP>,
+        right: Option<ValueP>,
+    ) -> AplResult<ValueP> {
+        let f = match self.funcs.get(name) {
+            Some(f) => f.clone(),
+            None => return Err(ErrorCode::ValueError),
+        };
+
+        // arity check
+        let provided = left.is_some() as u8 + right.is_some() as u8;
+        if f.arity() != 0 && provided == 0 || f.arity() == 2 && provided != 2 {
+            return Err(ErrorCode::SyntaxError);
+        }
+
+        // save/restore shadowed locals (simple dynamic scoping)
+        let mut shadowed: Vec<(String, Option<ValueP>)> = Vec::new();
+        for local in [&f.arg_left, &f.arg_right, &f.result].into_iter().flatten() {
+            shadowed.push((local.clone(), self.vars.get(local).cloned()));
+        }
+        // also shadow every name assigned in the body (locals)
+        let mut body_locals: Vec<String> = Vec::new();
+        collect_assigned_names(&f.body, &mut body_locals);
+        for l in &body_locals {
+            shadowed.push((l.clone(), self.vars.get(l).cloned()));
+        }
+
+        // bind args
+        if let Some(n) = &f.arg_left {
+            if let Some(v) = &left {
+                self.vars.insert(n.clone(), v.clone());
+            }
+        }
+        if let Some(n) = &f.arg_right {
+            if let Some(v) = &right {
+                self.vars.insert(n.clone(), v.clone());
+            }
+        }
+
+        // run the body; result = last line's value.
+        // A line that is a bare `→expr` branch: target 0 exits, N jumps
+        // to line N (1-based), empty = fall through. Branch targets go on
+        // a per-frame stack so nested (recursive) calls don't interfere:
+        // we push a None sentinel for THIS frame and only react to targets
+        // pushed after it (i.e. by our own body, not by inner calls).
+        let mut last: Option<ValueP> = None;
+        let mut err = None;
+        let mut pc = 0usize;
+        self.branch_stack.push(None); // frame sentinel
+        let frame_base = self.branch_stack.len() - 1;
+        while pc < f.body.len() {
+            // structured control blocks: delegate to the same machinery
+            // run_lines uses, but keep tracking `last`/branch state here
+            let block_end = f.control.iter().find_map(|b| match b {
+                crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::While { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::Repeat { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                _ => None,
+            });
+            if let Some(block_end) = block_end {
+                self.run_lines(&f, pc, block_end)?;
+                pc = block_end;
+                continue;
+            }
+            match self.eval(&f.body[pc]) {
+                Ok(v) => {
+                    // consume any targets this line pushed (inner calls may
+                    // have pushed+consumed their own already)
+                    if self.branch_stack.len() > frame_base + 1 {
+                        // a target pushed by OUR line (not an inner call —
+                        // inner calls pop their own). Take the top one.
+                        if let Some(Some(t)) = self.branch_stack.pop() {
+                            if t == 0 {
+                                // →0 exits THIS frame: drop the sentinel
+                                self.branch_stack.truncate(frame_base);
+                                break;
+                            }
+                            pc = (t - 1) as usize; // 1-based → 0-based
+                            continue;
+                        }
+                    }
+                    last = Some(v);
+                }
+                Err(e) => {
+                    err = Some(e);
+                    break;
+                }
+            }
+            pc += 1;
+        }
+        // make sure the sentinel is gone even on error paths
+        self.branch_stack.truncate(frame_base);
+
+        // capture explicit result var BEFORE restoring shadowed names
+        let explicit_result: Option<ValueP> =
+            f.result.as_ref().and_then(|rn| self.vars.get(rn).cloned());
+
+        // restore shadowed names
+        for (name, old) in shadowed {
+            match old {
+                Some(v) => {
+                    self.vars.insert(name, v);
+                }
+                None => {
+                    self.vars.remove(&name);
+                }
+            }
+        }
+
+        if let Some(e) = err {
+            return Err(e);
+        }
+
+        // explicit result var takes precedence over last-line value
+        match (explicit_result, last) {
+            (Some(v), _) => Ok(v),
+            (None, Some(v)) => Ok(v),
+            (None, None) => Err(ErrorCode::SyntaxError),
+        }
+    }
+
+    /// evaluate an expression in this environment.
+    pub fn eval(&mut self, e: &Expr) -> AplResult<ValueP> {
+        match e {
+            Expr::Num(v) => Ok(ValueP::scalar_from(crate::cell::Cell::from_f64(*v))),
+            Expr::NumVec(vs) => Ok(ValueP::from_ravel_like(
+                &ValueP::vector(vs.len() as i64),
+                vs.iter().map(|&v| crate::cell::Cell::from_f64(v)).collect(),
+            )),
+            Expr::NestedVec(items) => {
+                // evaluate each element and enclose it
+                let mut ravel = Vec::with_capacity(items.len());
+                for item in items {
+                    let v = self.eval(item)?;
+                    let enclosed = ValueP::nested(v);
+                    ravel.push(enclosed.first_cell().unwrap().clone());
+                }
+                Ok(ValueP::from_ravel_like(
+                    &ValueP::vector(items.len() as i64),
+                    ravel,
+                ))
+            }
+            Expr::Str(s) => Ok(ValueP::char_vector(s)),
+            Expr::Var(name) => self.vars.get(name).cloned().ok_or(ErrorCode::ValueError),
+            Expr::FuncCallMono(name, arg) => {
+                let right = match arg {
+                    Some(e) => Some(self.eval(e)?),
+                    None => None,
+                };
+                // defined function takes precedence; a bare name with no
+                // argument falls back to a variable reference
+                if self.funcs.get(name).is_some() {
+                    return self.call_function(name, None, right);
+                }
+                match (arg, right) {
+                    (None, _) => self.vars.get(name).cloned().ok_or(ErrorCode::ValueError),
+                    (Some(_), r) => self.call_function(name, None, r),
+                }
+            }
+            Expr::FuncCallDyad(name, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                self.call_function(name, Some(av), Some(bv))
+            }
+            Expr::Assign(name, rhs) => {
+                let v = self.eval(rhs)?;
+                self.vars.insert(name.clone(), v.clone());
+                Ok(v)
+            }
+            Expr::AssignIndexed(name, idx, rhs) => {
+                // selective assignment: B[idx] ← value (mutates B in place)
+                let iv = self.eval(idx)?;
+                let rv = self.eval(rhs)?;
+                let target = self
+                    .vars
+                    .get_mut(name)
+                    .ok_or(ErrorCode::ValueError)?
+                    .clone();
+                let mut writable = target;
+                writable.isolate(); // COW: never mutate a shared value
+                {
+                    let cells = writable.make_mut().ravel_mut();
+                    for c in iv.cells() {
+                        let i = c.get_int_value()?;
+                        if i < 0 || i as usize >= cells.len() {
+                            return Err(ErrorCode::IndexError);
+                        }
+                        let src = rv.cells()[0].clone();
+                        cells[i as usize] = src;
+                    }
+                }
+                self.vars.insert(name.clone(), writable.clone());
+                Ok(writable)
+            }
+            Expr::AssignPick(name, path, rhs) => {
+                // selective pick assignment: (A⊃B) ← value
+                let pv = self.eval(path)?;
+                let rv = self.eval(rhs)?;
+                let target = self
+                    .vars
+                    .get_mut(name)
+                    .ok_or(ErrorCode::ValueError)?
+                    .clone();
+                let mut writable = target;
+                writable.isolate();
+
+                // build index path like pick() does
+                let mut levels: Vec<i64> = Vec::new();
+                for c in pv.cells() {
+                    match c {
+                        crate::cell::Cell::Pointer(p) => {
+                            for ic in p.value.cells() {
+                                levels.push(ic.get_int_value()?);
+                            }
+                        }
+                        _ => levels.push(c.get_near_int()?),
+                    }
+                }
+                if levels.is_empty() {
+                    return Err(ErrorCode::IndexError);
+                }
+
+                crate::pick::pick_assign(&mut writable, &levels, rv.first_cell().unwrap())?;
+                self.vars.insert(name.clone(), writable.clone());
+                Ok(writable)
+            }
+            Expr::Monadic(p, b) => {
+                // branch arrow: →expr — evaluate the target; push it for
+                // call_function's body loop. An EMPTY target = no jump
+                // (fall through); 0 = exit function; N = jump to line N.
+                if *p == crate::functions::Prim::Branch {
+                    let bv = self.eval(b)?;
+                    match bv.first_cell() {
+                        None => self.branch_stack.push(None), // no jump
+                        Some(c) => {
+                            let t = c.get_near_int()?;
+                            self.branch_stack.push(Some(t));
+                        }
+                    }
+                    return Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)));
+                }
+                let bv = self.eval(b)?;
+                // ⍳B generates ⎕IO .. ⎕IO+B-1
+                if *p == crate::functions::Prim::Iota {
+                    return crate::functions::iota_monadic(&bv, self.get_io()?);
+                }
+                // ⍋/⍒ results are also ⎕IO-shifted
+                if *p == crate::functions::Prim::GradeUp || *p == crate::functions::Prim::GradeDown
+                {
+                    return crate::sort::grade_io(
+                        &bv,
+                        *p == crate::functions::Prim::GradeDown,
+                        self.get_io()?,
+                    );
+                }
+                p.eval_monadic(&bv)
+            }
+            Expr::ReduceOp(p, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::reduce(*p, &bv)
+            }
+            Expr::ScanOp(p, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::scan(*p, &bv)
+            }
+            Expr::Reduce1Op(p, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::reduce_first(*p, &bv)
+            }
+            Expr::Scan1Op(p, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::scan_first(*p, &bv)
+            }
+            Expr::EachOp(p, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::each(*p, &bv)
+            }
+            Expr::EachDyad(p, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::operators::each_dyad(*p, &av, &bv)
+            }
+            Expr::OuterProduct(p, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::outer::outer_product(&av, *p, &bv)
+            }
+            Expr::InnerProduct(f, g, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::inner::inner_product(&av, *f, *g, &bv)
+            }
+            Expr::Index(base, idx) => {
+                let bv = self.eval(base)?;
+                let iv = self.eval(idx)?;
+                // bracket indexing honors ⎕IO: subtract it to get 0-based
+                let io = self.get_io()?;
+                let shifted = if io == 0 {
+                    iv
+                } else {
+                    let minus_io = ValueP::scalar_from(crate::cell::Cell::Int(-io));
+                    crate::functions::eval_dyadic_public(
+                        crate::functions::Prim::Add,
+                        &iv,
+                        &minus_io,
+                    )?
+                };
+                index_value(&bv, &shifted)
+            }
+            Expr::Dyadic(p, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                // A⍳B results are ⎕IO-shifted
+                if *p == crate::functions::Prim::Iota {
+                    return crate::index_of::index_of_io(&av, &bv, self.get_io()?);
+                }
+                p.eval_dyadic(&av, &bv)
+            }
+            Expr::ErrorGuard(guard, fallback) => {
+                // ⎕EA guarded ⋄ fallback — run guard; on ANY error, run fallback
+                match self.eval(guard) {
+                    Ok(v) => Ok(v),
+                    Err(_) => self.eval(fallback),
+                }
+            }
+            Expr::DyadicAxis(p, a, axis, b) => {
+                let av = self.eval(a)?;
+                let xv = self.eval(axis)?;
+                let bv = self.eval(b)?;
+                let ax = xv.first_cell().unwrap().get_near_int()?;
+                // axis numbers follow ⎕IO: under IO=1, [1] means first axis = 0
+                let io = self.get_io()?;
+                let ax0 = ax - io;
+                match p {
+                    crate::functions::Prim::Take => crate::take_drop::take_axis(&av, &bv, ax0),
+                    crate::functions::Prim::Drop => crate::take_drop::drop_axis(&av, &bv, ax0),
+                    crate::functions::Prim::Rotate | crate::functions::Prim::Reverse => {
+                        crate::rotate::rotate_axis(&av, &bv, ax0)
+                    }
+                    _ => Err(ErrorCode::SyntaxError),
+                }
+            }
+        }
+    }
+
+    /// tokenize + parse + evaluate one line. Returns the result value
+    /// (None if the line was a pure assignment with no displayed value —
+    /// but in APL assignments DO display nothing; we return None then).
+    pub fn eval_line(&mut self, line: &str) -> AplResult<Option<ValueP>> {
+        let toks = tokenize(line)?;
+        if matches!(toks.first(), Some(Tok::End)) || toks.len() < 2 {
+            return Ok(None); // empty line
+        }
+        let (expr, used) = parse(&toks)?;
+        if !matches!(toks.get(used), Some(Tok::End)) {
+            return Err(ErrorCode::SyntaxError);
+        }
+        let is_assign = matches!(
+            expr,
+            Expr::Assign(_, _) | Expr::AssignIndexed(_, _, _) | Expr::AssignPick(_, _, _)
+        );
+        let v = self.eval(&expr)?;
+        Ok(if is_assign { None } else { Some(v) })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eval_one(env: &mut Environment, line: &str) -> ValueP {
+        env.eval_line(line)
+            .expect("eval failed")
+            .expect("expected a result")
+    }
+
+    fn eval_int(line: &str) -> i64 {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, line);
+        match v.first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => *i,
+            other => panic!("expected int scalar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_right_to_left() {
+        // 2×3+4 must be 2×(3+4)=14, not (2×3)+4=10
+        assert_eq!(eval_int("2×3+4"), 14);
+        // 5-1-2 must be 5-(1-2)=6, not (5-1)-2=2
+        assert_eq!(eval_int("5-1-2"), 6);
+    }
+
+    #[test]
+    fn test_parentheses_override() {
+        assert_eq!(eval_int("(2×3)+4"), 10);
+    }
+
+    #[test]
+    fn test_assignment() {
+        let mut env = Environment::new();
+        // assignments produce no displayed result...
+        assert!(env.eval_line("X←42").unwrap().is_none());
+        // ...but bind the name
+        assert_eq!(eval_int_env(&mut env, "X"), 42);
+        // and the bound name works in later expressions
+        assert_eq!(eval_int_env(&mut env, "X+1"), 43);
+    }
+
+    fn eval_int_env(env: &mut Environment, line: &str) -> i64 {
+        match eval_one(env, line).first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => *i,
+            other => panic!("expected int scalar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_reduce_works() {
+        // reduce was implemented: +/⍳5 = 10
+        let mut env = Environment::new();
+        assert_eq!(eval_int_env(&mut env, "+/⍳5"), 10);
+    }
+
+    #[test]
+    fn test_monadic_iota_vector() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍳5");
+        let cells: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_scalar_extension() {
+        let mut env = Environment::new();
+        env.eval_line("V←⍳4").unwrap();
+        let v = eval_one(&mut env, "100+V");
+        let cells: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![100, 101, 102, 103]);
+    }
+
+    #[test]
+    fn test_syntax_error() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("2+").is_err());
+        assert!(env.eval_line("(2+3").is_err());
+        assert!(env.eval_line("$5").is_err());
+    }
+
+    #[test]
+    fn test_reshape() {
+        let mut env = Environment::new();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        let m = env.get("M").expect("M not set");
+        assert_eq!(m.rank(), 2);
+        assert_eq!(m.element_count(), 6);
+        let cells: Vec<i64> = m
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_shape_of() {
+        let mut env = Environment::new();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        let s = eval_one(&mut env, "⍴M");
+        let cells: Vec<i64> = s
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_commute_swap() {
+        // A F⍨ B = B F A: 10 -⍨ 3 = 3-10 = ¯7
+        assert_eq!(eval_int("10 -⍨ 3"), -7);
+        // ÷ commute: 6 ÷⍨ 2 = 2÷6
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "6÷⍨2");
+        match v.first_cell().unwrap() {
+            crate::cell::Cell::Float(f) => assert!((f - (2.0 / 6.0)).abs() < 1e-13),
+            crate::cell::Cell::Int(i) => {
+                let f = *i as f64;
+                assert!((f - (2.0 / 6.0)).abs() < 1e-13)
+            }
+            o => panic!("unexpected {:?}", o),
+        }
+    }
+
+    #[test]
+    fn test_commute_stray_is_syntax_error() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("⍨5").is_err());
+    }
+
+    #[test]
+    fn test_nested_literal_strand() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "(1 2)(3 4 5)");
+        assert_eq!(v.element_count(), 2);
+        assert!(v.is_vector());
+        // each element is a pointer to the enclosed vector
+        for c in v.cells() {
+            match c {
+                crate::cell::Cell::Pointer(p) => {
+                    assert_eq!(p.value.shape().get_rank(), 1);
+                }
+                o => panic!("expected pointer, got {:?}", o),
+            }
+        }
+        // disclose both and check contents
+        let first = match &v.cells()[0] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        let cells: Vec<i64> = first
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![1, 2]);
+
+        let second = match &v.cells()[1] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        let cells: Vec<i64> = second
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn test_nested_literal_mixed_lengths() {
+        // (1)(2 3) — a scalar item and a vector item in one nested vector
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "(1)(2 3)");
+        assert_eq!(v.element_count(), 2);
+        let lens: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Pointer(p) => p.value.element_count(),
+                _ => panic!("expected pointers"),
+            })
+            .collect();
+        assert_eq!(lens, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_nested_literal_with_exprs() {
+        // elements can be arbitrary expressions: (2+3)(⍳4)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "(2+3)(⍳4)");
+        assert_eq!(v.element_count(), 2);
+        let second = match &v.cells()[1] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(second.element_count(), 4);
+    }
+
+    #[test]
+    fn test_mixed_strand() {
+        // 1 'a' 2 is a mixed strand → nested vector of enclosed scalars
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 'a' 2");
+        assert_eq!(v.element_count(), 3);
+        for c in v.cells() {
+            assert!(
+                matches!(c, crate::cell::Cell::Pointer(_)),
+                "expected pointers in a mixed strand"
+            );
+        }
+        // disclose: 1 'a' 2
+        let first = match &v.cells()[0] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(first.cells(), &[crate::cell::Cell::Int(1)][..]);
+        let second = match &v.cells()[1] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        assert_eq!(second.cells(), &[crate::cell::Cell::Char(97)][..]); // 'a'
+    }
+
+    #[test]
+    fn test_mixed_reshape() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("M←2 2⍴1 'a' 2 'b'").is_ok());
+        let m = eval_one(&mut env, "M");
+        assert_eq!(m.rank(), 2);
+        assert_eq!(m.element_count(), 4);
+        // pick M[1] — the nested 'a' (0-based ravel index 1)
+        let picked = eval_one(&mut env, "⊃M[1]");
+        assert_eq!(picked.cells(), &[crate::cell::Cell::Char(97)][..]);
+    }
+
+    #[test]
+    fn test_numeric_strand_still_flat() {
+        // all-number strands must remain FLAT vectors (not nested)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "2 3⍴1 2 3 4 5 6");
+        assert_eq!(v.rank(), 2);
+        for c in v.cells() {
+            assert!(
+                matches!(c, crate::cell::Cell::Int(_)),
+                "numeric strand must stay flat, got {:?}",
+                c
+            );
+        }
+    }
+
+    #[test]
+    fn test_each_dyad() {
+        let mut env = Environment::new();
+        // 1 +¨ ⍳3 → nested scalars (1) (2) (3)
+        let v = eval_one(&mut env, "1+¨⍳3");
+        assert_eq!(v.element_count(), 3);
+        for c in v.cells() {
+            assert!(matches!(c, crate::cell::Cell::Pointer(_)));
+        }
+        // disclose and check values
+        let expect = [1, 2, 3];
+        for (i, e) in expect.iter().enumerate() {
+            let d = match &v.cells()[i] {
+                crate::cell::Cell::Pointer(p) => p.value.clone(),
+                _ => panic!(),
+            };
+            match d.cells().first().unwrap() {
+                crate::cell::Cell::Int(x) => assert_eq!(*x, *e),
+                o => panic!("expected int, got {:?}", o),
+            }
+        }
+    }
+
+    #[test]
+    fn test_each_dyad_vector_vector() {
+        // 10 20 +¨ 1 2 → (11) (22)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "10 20+¨1 2");
+        assert_eq!(v.element_count(), 2);
+        for (i, e) in [11, 22].iter().enumerate() {
+            let d = match &v.cells()[i] {
+                crate::cell::Cell::Pointer(p) => p.value.clone(),
+                _ => panic!(),
+            };
+            match d.cells().first().unwrap() {
+                crate::cell::Cell::Int(x) => assert_eq!(*x, *e),
+                o => panic!("expected int, got {:?}", o),
+            }
+        }
+    }
+
+    #[test]
+    fn test_each_dyad_length_error() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("10 20 30+¨1 2").is_err());
+    }
+
+    #[test]
+    fn test_pick_assignment() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("N←(10 20)(30 40)").is_ok());
+        // (0 1⊃N)←99 replaces N[0][1]
+        assert!(env.eval_line("(0 1⊃N)←99").unwrap().is_none());
+        // verify: ∊N → 10 99 30 40
+        let z = eval_one(&mut env, "∊N");
+        assert_eq!(
+            z.cells(),
+            &[
+                crate::cell::Cell::Int(10),
+                crate::cell::Cell::Int(99),
+                crate::cell::Cell::Int(30),
+                crate::cell::Cell::Int(40)
+            ][..]
+        );
+    }
+
+    #[test]
+    fn test_pick_assignment_cow_safety() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("A←(1 2)(3 4)").is_ok());
+        assert!(env.eval_line("B←A").unwrap().is_none());
+        assert!(env.eval_line("(0 0⊃B)←77").unwrap().is_none());
+        // A must be untouched
+        let a = eval_one(&mut env, "∊A");
+        assert_eq!(
+            a.cells(),
+            &[
+                crate::cell::Cell::Int(1),
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3),
+                crate::cell::Cell::Int(4)
+            ][..]
+        );
+        let b = eval_one(&mut env, "∊B");
+        assert_eq!(
+            b.cells(),
+            &[
+                crate::cell::Cell::Int(77),
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3),
+                crate::cell::Cell::Int(4)
+            ][..]
+        );
+    }
+
+    #[test]
+    fn test_defined_function_call() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(&mut env.funcs, "DOUBLE X", &["X+X".to_string()])
+            .unwrap();
+        // monadic call: DOUBLE 21 → 42
+        assert_eq!(eval_int_env(&mut env, "DOUBLE 21"), 42);
+        // inside expressions
+        assert_eq!(eval_int_env(&mut env, "1+DOUBLE 20"), 41);
+    }
+
+    #[test]
+    fn test_defined_function_dyadic() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(&mut env.funcs, "R←ADD A B", &["R←A+B".to_string()])
+            .unwrap();
+        assert_eq!(eval_int_env(&mut env, "3 ADD 4"), 7);
+    }
+
+    #[test]
+    fn test_defined_function_recursion() {
+        let mut env = Environment::new();
+        // classic guarded recursion via compress-branch:
+        //   line 1: →(N≤1)/4     ⍝ N≤1: jump to line 4; else empty = fall through
+        //   line 2: R←N×FAC N-1  ⍝ recursion
+        //   line 3: →0           ⍝ exit
+        //   line 4: R←1          ⍝ base result
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←FAC N",
+            &[
+                "→(N≤1)/4".to_string(),
+                "R←N×FAC N-1".to_string(),
+                "→0".to_string(),
+                "R←1".to_string(),
+            ],
+        )
+        .unwrap();
+        for (n, want) in [(0, 1), (1, 1), (3, 6), (5, 120), (6, 720)] {
+            let v = eval_one(&mut env, &format!("FAC {}", n));
+            assert_eq!(
+                v.first_cell().unwrap().get_int_value().unwrap(),
+                want,
+                "FAC {} wrong",
+                n
+            );
+        }
+    }
+
+    #[test]
+    fn test_local_shadowing_restored() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←F X",
+            ["T←X*2".to_string(), "R←T+1".to_string()].as_slice(),
+        )
+        .unwrap();
+        env.eval_line("T←100").unwrap();
+        assert_eq!(eval_int_env(&mut env, "F 4"), 17); // T local = 16, +1
+        assert_eq!(eval_int_env(&mut env, "T"), 100); // global T untouched
+    }
+
+    #[test]
+    fn test_ambivalent_call() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(&mut env.funcs, "HELLO", &["42".to_string()])
+            .unwrap();
+        assert_eq!(eval_int_env(&mut env, "HELLO"), 42);
+    }
+
+    #[test]
+    fn test_quad_io_iota_and_indexing() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // default ⎕IO=0
+        assert_eq!(eval_int_env(&mut env, "⍳3"), 0);
+        // switch to 1-based: ⍳3 → 1 2 3 and B[1] reads the FIRST element
+        env.eval_line("⎕IO←1").unwrap();
+        let v = eval_one(&mut env, "⍳3");
+        assert_eq!(
+            v.cells(),
+            &[
+                crate::cell::Cell::Int(1),
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3)
+            ][..]
+        );
+        env.eval_line("B←10 20 30").unwrap();
+        assert_eq!(eval_int_env(&mut env, "B[1]"), 10);
+        assert_eq!(eval_int_env(&mut env, "B[3]"), 30);
+        // back to 0
+        env.eval_line("⎕IO←0").unwrap();
+        assert_eq!(eval_int_env(&mut env, "B[0]"), 10);
+    }
+
+    #[test]
+    fn test_quad_io_index_of() {
+        // index-of results are ⎕IO-shifted: under ⎕IO=1 the first position
+        // is 1 and "not found" is len+1.
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("A←10 20 30").unwrap();
+        // ⎕IO=0: 20 is at 0-based position 1; 99 not found → len=3
+        assert_eq!(eval_int_env(&mut env, "A⍳20"), 1);
+        assert_eq!(eval_int_env(&mut env, "A⍳99"), 3);
+        // ⎕IO=1: positions shift up
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_int_env(&mut env, "A⍳20"), 2);
+        assert_eq!(eval_int_env(&mut env, "A⍳99"), 4);
+        // vector result: shape follows B
+        let v = eval_one(&mut env, "A⍳20 30");
+        assert_eq!(
+            v.cells(),
+            &[crate::cell::Cell::Int(2), crate::cell::Cell::Int(3)][..]
+        );
+    }
+
+    #[test]
+    fn test_quad_io_grade() {
+        // grade results are ⎕IO-shifted too
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("B←30 10 20").unwrap();
+        // ⎕IO=0: ⍋B → 1 2 0 (10,20,30)
+        assert_eq!(eval_int_env(&mut env, "⍋B"), 1);
+        // ⎕IO=1: shifted to 2 3 1
+        env.eval_line("⎕IO←1").unwrap();
+        let g = eval_one(&mut env, "⍋B");
+        assert_eq!(
+            g.cells(),
+            &[
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3),
+                crate::cell::Cell::Int(1)
+            ][..]
+        );
+        // B[⍋B] still sorts correctly under IO=1
+        let sorted = eval_one(&mut env, "B[⍋B]");
+        assert_eq!(
+            sorted.cells(),
+            &[
+                crate::cell::Cell::Int(10),
+                crate::cell::Cell::Int(20),
+                crate::cell::Cell::Int(30)
+            ][..]
+        );
+    }
+
+    #[test]
+    fn test_dyadic_axis_syntax() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        // 1↑[0]M takes the first ROW (axis 0)
+        let z = eval_one(&mut env, "1↑[0]M");
+        assert_eq!(z.rank(), 2);
+        assert_eq!(
+            z.cells(),
+            &[
+                crate::cell::Cell::Int(0),
+                crate::cell::Cell::Int(1),
+                crate::cell::Cell::Int(2)
+            ][..]
+        );
+        // 1↓[0]M drops the first ROW
+        let d = eval_one(&mut env, "1↓[0]M");
+        assert_eq!(
+            d.cells(),
+            &[
+                crate::cell::Cell::Int(3),
+                crate::cell::Cell::Int(4),
+                crate::cell::Cell::Int(5)
+            ][..]
+        );
+        // axis-1 take equals plain last-axis take
+        let a = eval_one(&mut env, "2↑[1]M");
+        let b = eval_one(&mut env, "2↑M");
+        assert_eq!(a.cells(), b.cells());
+        // rotate along axis 0 (columns rotate vertically): 1⌽[0]M
+        // rows [0 1 2],[3 4 5] → each COLUMN rotates: col0: 0,3→3,0; col1: 1,4→4,1; col2: 2,5→5,2
+        let r = eval_one(&mut env, "1⌽[0]M");
+        assert_eq!(
+            r.cells(),
+            &[
+                crate::cell::Cell::Int(3),
+                crate::cell::Cell::Int(4),
+                crate::cell::Cell::Int(5),
+                crate::cell::Cell::Int(0),
+                crate::cell::Cell::Int(1),
+                crate::cell::Cell::Int(2)
+            ][..]
+        );
+    }
+
+    #[test]
+    fn test_error_guard() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // NOTE: ÷0 gives inf in GNU APL (IEEE), NOT an error — use real
+        // erroring guards: DOMAIN ERROR on bad shapes, VALUE ERROR on
+        // undefined names.
+        // guard fails (undefined name → VALUE ERROR) → fallback runs
+        assert_eq!(eval_int_env(&mut env, "⎕EA NOPE+1 ⋄ 99"), 99);
+        // guard succeeds → fallback NOT evaluated (would also fail)
+        assert_eq!(eval_int_env(&mut env, "⎕EA 5+5 ⋄ NOPE"), 10);
+        // index error: B[99] on a 3-element vector errors; fallback runs
+        env.eval_line("B←10 20 30").unwrap();
+        assert_eq!(eval_int_env(&mut env, "⎕EA B[99] ⋄ 42"), 42);
+        // valid index returns normally
+        assert_eq!(eval_int_env(&mut env, "⎕EA B[0] ⋄ 42"), 10);
+    }
+
+    #[test]
+    fn test_control_if() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←SIGN N",
+            &[
+                ":If 0≤N".to_string(),
+                "R←1".to_string(),
+                ":EndIf".to_string(),
+                ":If N<0".to_string(),
+                "R←¯1".to_string(),
+                ":EndIf".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(eval_int_env(&mut env, "SIGN 5"), 1);
+        assert_eq!(eval_int_env(&mut env, "SIGN ¯5"), -1);
+    }
+
+    #[test]
+    fn test_control_while() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←SUMTO N",
+            &[
+                "R←0".to_string(),
+                "I←1".to_string(),
+                ":While I≤N".to_string(),
+                "R←R+I".to_string(),
+                "I←I+1".to_string(),
+                ":EndWhile".to_string(),
+            ],
+        )
+        .unwrap();
+        // sum 1..=4 = 10
+        assert_eq!(eval_int_env(&mut env, "SUMTO 4"), 10);
+        assert_eq!(eval_int_env(&mut env, "SUMTO 0"), 0);
+    }
+
+    #[test]
+    fn test_control_if_else() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←CLASSIFY N",
+            &[
+                ":If N<0".to_string(),
+                "R←¯1".to_string(),
+                ":Else".to_string(),
+                ":If N=0".to_string(),
+                "R←0".to_string(),
+                ":Else".to_string(),
+                "R←1".to_string(),
+                ":EndIf".to_string(),
+                ":EndIf".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(eval_int_env(&mut env, "CLASSIFY ¯7"), -1);
+        assert_eq!(eval_int_env(&mut env, "CLASSIFY 0"), 0);
+        assert_eq!(eval_int_env(&mut env, "CLASSIFY 9"), 1);
+    }
+
+    #[test]
+    fn test_control_repeat_until() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←COUNT N",
+            &[
+                "R←0".to_string(),
+                "I←1".to_string(),
+                ":Repeat".to_string(),
+                "R←R+I".to_string(),
+                "I←I+1".to_string(),
+                ":Until I>N".to_string(),
+                ":EndRepeat".to_string(),
+            ],
+        )
+        .unwrap();
+        // sum 1..=4 = 10; body runs, then checks :Until I>N
+        assert_eq!(eval_int_env(&mut env, "COUNT 4"), 10);
+        // N=0: body still runs once (until-check is at the end) → R=1
+        assert_eq!(eval_int_env(&mut env, "COUNT 0"), 1);
+    }
+
+    #[test]
+    fn test_control_leave_in_while() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←FINDSTOP N",
+            &[
+                "R←0".to_string(),
+                "I←1".to_string(),
+                ":While 1".to_string(),
+                "R←R+I".to_string(),
+                ":If I≥N".to_string(),
+                ":Leave".to_string(),
+                ":EndIf".to_string(),
+                "I←I+1".to_string(),
+                ":EndWhile".to_string(),
+            ],
+        )
+        .unwrap();
+        // infinite :While 1 loop, exited by :Leave when I reaches N: sum 1..=3 = 6
+        assert_eq!(eval_int_env(&mut env, "FINDSTOP 3"), 6);
+    }
+
+    #[test]
+    fn test_control_leave_in_repeat() {
+        let mut env = Environment::new();
+        crate::functions_def::define_function(
+            &mut env.funcs,
+            "R←LEAVECOUNT N",
+            &[
+                "R←0".to_string(),
+                "I←1".to_string(),
+                ":Repeat".to_string(),
+                "R←R+1".to_string(),
+                ":If I≥N".to_string(),
+                ":Leave".to_string(),
+                ":EndIf".to_string(),
+                "I←I+1".to_string(),
+                ":EndRepeat".to_string(),
+            ],
+        )
+        .unwrap();
+        // no :Until — only :Leave terminates. N passes → R counts N iterations
+        assert_eq!(eval_int_env(&mut env, "LEAVECOUNT 5"), 5);
+    }
+
+    #[test]
+    fn test_outer_product_syntax() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // 1 2 ∘.× 1 3 → 2×2 matrix 1 3 / 2 6
+        let r = eval_one(&mut env, "1 2∘.×1 3");
+        assert_eq!(r.rank(), 2);
+        assert_eq!(r.get_shape_item(0), 2);
+        assert_eq!(r.get_shape_item(1), 2);
+        let expect = [1, 3, 2, 6];
+        for (i, e) in expect.iter().enumerate() {
+            assert_eq!(r.cells()[i], crate::cell::Cell::Int(*e));
+        }
+    }
+
+    #[test]
+    fn test_inner_product_syntax_dot_product() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // 1 2 3 +.× 10 20 30 → 140
+        let r = eval_one(&mut env, "1 2 3+.×10 20 30");
+        assert_eq!(r.first_cell().unwrap(), &crate::cell::Cell::Int(140));
+    }
+
+    #[test]
+    fn test_inner_product_syntax_matrix_times_vector() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // M←2 3⍴⍳6; M +.× 5 6 7 → (0·5+1·6+2·7)(3·5+4·6+5·7) = 20 74
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        let r = eval_one(&mut env, "M+.×5 6 7");
+        // ⎕IO=0 → ⍳6 is 0..5, so rows are (0 1 2) and (3 4 5)
+        let expect = [20, 74];
+        for (i, e) in expect.iter().enumerate() {
+            assert_eq!(r.cells()[i], crate::cell::Cell::Int(*e));
+        }
+    }
+
+    #[test]
+    fn test_inner_product_length_error() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        assert!(env.eval_line("1 2+.×1 2 3").is_err());
+    }
+
+    #[test]
+    fn test_each_monadic() {
+        let mut env = Environment::new();
+        env.eval_line("V←⍳4").unwrap(); // 0 1 2 3
+        let v = eval_one(&mut env, "-¨V"); // negate each → nested scalars
+        assert_eq!(v.element_count(), 4);
+        // every result cell is a pointer to a scalar
+        for c in v.cells() {
+            match c {
+                crate::cell::Cell::Pointer(p) => {
+                    assert!(p.value.is_scalar_shape());
+                }
+                o => panic!("expected pointer, got {:?}", o),
+            }
+        }
+        // check the values via disclose semantics: second should be ¯1
+        let first = match &v.cells()[1] {
+            crate::cell::Cell::Pointer(p) => p.value.clone(),
+            _ => panic!(),
+        };
+        match first.cells().first().unwrap() {
+            crate::cell::Cell::Int(i) => assert_eq!(*i, -1),
+            o => panic!("expected int, got {:?}", o),
+        }
+    }
+
+    #[test]
+    fn test_each_stray_is_syntax_error() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("¨5").is_err());
+    }
+
+    #[test]
+    fn test_selective_assignment() {
+        let mut env = Environment::new();
+        env.eval_line("B←10 20 30").unwrap();
+        // assignments produce no output
+        assert!(env.eval_line("B[1]←99").unwrap().is_none());
+        assert_eq!(eval_int_env(&mut env, "B[1]"), 99);
+        // other elements untouched
+        assert_eq!(eval_int_env(&mut env, "B[0]"), 10);
+        assert_eq!(eval_int_env(&mut env, "B[2]"), 30);
+    }
+
+    #[test]
+    fn test_selective_assignment_cow_safety() {
+        let mut env = Environment::new();
+        env.eval_line("A←1 2 3").unwrap();
+        env.eval_line("B←A").unwrap(); // B shares with A
+        env.eval_line("B[0]←99").unwrap();
+        // A must be unchanged (COW isolation)
+        assert_eq!(eval_int_env(&mut env, "A[0]"), 1);
+        assert_eq!(eval_int_env(&mut env, "B[0]"), 99);
+    }
+
+    #[test]
+    fn test_selective_assignment_index_vector() {
+        let mut env = Environment::new();
+        env.eval_line("V←0 0 0 0 0").unwrap();
+        env.eval_line("V[1 3]←7").unwrap();
+        let v = eval_one(&mut env, "V");
+        let cells: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![0, 7, 0, 7, 0]);
+    }
+
+    #[test]
+    fn test_selective_assignment_out_of_range() {
+        let mut env = Environment::new();
+        env.eval_line("B←10 20 30").unwrap();
+        assert!(env.eval_line("B[99]←1").is_err());
+    }
+
+    #[test]
+    fn test_bracket_indexing() {
+        let mut env = Environment::new();
+        env.eval_line("B←30 10 20").unwrap();
+        assert_eq!(eval_int_env(&mut env, "B[1]"), 10);
+        assert_eq!(eval_int_env(&mut env, "B[0]"), 30);
+        assert_eq!(eval_int_env(&mut env, "B[2]"), 20);
+    }
+
+    #[test]
+    fn test_index_out_of_range() {
+        let mut env = Environment::new();
+        env.eval_line("B←30 10 20").unwrap();
+        assert!(env.eval_line("B[99]").is_err());
+    }
+
+    #[test]
+    fn test_grade_sort_roundtrip() {
+        let mut env = Environment::new();
+        // B[⍋B] must be the sorted version of B
+        env.eval_line("B←42 7 19 3").unwrap();
+        let v = eval_one(&mut env, "B[⍋B]");
+        let cells: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![3, 7, 19, 42]);
+
+        let v = eval_one(&mut env, "B[⍒B]");
+        let cells: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                _ => panic!("expected ints"),
+            })
+            .collect();
+        assert_eq!(cells, vec![42, 19, 7, 3]);
+    }
+}
