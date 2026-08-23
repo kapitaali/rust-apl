@@ -56,7 +56,47 @@ pub enum Expr {
     FuncCallMono(String, Option<Box<Expr>>),
     /// defined-function call: dyadic `A FN B`
     FuncCallDyad(String, Box<Expr>, Box<Expr>),
+    /// a dfn `{...}` — evaluates to an anonymous function value that can
+    /// be called immediately (`{...}B` / `A{...}B`) or assigned to a name.
+    /// Evaluation strategy: the body compiles into an anonymous
+    /// DefinedFunction with arg names ⍺/⍵; calling binds them through the
+    /// ordinary shadowing mechanism (see eval of Dfn/DfnCallMono/DfnCallDyad).
+    Dfn(Box<Expr>),
+    /// immediate dfn call: `{BODY} ARG` — ⍵ bound to ARG's value
+    DfnCallMono(Box<Expr>, Box<Expr>),
+    /// immediate dfn call: `LARG {BODY} RARG` — ⍺/⍵ bound
+    DfnCallDyad(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// dfn argument references: ⍺ (left arg) and ⍵ (right arg)
+    Alpha,
+    Omega,
+    /// NAME ← {BODY} — named dfn definition
+    AssignDfn(String, Box<Expr>),
 }
+
+/// compile a dfn body expression into an anonymous DefinedFunction whose
+/// ⍺/⍵ args are wired through the standard call machinery.
+///
+/// The stored `result`/`source` use private-use markers that are NOT valid
+/// APL; such functions are marked `no_save` so workspace save() skips them
+/// (a dfn's real source text isn't retained — only named ∇-functions are).
+fn dfn_to_function(body: &Expr) -> crate::functions_def::DefinedFunction {
+    crate::functions_def::DefinedFunction {
+        name: DFNS_PREFIX.to_string(),
+        result: Some(DFN_RESULT.to_string()),
+        arg_left: Some("⍺".to_string()),
+        arg_right: Some("⍵".to_string()),
+        body: vec![body.clone()],
+        control: Vec::new(),
+        leave_lines: Vec::new(),
+        source: vec![DFN_BODY_MARK.to_string()],
+        no_save: true,
+    }
+}
+
+/// internal markers for anonymous dfns (never valid APL names)
+pub const DFNS_PREFIX: &str = "\u{f0000}dfn";
+const DFN_RESULT: &str = "\u{f0000}r";
+const DFN_BODY_MARK: &str = "\u{f0000}body";
 
 /// A specification target on the left of ← (for future generalization).
 #[derive(Clone, Debug)]
@@ -120,6 +160,13 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     if let Some(Tok::Name(name)) = toks.first() {
         let name = name.clone();
         if let Some(Tok::Assign) = toks.get(1) {
+            // dfn definition: NAME ← {BODY} — compile into a named function
+            if matches!(toks.get(2), Some(Tok::LBrace)) {
+                let (rhs, used) = parse_expr(&toks[2..])?;
+                if matches!(rhs, Expr::Dfn(_) | Expr::DfnCallMono(_, _)) {
+                    return Ok((Expr::AssignDfn(name, Box::new(rhs)), used + 2));
+                }
+            }
             let (rhs, used) = parse_expr(&toks[2..])?;
             return Ok((Expr::Assign(name, Box::new(rhs)), used + 2));
         }
@@ -215,6 +262,54 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         return Ok((Expr::InnerProduct(f, g, Box::new(lhs), Box::new(rhs)), used));
     }
 
+    // dfn call: LHS {BODY} — a value immediately followed by a brace group
+    // is a DYADIC dfn call (LHS is ⍺). The brace group itself was consumed
+    // as lhs (parse_term returns Dfn), so check what came BEFORE: if lhs is
+    // a Dfn, an argument to its right makes it a call.
+    if matches!(lhs, Expr::Dfn(_)) && !matches!(toks.get(used), Some(Tok::RBrace)) {
+        // {BODY} ARG or {BODY} alone
+        if !matches!(
+            toks.get(used),
+            None | Some(Tok::End) | Some(Tok::Diamond) | Some(Tok::RParen) | Some(Tok::Assign)
+        ) && !matches!(toks.get(used), Some(Tok::LBrace))
+        {
+            if let Expr::Dfn(body) = &lhs {
+                let body = body.clone();
+                let (arg, aused) = parse_simple(&toks[used..])?;
+                return Ok((Expr::DfnCallMono(body, Box::new(arg)), used + aused));
+            }
+        }
+    }
+    // value followed by a NEW brace group: A {…} B → dyadic dfn call with
+    // A as ⍺. Only when the NEXT token is an LBrace.
+    if let Some(Tok::LBrace) = toks.get(used) {
+        // find matching close brace from here
+        let mut depth = 0usize;
+        let mut close = None;
+        for (i, t) in toks[used..].iter().enumerate() {
+            match t {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(used + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close = close.ok_or(ErrorCode::SyntaxError)?;
+        let (body, _bused) = parse_expr(&toks[used + 1..close])?;
+        // the dfn's right arg is whatever follows the closing brace
+        let after = close + 1;
+        let (rarg, rused) = parse_simple(&toks[after..])?;
+        return Ok((
+            Expr::DfnCallDyad(Box::new(lhs), Box::new(body), Box::new(rarg)),
+            after + rused,
+        ));
+    }
+
     // dyadic with axis: A F[n] B — e.g. 1↑[0]M (take along first axis).
     // MUST be checked before the plain dyadic arm below (which would
     // otherwise consume the Prim and leave the bracket dangling).
@@ -251,17 +346,6 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     // check for dyadic function: lhs PRIM rest
     if let Some(Tok::Prim(p)) = toks.get(used) {
         let p = *p;
-        // APL operators bind tighter than functions: `×/20⍴2` means
-        // `×/(20⍴2)`, NOT `(×/20)⍴2`. So if the next token after the
-        // operator is another Prim, our lhs is actually the function's
-        // monadic context — but since APL has no currying here, the
-        // correct reading is: this lhs was consumed by an operator that
-        // should have grabbed the whole following expression. That case
-        // can only arise if lhs came from an OP1 with no operand — a
-        // syntax error in real APL.
-        if matches!(lhs, Expr::ReduceOp(_, _) | Expr::ScanOp(_, _)) {
-            return Err(ErrorCode::SyntaxError);
-        }
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::Dyadic(p, Box::new(lhs), Box::new(rhs)), used));
@@ -287,9 +371,34 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     Ok((lhs, used))
 }
 
-/// term := '(' expr ')' | PRIM term | OP1 term | strand | atom
+/// term := '(' expr ')' | PRIM term | OP1 term | strand | atom | '{' dfn
 fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
+        Tok::LBrace => {
+            // dfn: `{ BODY }` — body is a full expression; ⍺/⍵ reference the
+            // eventual arguments. The whole rest up to the matching brace
+            // (nesting counted) is the body.
+            let mut depth = 0usize;
+            let mut close = None;
+            for (i, t) in toks.iter().enumerate() {
+                match t {
+                    Tok::LBrace => depth += 1,
+                    Tok::RBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let close = close.ok_or(ErrorCode::SyntaxError)?;
+            let (body, _bused) = parse_expr(&toks[1..close])?;
+            Ok((Expr::Dfn(Box::new(body)), close + 1))
+        }
+        Tok::Alpha => Ok((Expr::Alpha, 1)),
+        Tok::Omega => Ok((Expr::Omega, 1)),
         Tok::LParen => {
             let (e, used) = parse_expr(&toks[1..])?;
             if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
@@ -523,11 +632,32 @@ pub struct Environment {
     /// `→N` pushes N (0 = exit, empty target = no-op); call_function's body
     /// loop pops the top. The stack keeps recursive frames independent.
     branch_stack: Vec<Option<i64>>,
+    /// counter for unique anonymous dfn names
+    dfn_counter: usize,
+    /// (fn-name, alpha-arg-name) for named dfns that reference ⍺ — used by
+    /// call_function to bind ⍺ on dyadic calls
+    pub(crate) dfn_alpha_names: Vec<(String, String)>,
 }
 
 impl Environment {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            vars: HashMap::new(),
+            funcs: crate::functions_def::FunctionTable::new(),
+            branch_stack: Vec::new(),
+            dfn_counter: 0,
+            dfn_alpha_names: Vec::new(),
+        }
+    }
+
+    /// install an anonymous dfn body and return its unique name
+    fn install_dfn(&mut self, body: &Expr) -> String {
+        let fname = format!("{}{}", DFNS_PREFIX, self.dfn_counter);
+        self.dfn_counter += 1;
+        let mut f = dfn_to_function(body);
+        f.name = fname.clone();
+        self.funcs.insert(f);
+        fname
     }
 
     pub fn get(&self, name: &str) -> Option<&ValueP> {
@@ -714,6 +844,26 @@ impl Environment {
                 self.vars.insert(n.clone(), v.clone());
             }
         }
+        // named dfns: bind ⍺ on dyadic calls even though arg_left was
+        // dropped from the arity signature (dfns are ambivalent)
+        if let Some(alpha) = self
+            .dfn_alpha_names
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, a)| a.clone())
+        {
+            match (&left, &right) {
+                (Some(v), Some(_)) => {
+                    self.vars.insert(alpha, v.clone());
+                }
+                (None, Some(_)) => {
+                    // monadic call: shadow ⍺ so an accidental reference
+                    // doesn't see a STALE outer value
+                    self.vars.remove(&alpha);
+                }
+                _ => {}
+            }
+        }
 
         // run the body; result = last line's value.
         // A line that is a bare `→expr` branch: target 0 exits, N jumps
@@ -826,6 +976,65 @@ impl Environment {
             }
             Expr::Str(s) => Ok(ValueP::char_vector(s)),
             Expr::Var(name) => self.vars.get(name).cloned().ok_or(ErrorCode::ValueError),
+            Expr::Alpha => self.vars.get("⍺").cloned().ok_or(ErrorCode::ValueError),
+            Expr::Omega => self.vars.get("⍵").cloned().ok_or(ErrorCode::ValueError),
+            Expr::Dfn(body) => {
+                // a bare dfn evaluates to... itself as a function value. We
+                // don't have first-class function values yet, so represent
+                // it by installing an anonymous entry in the function table
+                // under a unique name and returning that name as a Var-like
+                // reference is overkill: instead evaluate the body with
+                // ⍺/⍵ UNBOUND — only valid if the body doesn't use them.
+                let f = dfn_to_function(body);
+                let fname = format!("{}{}", DFNS_PREFIX, self.dfn_counter);
+                self.dfn_counter += 1;
+                let mut f = f;
+                f.name = fname.clone();
+                self.funcs.insert(f);
+                Ok(ValueP::scalar_from(crate::cell::Cell::Char(
+                    fname.chars().next().unwrap() as u32,
+                )))
+            }
+            Expr::DfnCallMono(body, arg) => {
+                // install + immediately call with ⍵ = arg (⍺ unbound).
+                // Dfns are AMBIVALENT: strip arg_left so the arity check
+                // passes; an unbound ⍺ reference then raises VALUE ERROR
+                // naturally if the body actually uses it.
+                let fname = self.install_dfn(body);
+                self.funcs.get_mut(&fname).unwrap().arg_left = None;
+                let av = self.eval(arg)?;
+                self.call_function(&fname, None, Some(av))
+            }
+            Expr::DfnCallDyad(larg, body, rarg) => {
+                // APL evaluates ⍵ then ⍺
+                let fname = self.install_dfn(body);
+                let bv = self.eval(rarg)?;
+                let av = self.eval(larg)?;
+                self.call_function(&fname, Some(av), Some(bv))
+            }
+            Expr::AssignDfn(name, rhs) => {
+                // NAME ← {BODY} — a named dfn. Dfns are AMBIVALENT: keep
+                // arg_right (⍵) as the declared argument but drop arg_left
+                // from the ARITY computation by marking it optional; an
+                // unbound ⍺ reference raises VALUE ERROR naturally.
+                match &**rhs {
+                    Expr::Dfn(body) => {
+                        let f = dfn_to_function(body);
+                        let mut f = f;
+                        f.name = name.clone();
+                        // arity-2 with only-right-provided must not fail:
+                        // store ⍺ as a non-arity-affecting local instead
+                        let alpha_local = f.arg_left.take();
+                        self.funcs.insert(f);
+                        // remember that ⍺ exists for dyadic calls
+                        if let Some(a) = alpha_local {
+                            self.dfn_alpha_names.push((name.clone(), a));
+                        }
+                        Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))
+                    }
+                    _ => Err(ErrorCode::SyntaxError),
+                }
+            }
             Expr::FuncCallMono(name, arg) => {
                 let right = match arg {
                     Some(e) => Some(self.eval(e)?),
@@ -1041,7 +1250,10 @@ impl Environment {
         }
         let is_assign = matches!(
             expr,
-            Expr::Assign(_, _) | Expr::AssignIndexed(_, _, _) | Expr::AssignPick(_, _, _)
+            Expr::Assign(_, _)
+                | Expr::AssignIndexed(_, _, _)
+                | Expr::AssignPick(_, _, _)
+                | Expr::AssignDfn(_, _)
         );
         let v = self.eval(&expr)?;
         Ok(if is_assign { None } else { Some(v) })
@@ -1796,6 +2008,46 @@ mod tests {
         // 1 0 1 ∧.= 1 1 1 → ∧/(1=1)(0=1)(1=1) = ∧/1 0 1 = 0
         let r = eval_one(&mut env, "1 0 1∧.=1 1 1");
         assert_eq!(r.first_cell().unwrap(), &crate::cell::Cell::Int(0));
+    }
+
+    #[test]
+    fn test_dfn_immediate_calls() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // monadic immediate: {⍵+1} 5 → 6
+        assert_eq!(
+            eval_one(&mut env, "{⍵+1} 5").first_cell().unwrap(),
+            &crate::cell::Cell::Int(6)
+        );
+        // dyadic immediate: 2 {⍺×⍵} 3 → 6
+        assert_eq!(
+            eval_one(&mut env, "2 {⍺×⍵} 3").first_cell().unwrap(),
+            &crate::cell::Cell::Int(6)
+        );
+        // monadic call on a ⍺-using body → VALUE ERROR (⍺ unbound)
+        assert!(env.eval_line("{⍺+⍵} 3 4").is_err());
+    }
+
+    #[test]
+    fn test_dfn_named_definitions() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // definition produces no output
+        assert!(env.eval_line("DOUBLE←{⍵×2}").unwrap().is_none());
+        // and the function is callable
+        assert_eq!(
+            eval_one(&mut env, "DOUBLE 21").first_cell().unwrap(),
+            &crate::cell::Cell::Int(42)
+        );
+        // dyadic named dfn
+        assert!(env.eval_line("SUM←{⍺+⍵}").unwrap().is_none());
+        assert_eq!(
+            eval_one(&mut env, "5 SUM 7").first_cell().unwrap(),
+            &crate::cell::Cell::Int(12)
+        );
+        // dfn visible via )FNS
+        assert!(env.funcs.get("DOUBLE").is_some());
+        assert!(env.funcs.get("SUM").is_some());
     }
 
     #[test]

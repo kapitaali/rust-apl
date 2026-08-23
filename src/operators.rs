@@ -55,17 +55,31 @@ pub fn reduce(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
     }
 
     let cells = b.cells();
-    let mut out = Vec::with_capacity(out_len as usize);
-
-    for row in 0..out_len as usize {
+    let n_us = n as usize;
+    let fold_row = |row: usize| -> Result<Cell, ErrorCode> {
         // right-to-left fold: Z = B[0] f (B[1] f (... f B[n-1]))
-        let base = row * n as usize;
-        let mut acc = cells[base + n as usize - 1].clone();
-        for k in (0..n as usize - 1).rev() {
+        let base = row * n_us;
+        let mut acc = cells[base + n_us - 1].clone();
+        for k in (0..n_us - 1).rev() {
             acc = apply_prim(lo, &cells[base + k], &acc)?;
         }
-        out.push(acc);
-    }
+        Ok(acc)
+    };
+
+    let out_len_us = out_len as usize;
+    let out = if out_len_us >= crate::functions::PARALLEL_THRESHOLD {
+        // rows are independent folds; fold DIRECTION stays sequential
+        // right-to-left within each row
+        use rayon::prelude::*;
+        (0..out_len_us)
+            .into_par_iter()
+            .map(fold_row)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        (0..out_len_us)
+            .map(fold_row)
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     // build result shape: drop the last axis
     let shape = if rank <= 1 {
@@ -427,5 +441,32 @@ mod tests {
     fn reshape_matrix(data: Vec<i64>, rows: i64, cols: i64) -> ValueP {
         let shape = Shape::matrix(rows, cols);
         ValueP::from_parts(shape, data.into_iter().map(Cell::Int).collect()).unwrap()
+    }
+
+    #[test]
+    fn test_parallel_reduce_preserves_fold_direction() {
+        // 5000 rows × 3 cols — above the parallel threshold.
+        // Non-commutative − pins the fold direction per row:
+        // row (a b c) must reduce as a - (b - c) = a-b+c.
+        let rows = 5000i64;
+        let mut data = Vec::new();
+        for r in 0..rows {
+            data.extend_from_slice(&[r, r + 1, r + 2]);
+        }
+        let b = reshape_matrix(data, rows, 3);
+        let z = reduce(Prim::Subtract, &b).unwrap();
+        assert_eq!(z.element_count(), rows);
+        for r in [0i64, 1, 2499, rows - 1] {
+            // (r) - ((r+1) - (r+2)) = r - r - 1 + r + 2 = r + 1
+            assert_eq!(z.cells()[r as usize], Cell::Int(r + 1));
+        }
+        // same via + for value sanity
+        let b2 = reshape_matrix((0..rows * 3).collect(), rows, 3);
+        let z2 = reduce(Prim::Add, &b2).unwrap();
+        assert_eq!(z2.cells()[0], Cell::Int(3));
+        assert_eq!(
+            z2.cells()[rows as usize - 1],
+            Cell::Int(3 * rows - 3 + 3 * rows - 2 + 3 * rows - 1)
+        );
     }
 }

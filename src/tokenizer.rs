@@ -46,6 +46,14 @@ pub enum Tok {
     LBracket,
     /// right square bracket
     RBracket,
+    /// dfn left brace `{`
+    LBrace,
+    /// dfn right brace `}`
+    RBrace,
+    /// dfn left argument `⍺`
+    Alpha,
+    /// dfn right argument `⍵`
+    Omega,
     /// end of input
     End,
 }
@@ -116,6 +124,22 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
             }
             ']' => {
                 toks.push(Tok::RBracket);
+                i += 1;
+            }
+            '{' => {
+                toks.push(Tok::LBrace);
+                i += 1;
+            }
+            '}' => {
+                toks.push(Tok::RBrace);
+                i += 1;
+            }
+            '⍺' => {
+                toks.push(Tok::Alpha);
+                i += 1;
+            }
+            '⍵' => {
+                toks.push(Tok::Omega);
                 i += 1;
             }
             '←' => {

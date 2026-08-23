@@ -51,9 +51,14 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
     }
 
     // functions: DefinedFunction retains raw source lines, so definitions
-    // round-trip through define_function on load.
+    // round-trip through define_function on load. Compiler-generated
+    // functions (anonymous dfn temporaries) have no valid APL source and
+    // are skipped.
     for fname in env.funcs.names() {
         let f = env.funcs.get(&fname).expect("name came from names()");
+        if f.no_save {
+            continue;
+        }
         // reconstruct header: [result←]NAME [left] [right]
         let mut header = String::new();
         if let Some(r) = &f.result {
@@ -154,45 +159,86 @@ fn ws_path(name: &str) -> PathBuf {
 }
 
 /// One-line variable encoding. Returns None for values we can't round-trip.
+///
+/// Generic format for any-rank simple numeric/char arrays:
+///   `AI <dims-comma>;<vals-comma>`   int array (rank ≥ 0)
+///   `AF <dims-comma>;<vals-comma>`   float array
+///   `AC <dims-comma>;<vals-comma>`   char array (u32 codepoints)
+/// Scalars serialize with an empty dim list (`I`/`F`/`C` legacy forms are
+/// still parsed for backward compatibility).
 fn serialize_var(v: &ValueP) -> Option<String> {
     let cells = v.cells();
-    if v.is_scalar() {
-        match cells.first()? {
-            Cell::Int(i) => return Some(format!("I {}", i)),
-            Cell::Float(f) => return Some(format!("F {}", f)),
-            Cell::Char(c) => return Some(format!("C {}", *c)),
-            _ => return None,
-        }
+    if cells.iter().any(|c| c.is_pointer_cell()) {
+        return None; // nested values not yet supported
     }
-    if v.rank() == 1 {
-        // int vector
-        if cells.iter().all(|c| matches!(c, Cell::Int(_))) {
-            let ints: Vec<String> = cells
-                .iter()
-                .map(|c| match c {
-                    Cell::Int(i) => i.to_string(),
-                    _ => unreachable!("checked above"),
-                })
-                .collect();
-            return Some(format!("VI {}", ints.join(",")));
-        }
-        // char vector ('abc') — chars stored as u32 codepoints
-        if cells.iter().all(|c| matches!(c, Cell::Char(_))) {
-            let esc: Vec<String> = cells
-                .iter()
-                .filter_map(|c| match c {
-                    Cell::Char(cp) => Some(cp.to_string()),
-                    _ => None,
-                })
-                .collect();
-            return Some(format!("VC {}", esc.join(",")));
-        }
+
+    let kind = match cells.first()? {
+        Cell::Int(_) => "AI",
+        Cell::Float(_) => "AF",
+        Cell::Char(_) => "AC",
+        _ => return None,
+    };
+    // mixed int/float arrays: promote to AF
+    let kind = if kind == "AI" && cells.iter().any(|c| matches!(c, Cell::Float(_))) {
+        "AF"
+    } else {
+        kind
+    };
+
+    let dims: Vec<String> = (0..v.rank() as usize)
+        .map(|k| v.get_shape_item(k as i16).to_string())
+        .collect();
+    let vals: Vec<String> = cells
+        .iter()
+        .map(|c| match (kind, c) {
+            ("AI", Cell::Int(i)) => Ok(i.to_string()),
+            ("AF", Cell::Int(i)) => Ok((*i as f64).to_string()),
+            ("AF", Cell::Float(f)) => Ok(f.to_string()),
+            ("AC", Cell::Char(cp)) => Ok(cp.to_string()),
+            _ => Err(()),
+        })
+        .collect::<Result<_, _>>()
+        .ok()?;
+    Some(format!("{} {};{}", kind, dims.join(","), vals.join(",")))
+}
+
+fn parse_dims(s: &str) -> Result<Vec<i64>, String> {
+    if s.is_empty() {
+        return Ok(vec![]); // scalar
     }
-    None
+    s.split(',')
+        .map(|d| d.parse().map_err(|_| "bad dim".to_string()))
+        .collect()
 }
 
 fn deserialize_var(payload: &str) -> Result<ValueP, String> {
     let (kind, rest) = payload.split_once(' ').ok_or("corrupt var payload")?;
+    // generic any-rank forms
+    if matches!(kind, "AI" | "AF" | "AC") {
+        let (dim_str, val_str) = rest.split_once(';').ok_or("corrupt array payload")?;
+        let dims = parse_dims(dim_str)?;
+        let shape =
+            crate::shape::Shape::from_dims(&dims).map_err(|e| format!("shape error: {:?}", e))?;
+        let cells: Vec<Cell> = val_str
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| match kind {
+                "AI" => s
+                    .parse::<i64>()
+                    .map(Cell::Int)
+                    .map_err(|_| "bad int".to_string()),
+                "AF" => s
+                    .parse::<f64>()
+                    .map(Cell::Float)
+                    .map_err(|_| "bad float".to_string()),
+                _ => s
+                    .parse::<u32>()
+                    .map(Cell::Char)
+                    .map_err(|_| "bad char".to_string()),
+            })
+            .collect::<Result<_, _>>()?;
+        return ValueP::from_parts(shape, cells).map_err(|e| format!("shape error: {:?}", e));
+    }
     match kind {
         "I" => Ok(ValueP::scalar_from(Cell::Int(
             rest.parse().map_err(|_| "bad int")?,
@@ -203,26 +249,6 @@ fn deserialize_var(payload: &str) -> Result<ValueP, String> {
         "C" => Ok(ValueP::scalar_from(Cell::Char(
             rest.parse().map_err(|_| "bad char")?,
         ))),
-        "VI" => {
-            let ints: Vec<i64> = rest
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.parse().map_err(|_| "bad int vector"))
-                .collect::<Result<_, _>>()?;
-            let cells: Vec<Cell> = ints.into_iter().map(Cell::Int).collect();
-            ValueP::from_parts(crate::shape::Shape::vector(cells.len() as i64), cells)
-                .map_err(|e| format!("shape error: {:?}", e))
-        }
-        "VC" => {
-            let cps: Vec<u32> = rest
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| s.parse().map_err(|_| "bad char vector"))
-                .collect::<Result<_, _>>()?;
-            let cells: Vec<Cell> = cps.into_iter().map(Cell::Char).collect();
-            ValueP::from_parts(crate::shape::Shape::vector(cells.len() as i64), cells)
-                .map_err(|e| format!("shape error: {:?}", e))
-        }
         _ => Err(format!("unknown var kind {}", kind)),
     }
 }
@@ -287,6 +313,50 @@ mod tests {
         let mut env = fresh();
         env.eval_line("N←(1 2)(3 4)").unwrap(); // nested — unsupported
         assert!(save(&env, "test_ws_nested").is_err());
+    }
+
+    #[test]
+    fn test_save_load_matrix_and_rank3() {
+        let mut env = fresh();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("T←2 2 2⍴⍳8").unwrap();
+        env.eval_line("FM←2 2⍴÷2 4 5 8").unwrap();
+
+        let path = save(&env, "test_ws_rank").unwrap();
+        let mut env2 = fresh();
+        load(&mut env2, "test_ws_rank").unwrap();
+
+        // matrix shape + ravel survive
+        let m = eval_val(&mut env2, "M+0");
+        assert_eq!(m.rank(), 2);
+        assert_eq!(m.get_shape_item(0), 2);
+        assert_eq!(m.get_shape_item(1), 3);
+        assert_eq!(
+            m.cells(),
+            &[
+                Cell::Int(0),
+                Cell::Int(1),
+                Cell::Int(2),
+                Cell::Int(3),
+                Cell::Int(4),
+                Cell::Int(5)
+            ]
+        );
+        // rank-3
+        let t = eval_val(&mut env2, "T+0");
+        assert_eq!(t.rank(), 3);
+        assert_eq!(t.element_count(), 8);
+        assert_eq!(t.cells()[7], Cell::Int(7));
+        // float matrix (⎕PP-independent: full f64 precision stored)
+        let fm = eval_val(&mut env2, "FM+0");
+        assert_eq!(fm.cells()[1], Cell::Float(0.25));
+        assert_eq!(fm.cells()[3], Cell::Float(0.125));
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// helper: evaluate a line that must produce a value
+    fn eval_val(env: &mut Environment, line: &str) -> ValueP {
+        env.eval_line(line).expect("eval failed").expect("a result")
     }
 
     #[test]

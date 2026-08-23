@@ -36,6 +36,9 @@ pub struct DefinedFunction {
     /// dropped during parsing, so body/leave_lines/control indices refer
     /// to the compacted line list, same as `source`).
     pub source: Vec<String>,
+    /// true for compiler-generated functions (dfns) whose pseudo-source is
+    /// not valid APL — workspace save() must skip them
+    pub no_save: bool,
 }
 
 /// branch_stack sentinel pushed by :Leave — never a legal branch target
@@ -99,6 +102,10 @@ impl FunctionTable {
 
     pub fn get(&self, name: &str) -> Option<&DefinedFunction> {
         self.funcs.get(name)
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut DefinedFunction> {
+        self.funcs.get_mut(name)
     }
 
     pub fn insert(&mut self, f: DefinedFunction) {
@@ -217,6 +224,7 @@ pub fn define_function(
         control,
         leave_lines,
         source: compacted,
+        no_save: false,
     });
     Ok(())
 }

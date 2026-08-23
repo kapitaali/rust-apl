@@ -322,7 +322,7 @@ fn map_cells(
 }
 
 /// below this many elements, parallel dispatch costs more than it saves
-const PARALLEL_THRESHOLD: usize = 4096;
+pub const PARALLEL_THRESHOLD: usize = 4096;
 
 /// Apply a dyadic cell function element-wise with scalar extension
 /// (mirrors C++ ScalarFunction broadcast rules).
