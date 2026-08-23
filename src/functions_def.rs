@@ -41,6 +41,12 @@ pub struct DefinedFunction {
     pub no_save: bool,
     /// true when this function was created from a dfn `{...}` definition
     pub is_dfn: bool,
+    /// true when this dfn references `⍺⍺` or `⍵⍵` (a "dop" - dyadic operator)
+    pub is_dop: bool,
+    /// left operand function for a dop (the function applied to ⍺)
+    pub dop_lo: Option<crate::functions::Prim>,
+    /// right operand function for a dop (the function applied to ⍵)
+    pub dop_ro: Option<crate::functions::Prim>,
 }
 
 /// branch_stack sentinel pushed by :Leave — never a legal branch target
@@ -228,6 +234,9 @@ pub fn define_function(
         source: compacted,
         no_save: false,
         is_dfn: false,
+        is_dop: false,
+        dop_lo: None,
+        dop_ro: None,
     });
     Ok(())
 }

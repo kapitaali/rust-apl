@@ -240,17 +240,18 @@ pub fn scan_first(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
         Ok(results)
     };
 
-    let col_results: Vec<Vec<(usize, Cell)>> = if inner as usize >= crate::functions::PARALLEL_THRESHOLD {
-        use rayon::prelude::*;
-        (0..inner as usize)
-            .into_par_iter()
-            .map(scan_col)
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        (0..inner as usize)
-            .map(scan_col)
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let col_results: Vec<Vec<(usize, Cell)>> =
+        if inner as usize >= crate::functions::PARALLEL_THRESHOLD {
+            use rayon::prelude::*;
+            (0..inner as usize)
+                .into_par_iter()
+                .map(scan_col)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            (0..inner as usize)
+                .map(scan_col)
+                .collect::<Result<Vec<_>, _>>()?
+        };
 
     for col in col_results {
         for (idx, cell) in col {

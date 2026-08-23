@@ -83,9 +83,23 @@ pub enum Expr {
     /// multi-statement dfn bodies: {e1 ⋄ e2 ⋄ e3}. Evaluates each in order,
     /// returns the last.
     DiamondList(Vec<Expr>),
+    /// a sequence of expressions: e1 e2 e3 ... evaluates each, returns last.
+    /// Used for multi-term dfn bodies and eval-time substitution results.
+    Seq(Vec<Expr>),
     /// if-then-else: If(cond, then, else) — used for desugaring guarded
     /// expressions in dfns: {c1:e1 ⋄ c2:e2 ⋄ e3} → If(c1,e1,If(c2,e2,e3))
     If(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// dop call: LO FN RO B — call dfn with operand primitives bound
+    DopCall(String, Prim, Prim, Box<Expr>),
+    /// Apply an operand placeholder (⍺⍺/⍵⍵) to an argument.
+    /// Produced by dfn body parsing when a multi-term statement starts with
+    /// AlphaAlpha or OmegaOmega. substitute_dop resolves it to Monadic(p, arg)
+    /// when the dop context is known; reaching eval unresolved is a SyntaxError.
+    ApplyOp(Box<Expr>, Box<Expr>),
+    /// compile-time function reference placeholder for dop bodies.
+    /// When a dfn body references a function by name (not ⍺⍺/⍵⍵), this
+    /// wraps the name so substitute_dop can pass it through unchanged.
+    FuncRef(String),
 }
 
 /// compile a dfn body expression into an anonymous DefinedFunction whose
@@ -106,6 +120,107 @@ fn dfn_to_function(body: &Expr) -> crate::functions_def::DefinedFunction {
         source: vec![DFN_BODY_MARK.to_string()],
         no_save: true,
         is_dfn: true,
+        is_dop: false,
+        dop_lo: None,
+        dop_ro: None,
+    }
+}
+
+/// substitute ⍺⍺ → dop_lo and ⍵⍵ → dop_ro throughout an expression
+fn substitute_dop(
+    e: &Expr,
+    dop_lo: Option<crate::functions::Prim>,
+    dop_ro: Option<crate::functions::Prim>,
+) -> Expr {
+    match e {
+        Expr::AlphaAlpha => {
+            if let Some(p) = dop_lo {
+                Expr::Monadic(p, Box::new(Expr::Omega))
+            } else {
+                Expr::AlphaAlpha
+            }
+        }
+        Expr::OmegaOmega => {
+            if let Some(p) = dop_ro {
+                Expr::Monadic(p, Box::new(Expr::Omega))
+            } else {
+                Expr::OmegaOmega
+            }
+        }
+        Expr::Monadic(p, b) => Expr::Monadic(*p, Box::new(substitute_dop(b, dop_lo, dop_ro))),
+        Expr::Dyadic(p, a, b) => Expr::Dyadic(
+            *p,
+            Box::new(substitute_dop(a, dop_lo, dop_ro)),
+            Box::new(substitute_dop(b, dop_lo, dop_ro)),
+        ),
+        Expr::Dfn(body) => Expr::Dfn(Box::new(substitute_dop(body, dop_lo, dop_ro))),
+        Expr::DfnCallMono(body, arg) => Expr::DfnCallMono(
+            Box::new(substitute_dop(body, dop_lo, dop_ro)),
+            Box::new(substitute_dop(arg, dop_lo, dop_ro)),
+        ),
+        Expr::DfnCallDyad(larg, body, rarg) => Expr::DfnCallDyad(
+            Box::new(substitute_dop(larg, dop_lo, dop_ro)),
+            Box::new(substitute_dop(body, dop_lo, dop_ro)),
+            Box::new(substitute_dop(rarg, dop_lo, dop_ro)),
+        ),
+        Expr::If(c, t, e) => Expr::If(
+            Box::new(substitute_dop(c, dop_lo, dop_ro)),
+            Box::new(substitute_dop(t, dop_lo, dop_ro)),
+            Box::new(substitute_dop(e, dop_lo, dop_ro)),
+        ),
+        Expr::DiamondList(exprs) => Expr::DiamondList(
+            exprs
+                .iter()
+                .map(|e| substitute_dop(e, dop_lo, dop_ro))
+                .collect(),
+        ),
+        Expr::Seq(exprs) => Expr::Seq(
+            exprs
+                .iter()
+                .map(|e| substitute_dop(e, dop_lo, dop_ro))
+                .collect(),
+        ),
+        Expr::SelfCall(arg) => Expr::SelfCall(Box::new(substitute_dop(arg, dop_lo, dop_ro))),
+        Expr::SelfCallDyad(larg, rarg) => Expr::SelfCallDyad(
+            Box::new(substitute_dop(larg, dop_lo, dop_ro)),
+            Box::new(substitute_dop(rarg, dop_lo, dop_ro)),
+        ),
+        Expr::FuncCallMono(name, arg) => Expr::FuncCallMono(
+            name.clone(),
+            arg.as_ref()
+                .map(|a| Box::new(substitute_dop(a, dop_lo, dop_ro))),
+        ),
+        Expr::FuncCallDyad(name, a, b) => Expr::FuncCallDyad(
+            name.clone(),
+            Box::new(substitute_dop(a, dop_lo, dop_ro)),
+            Box::new(substitute_dop(b, dop_lo, dop_ro)),
+        ),
+        Expr::DopCall(name, lo, ro, rhs) => Expr::DopCall(
+            name.clone(),
+            *lo,
+            *ro,
+            Box::new(substitute_dop(rhs, dop_lo, dop_ro)),
+        ),
+        // ⍺⍺ arg → Monadic(dop_lo, arg) when dop_lo is known
+        Expr::ApplyOp(f, arg) => {
+            match f.as_ref() {
+                Expr::AlphaAlpha if dop_lo.is_some() => Expr::Monadic(
+                    dop_lo.unwrap(),
+                    Box::new(substitute_dop(arg, dop_lo, dop_ro)),
+                ),
+                Expr::OmegaOmega if dop_ro.is_some() => Expr::Monadic(
+                    dop_ro.unwrap(),
+                    Box::new(substitute_dop(arg, dop_lo, dop_ro)),
+                ),
+                // any other func: just recurse
+                _ => Expr::ApplyOp(
+                    Box::new(substitute_dop(f, dop_lo, dop_ro)),
+                    Box::new(substitute_dop(arg, dop_lo, dop_ro)),
+                ),
+            }
+        }
+        Expr::FuncRef(_) => e.clone(),
+        other => other.clone(),
     }
 }
 
@@ -240,7 +355,35 @@ fn try_parse_pick_target(toks: &[Tok]) -> AplResult<Option<(Expr, String, usize)
 
 /// simple := term | term prim simple   (right-associative)
 fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
-    let (lhs, mut used) = parse_term(toks)?;
+    // dop call: LO FN RO B — call a dfn that references ⍺⍺/⍵⍵,
+    // binding LO to ⍺⍺ and RO to ⍵⍵. Detected by: Prim(f) Name(dop) Prim(g) rest
+    // where rest is not another operator (which would be a regular dyadic chain).
+    if let Some(Tok::Prim(lo_p)) = toks.get(0) {
+        if let Some(Tok::Name(dop_name)) = toks.get(1) {
+            if let Some(Tok::Prim(ro_p)) = toks.get(2) {
+                let after_ro = 3;
+                let is_dop = !matches!(
+                    toks.get(after_ro),
+                    Some(Tok::Prim(_))
+                        | Some(Tok::Reduce(_))
+                        | Some(Tok::Scan(_))
+                        | Some(Tok::Each(_))
+                        | Some(Tok::Commute)
+                );
+                if is_dop {
+                    let lo = *lo_p;
+                    let ro = *ro_p;
+                    let (rhs, rused) = parse_simple(&toks[after_ro..])?;
+                    return Ok((
+                        Expr::DopCall(dop_name.clone(), lo, ro, Box::new(rhs)),
+                        after_ro + rused,
+                    ));
+                }
+            }
+        }
+    }
+
+    let (mut lhs, mut used) = parse_term(toks)?;
 
     // commute operator: F⍨ after a value means the NEXT function is
     // commuted: `A F⍨ B` = B F A. We detect PRIM COMMUTE here.
@@ -365,6 +508,35 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::Dyadic(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dop call: LO FN RO B — call a dfn that references ⍺⍺/⍵⍵,
+    // binding LO to ⍺⍺ and RO to ⍵⍵. Detected by: Prim(f) Name(dop) Prim(g) rest
+    if let Some(Tok::Prim(lo_p)) = toks.get(used) {
+        if let Some(Tok::Name(dop_name)) = toks.get(used + 1) {
+            if let Some(Tok::Prim(ro_p)) = toks.get(used + 2) {
+                // Check that the token after the second Prim is not another operator
+                // (which would mean this is a regular dyadic chain, not a dop)
+                let after_ro = used + 3;
+                let is_dop = !matches!(
+                    toks.get(after_ro),
+                    Some(Tok::Prim(_))
+                        | Some(Tok::Reduce(_))
+                        | Some(Tok::Scan(_))
+                        | Some(Tok::Each(_))
+                        | Some(Tok::Commute)
+                );
+                if is_dop {
+                    let lo = *lo_p;
+                    let ro = *ro_p;
+                    let (rhs, rused) = parse_simple(&toks[after_ro..])?;
+                    return Ok((
+                        Expr::DopCall(dop_name.clone(), lo, ro, Box::new(rhs)),
+                        after_ro + rused,
+                    ));
+                }
+            }
+        }
     }
 
     // dyadic defined-function call: A FN B (Name in infix position)
@@ -706,6 +878,7 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
                 }
                 // body is everything after the colon
                 let (body, bused) = parse_expr(&s[cp + 1..])?;
+                // body must consume the rest of the statement (no trailing End in dfn bodies)
                 if cp + 1 + bused != s.len() {
                     return Err(ErrorCode::SyntaxError);
                 }
@@ -715,11 +888,44 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
                     Box::new(Expr::Num(0.0)),
                 ))
             } else {
-                let (e, used) = parse_expr(&s)?;
-                if used != s.len() {
-                    return Err(ErrorCode::SyntaxError);
+                // parse all terms in the statement; single term stays as-is,
+                // multiple terms become a Seq (evaluated left-to-right, last wins)
+                let mut exprs = Vec::new();
+                let mut pos = 0;
+                while pos < s.len() && !matches!(s.get(pos), Some(Tok::End)) {
+                    let (e, used) = parse_expr(&s[pos..])?;
+                    exprs.push(e);
+                    pos += used;
                 }
-                Ok(e)
+                match exprs.len() {
+                    0 => Err(ErrorCode::SyntaxError),
+                    1 => Ok(exprs.into_iter().next().unwrap()),
+                    _ => {
+                        // fold multiple terms into monadic application:
+                        // F X Y → F (X Y) in APL
+                        // but for dfns, F G H → F applied to (G H)
+                        // For ⍺⍺/⍵⍵ as function position, produce ApplyOp
+                        let mut acc = exprs.pop().unwrap();
+                        for e in exprs.into_iter().rev() {
+                            // AlphaAlpha/OmegaOmega as function position defer
+                            // resolution to dop call time via ApplyOp.
+                            // Prim functions are already Expr::Monadic at this point
+                            // (parse_atom converts Tok::Prim to Expr::Monadic).
+                            // For all other functions (names, calls), fall back to Seq.
+                            match e {
+                                Expr::AlphaAlpha | Expr::OmegaOmega => {
+                                    acc = Expr::ApplyOp(Box::new(e), Box::new(acc));
+                                }
+                                _ => {
+                                    // non-prim function: can't fold into Monadic,
+                                    // so emit Seq (evaluates each, returns last)
+                                    return Ok(Expr::Seq(vec![e, acc]));
+                                }
+                            }
+                        }
+                        Ok(acc)
+                    }
+                }
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -972,6 +1178,120 @@ impl Environment {
         Ok(())
     }
 
+    /// call a defined function by name with dop primitives (⍺⍺/⍵⍵) bound
+    pub fn call_function_dop(
+        &mut self,
+        name: &str,
+        dop_lo: crate::functions::Prim,
+        dop_ro: crate::functions::Prim,
+        left: Option<ValueP>,
+        right: Option<ValueP>,
+    ) -> AplResult<ValueP> {
+        let f = match self.funcs.get(name) {
+            Some(f) => {
+                let mut f = f.clone();
+                f.body = f
+                    .body
+                    .iter()
+                    .map(|e| substitute_dop(e, Some(dop_lo), Some(dop_ro)))
+                    .collect();
+                f
+            }
+            None => return Err(ErrorCode::ValueError),
+        };
+        let provided = left.is_some() as u8 + right.is_some() as u8;
+        if f.arity() != 0 && provided == 0 || f.arity() == 2 && provided != 2 {
+            return Err(ErrorCode::SyntaxError);
+        }
+        let mut shadowed: Vec<(String, Option<ValueP>)> = Vec::new();
+        for local in [&f.arg_left, &f.arg_right, &f.result].into_iter().flatten() {
+            shadowed.push((local.clone(), self.vars.get(local).cloned()));
+        }
+        let mut body_locals: Vec<String> = Vec::new();
+        collect_assigned_names(&f.body, &mut body_locals);
+        for l in &body_locals {
+            shadowed.push((l.clone(), self.vars.get(l).cloned()));
+        }
+        let caller_fn_name = self.current_fn_name.clone();
+        self.current_fn_name = Some(name.to_string());
+        if let Some(n) = &f.arg_left {
+            if let Some(v) = &left {
+                self.vars.insert(n.clone(), v.clone());
+            }
+        }
+        if let Some(n) = &f.arg_right {
+            if let Some(v) = &right {
+                self.vars.insert(n.clone(), v.clone());
+            }
+        }
+        let mut last: Option<ValueP> = None;
+        let mut err = None;
+        let mut pc = 0usize;
+        self.branch_stack.push(None);
+        let frame_base = self.branch_stack.len() - 1;
+        while pc < f.body.len() {
+            let block_end = f.control.iter().find_map(|b| match b {
+                crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::While { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                crate::functions_def::ControlBlock::Repeat { start, end, .. } if *start == pc => {
+                    Some(*end)
+                }
+                _ => None,
+            });
+            if let Some(block_end) = block_end {
+                self.run_lines(&f, pc, block_end)?;
+                pc = block_end;
+                continue;
+            }
+            match self.eval(&f.body[pc]) {
+                Ok(v) => {
+                    if self.branch_stack.len() > frame_base + 1 {
+                        if let Some(Some(t)) = self.branch_stack.pop() {
+                            if t == 0 {
+                                self.branch_stack.truncate(frame_base);
+                                break;
+                            }
+                            pc = (t - 1) as usize;
+                            continue;
+                        }
+                    }
+                    last = Some(v);
+                }
+                Err(e) => {
+                    err = Some(e);
+                    break;
+                }
+            }
+            pc += 1;
+        }
+        self.branch_stack.truncate(frame_base);
+        self.current_fn_name = caller_fn_name;
+        let explicit_result: Option<ValueP> =
+            f.result.as_ref().and_then(|rn| self.vars.get(rn).cloned());
+        for (name, old) in shadowed {
+            match old {
+                Some(v) => {
+                    self.vars.insert(name, v);
+                }
+                None => {
+                    self.vars.remove(&name);
+                }
+            }
+        }
+        if let Some(e) = err {
+            return Err(e);
+        }
+        match (explicit_result, last) {
+            (Some(v), _) => Ok(v),
+            (None, Some(v)) => Ok(v),
+            (None, None) => Err(ErrorCode::SyntaxError),
+        }
+    }
+
     /// call a defined function by name (monadic or dyadic).
     /// Creates a child scope with the args bound; recursion works because
     /// the function table is shared.
@@ -1003,6 +1323,16 @@ impl Environment {
         for l in &body_locals {
             shadowed.push((l.clone(), self.vars.get(l).cloned()));
         }
+
+        // dop: if this function references ⍺⍺/⍵⍵, substitute bound primitives
+        let body = if f.dop_lo.is_some() || f.dop_ro.is_some() {
+            f.body
+                .iter()
+                .map(|e| substitute_dop(e, f.dop_lo, f.dop_ro))
+                .collect()
+        } else {
+            f.body.clone()
+        };
 
         // save the caller's current function name so ∇ can reference this one
         let caller_fn_name = self.current_fn_name.clone();
@@ -1051,7 +1381,7 @@ impl Environment {
         let mut pc = 0usize;
         self.branch_stack.push(None); // frame sentinel
         let frame_base = self.branch_stack.len() - 1;
-        while pc < f.body.len() {
+        while pc < body.len() {
             // structured control blocks: delegate to the same machinery
             // run_lines uses, but keep tracking `last`/branch state here
             let block_end = f.control.iter().find_map(|b| match b {
@@ -1071,7 +1401,7 @@ impl Environment {
                 pc = block_end;
                 continue;
             }
-            match self.eval(&f.body[pc]) {
+            match self.eval(&body[pc]) {
                 Ok(v) => {
                     // consume any targets this line pushed (inner calls may
                     // have pushed+consumed their own already)
@@ -1183,6 +1513,26 @@ impl Environment {
             }
             Expr::AlphaAlpha => Err(ErrorCode::SyntaxError),
             Expr::OmegaOmega => Err(ErrorCode::SyntaxError),
+            Expr::ApplyOp(func, arg) => {
+                // unresolved — should have been substituted via substitute_dop
+                let _ = (func, arg);
+                Err(ErrorCode::SyntaxError)
+            }
+            Expr::FuncRef(_) => Err(ErrorCode::SyntaxError),
+            Expr::Seq(exprs) => {
+                let mut last = None;
+                for e in exprs {
+                    last = Some(self.eval(&e)?);
+                }
+                last.ok_or(ErrorCode::SyntaxError)
+            }
+            Expr::DopCall(dop_name, lo, ro, rhs) => {
+                // LO DOP RO B — call a dfn with ⍺⍺=LO and ⍵⍵=RO bound
+                let fname = dop_name.clone();
+                let rv = self.eval(rhs)?;
+                // call with dop primitives set
+                self.call_function_dop(&fname, *lo, *ro, None, Some(rv))
+            }
             Expr::SelfCall(arg) => {
                 // ∇ B — monadic self-call
                 let fname = self.current_fn_name.clone().ok_or(ErrorCode::SyntaxError)?;
@@ -2444,5 +2794,23 @@ mod tests {
             },
             _ => panic!("expected Dfn, got {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_dop_simple() {
+        // DOP←{⍺⍺ ⍵} — applies ⍺⍺ monadically to ⍵
+        // + DOP × 5 → body {⍺⍺ ⍵} with ⍺⍺=+, ⍵=5 → + 5 = 5
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("DOP←{⍺⍺ ⍵}").unwrap();
+        // mark as dop
+        if let Some(f) = env.funcs.get_mut("DOP") {
+            f.is_dop = true;
+        }
+        let result = env.eval_line("+ DOP × 5").unwrap();
+        assert!(result.is_some());
+        let v = result.unwrap();
+        // + DOP × 5 → dop call: ⍺⍺=+, ⍵⍵=×, ⍵=5 → body {+ 5} = 5
+        assert_eq!(v.first_cell().unwrap().get_near_int().unwrap(), 5);
     }
 }

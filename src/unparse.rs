@@ -110,6 +110,39 @@ pub fn unparse(e: &Expr) -> String {
         Expr::Var(n) => n.clone(),
         Expr::Alpha => "⍺".to_string(),
         Expr::Omega => "⍵".to_string(),
+        Expr::AlphaAlpha => "⍺⍺".to_string(),
+        Expr::OmegaOmega => "⍵⍵".to_string(),
+        Expr::If(cond, then, else_b) => {
+            // If appears in dfn bodies as guard desugaring.
+            // {c1:e1 ⋄ c2:e2 ⋄ e3} → If(c1,e1,If(c2,e2,e3))
+            // Unparse: emit guards as "c:e" separated by ⋄, with the
+            // final non-If else as the fallback.
+            let mut parts: Vec<String> = Vec::new();
+            let mut cur_cond = cond;
+            let mut cur_then = then;
+            let mut cur_else = else_b;
+            loop {
+                if let Expr::Num(v) = cur_else.as_ref() {
+                    if *v == 0.0 {
+                        // terminal guard: no fallback
+                        parts.push(format!("{}:{}", unparse(cur_cond), unparse(cur_then)));
+                        break;
+                    }
+                }
+                if let Expr::If(c, t, e) = cur_else.as_ref() {
+                    parts.push(format!("{}:{}", unparse(cur_cond), unparse(cur_then)));
+                    cur_cond = c;
+                    cur_then = t;
+                    cur_else = e;
+                } else {
+                    // if-then-else (rare)
+                    parts.push(format!("{}:{}", unparse(cur_cond), unparse(cur_then)));
+                    parts.push(unparse(cur_else));
+                    break;
+                }
+            }
+            parts.join(" ⋄ ")
+        }
         Expr::Monadic(p, b) => {
             // monadic function application: F B — parenthesize B unless it
             // is itself a simple value/monadic chain (APL is right-to-left,
@@ -171,6 +204,17 @@ pub fn unparse(e: &Expr) -> String {
             unparse(ax),
             unparse(b)
         ),
+        Expr::ApplyOp(f, arg) => format!("{} {}", unparse(f), unparse(arg)),
+        Expr::FuncRef(name) => name.clone(),
+        Expr::SelfCall(arg) => {
+            format!("∇ {}", unparse(arg))
+        }
+        Expr::SelfCallDyad(larg, rarg) => {
+            format!("{} ∇ {}", unparse(larg), unparse(rarg))
+        }
+        Expr::AssignDfn(name, rhs) => {
+            format!("{}←{}", name, unparse(rhs))
+        }
         other => format!("{{!?{}}}", expr_debug_tag(other)),
     }
 }
@@ -182,6 +226,8 @@ fn expr_debug_tag(e: &Expr) -> String {
         Expr::Dfn(_) => "{dfn}".to_string(),
         Expr::DfnCallMono(_, _) => "{dfncall}".to_string(),
         Expr::DfnCallDyad(_, _, _) => "{dfndyad}".to_string(),
+        Expr::ApplyOp(f, a) => format!("{{ApplyOp({},{})}}", expr_debug_tag(f), expr_debug_tag(a)),
+        Expr::FuncRef(n) => format!("{{FuncRef({})}}", n),
         _ => "?".to_string(),
     }
 }
