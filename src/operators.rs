@@ -130,6 +130,14 @@ fn apply_prim(lo: Prim, a: &Cell, b: &Cell) -> AplResult<Cell> {
         Prim::Floor => crate::cell::bif_minimum(a, b),
         Prim::Magnitude => crate::cell::bif_residue(a, b),
         Prim::Power => crate::cell::bif_power(a, b),
+        Prim::And => crate::cell::bif_and(a, b),
+        Prim::Or => crate::cell::bif_or(a, b),
+        Prim::Equal => crate::cell::bif_equal(a, b),
+        Prim::NotEqual => crate::cell::bif_not_equal(a, b),
+        Prim::Less => crate::cell::bif_less(a, b),
+        Prim::LessEq => crate::cell::bif_less_eq(a, b),
+        Prim::Greater => crate::cell::bif_greater(a, b),
+        Prim::GreaterEq => crate::cell::bif_greater_eq(a, b),
         _ => Err(ErrorCode::SyntaxError),
     }
 }

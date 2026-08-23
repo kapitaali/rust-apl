@@ -1790,6 +1790,15 @@ mod tests {
     }
 
     #[test]
+    fn test_inner_product_bool_and_equal() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // 1 0 1 ∧.= 1 1 1 → ∧/(1=1)(0=1)(1=1) = ∧/1 0 1 = 0
+        let r = eval_one(&mut env, "1 0 1∧.=1 1 1");
+        assert_eq!(r.first_cell().unwrap(), &crate::cell::Cell::Int(0));
+    }
+
+    #[test]
     fn test_inner_product_syntax_dot_product() {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);

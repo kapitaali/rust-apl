@@ -338,6 +338,18 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
     Ok(toks)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inner_dot_tokenize() {
+        let toks = tokenize("1 0 1∧.=1 1 1").unwrap();
+        println!("{:?}", toks);
+        assert!(toks.contains(&Tok::InnerDot(crate::functions::Prim::And, crate::functions::Prim::Equal)));
+    }
+}
+
 /// Scan a numeric literal starting at `chars[0]`.
 ///
 /// Accepts `123`, `12.5`, `1e3`, `¯4` (negative), and exponent signs like

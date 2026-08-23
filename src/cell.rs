@@ -714,6 +714,43 @@ fn cell_as_f64(c: &Cell) -> AplResult<APLFloat> {
     }
 }
 
+/// cell-level boolean comparisons used by reduce/scan (mirrors functions.rs)
+pub fn bif_equal(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(if a.equal(b, Cell::DEFAULT_CT) { 1 } else { 0 }))
+}
+
+pub fn bif_not_equal(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(if a.equal(b, Cell::DEFAULT_CT) { 0 } else { 1 }))
+}
+
+pub fn bif_less(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(match a.compare(b) {
+        CompResult::Lt => 1,
+        _ => 0,
+    }))
+}
+
+pub fn bif_less_eq(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(match a.compare(b) {
+        CompResult::Gt => 0,
+        _ => 1,
+    }))
+}
+
+pub fn bif_greater(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(match a.compare(b) {
+        CompResult::Gt => 1,
+        _ => 0,
+    }))
+}
+
+pub fn bif_greater_eq(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    Ok(Cell::Int(match a.compare(b) {
+        CompResult::Lt => 0,
+        _ => 1,
+    }))
+}
+
 /// Dyadic `!` — binomial coefficient (public entry used by functions.rs).
 ///
 /// A!B = N over K for integer arguments, generalized via gamma otherwise.
