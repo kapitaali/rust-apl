@@ -109,20 +109,37 @@ pub fn scan(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
     let outer = b.element_count() / n.max(1);
 
     let cells = b.cells();
-    let mut out = Vec::with_capacity(b.element_count() as usize);
+    let n_us = n as usize;
 
-    for row in 0..outer as usize {
-        let base = row * n as usize;
-        // APL scan = reduce over each prefix, with reduce folding
-        // RIGHT-to-left: Z[k] = B[0] f (B[1] f (... f B[k])).
-        // O(n²), matching semantics-first correctness.
-        for k in 0..n as usize {
+    // scan each row independently; parallelize over rows above threshold
+    let scan_row = |row: usize| -> Result<Vec<Cell>, ErrorCode> {
+        let base = row * n_us;
+        let mut out = Vec::with_capacity(n_us);
+        for k in 0..n_us {
             let mut acc = cells[base + k].clone();
             for j in (0..k).rev() {
                 acc = apply_prim(lo, &cells[base + j], &acc)?;
             }
             out.push(acc);
         }
+        Ok(out)
+    };
+
+    let row_results: Vec<Vec<Cell>> = if outer as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..outer as usize)
+            .into_par_iter()
+            .map(scan_row)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        (0..outer as usize)
+            .map(scan_row)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut out = Vec::with_capacity(b.element_count() as usize);
+    for row in row_results {
+        out.extend(row);
     }
 
     Ok(ValueP::from_ravel_like(b, out))
@@ -212,13 +229,32 @@ pub fn scan_first(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
     let mut out = vec![Cell::Int(0); b.element_count() as usize];
 
-    // row-major output: out[r*inner + k] = cumulative scan down column k
-    for k in 0..inner as usize {
+    let scan_col = |k: usize| -> Result<Vec<(usize, Cell)>, ErrorCode> {
         let mut acc = cells[k].clone();
-        out[k] = acc.clone();
+        let mut results = Vec::with_capacity(m as usize);
+        results.push((k, acc.clone()));
         for r in 1..m as usize {
             acc = apply_prim(lo, &acc, &cells[r * inner as usize + k])?;
-            out[r * inner as usize + k] = acc.clone();
+            results.push((r * inner as usize + k, acc.clone()));
+        }
+        Ok(results)
+    };
+
+    let col_results: Vec<Vec<(usize, Cell)>> = if inner as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..inner as usize)
+            .into_par_iter()
+            .map(scan_col)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        (0..inner as usize)
+            .map(scan_col)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    for col in col_results {
+        for (idx, cell) in col {
+            out[idx] = cell;
         }
     }
     Ok(ValueP::from_ravel_like(b, out))
@@ -466,7 +502,31 @@ mod tests {
         assert_eq!(z2.cells()[0], Cell::Int(3));
         assert_eq!(
             z2.cells()[rows as usize - 1],
-            Cell::Int(3 * rows - 3 + 3 * rows - 2 + 3 * rows - 1)
+            Cell::Int(3 * (rows - 1) + 3 * (rows - 1) + 1 + 3 * (rows - 1) + 2)
         );
+    }
+
+    #[test]
+    fn test_parallel_scan_preserves_values() {
+        // 5000 rows × 3 cols — above the parallel threshold.
+        // Non-commutative − pins scan direction per row.
+        let rows = 5000i64;
+        let mut data = Vec::new();
+        for r in 0..rows {
+            data.extend_from_slice(&[r, r + 1, r + 2]);
+        }
+        let b = reshape_matrix(data, rows, 3);
+        let z = scan(Prim::Subtract, &b).unwrap();
+        assert_eq!(z.element_count(), rows * 3);
+        // scan direction: Z[0]=B[0], Z[1]=B[0]-B[1], Z[2]=B[0]-(B[1]-B[2])
+        for r in [0i64, 1, 2499, rows - 1] {
+            let base = r as usize * 3;
+            let a = r;
+            let b_val = r + 1;
+            let c = r + 2;
+            assert_eq!(z.cells()[base], Cell::Int(a));
+            assert_eq!(z.cells()[base + 1], Cell::Int(a - b_val));
+            assert_eq!(z.cells()[base + 2], Cell::Int(a - (b_val - c)));
+        }
     }
 }
