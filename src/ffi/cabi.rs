@@ -71,7 +71,10 @@ impl CAbiBinding {
         let exploded: Vec<ValueP> = if args.len() == 1 {
             let v = &args[0];
             let n = v.element_count();
-            if n > 1 && n as usize == input_args && v.shape().get_rank() >= 1 {
+            if n == 0 && input_args == 0 {
+                // niladic native: the empty right-arg placeholder matches
+                Vec::new()
+            } else if n > 1 && n as usize == input_args && v.shape().get_rank() >= 1 {
                 v.cells()
                     .iter()
                     .map(|c| match c {

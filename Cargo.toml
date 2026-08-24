@@ -4,7 +4,7 @@ version = "2.0.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/apl-ext", "crates/demo-plugin"]
+members = ["crates/apl-ext", "crates/demo-plugin", "crates/apl-java"]
 
 [dependencies]
 rayon = "1.10"
