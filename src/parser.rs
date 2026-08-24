@@ -1103,10 +1103,8 @@ pub struct Environment {
     pub(crate) dfn_alpha_names: Vec<(String, String)>,
     /// name of the function currently executing (for ∇ self-reference)
     current_fn_name: Option<String>,
-    /// ⎕NA native bindings: apl name → resolved binding
-    pub(crate) native_bindings: HashMap<String, crate::ffi::cabi::CAbiBinding>,
     /// dlopen handle cache (libraries stay loaded for process lifetime)
-    lib_cache: crate::ffi::loader::LibraryCache,
+    pub(crate) lib_cache: crate::ffi::loader::LibraryCache,
 }
 
 impl Environment {
@@ -1118,7 +1116,6 @@ impl Environment {
             dfn_counter: 0,
             dfn_alpha_names: Vec::new(),
             current_fn_name: None,
-            native_bindings: HashMap::new(),
             lib_cache: crate::ffi::loader::LibraryCache::new(),
         }
     }
@@ -1283,7 +1280,7 @@ impl Environment {
         left: Option<ValueP>,
         right: Option<ValueP>,
     ) -> AplResult<ValueP> {
-        let f = match self.funcs.get(name) {
+        let f = match self.funcs.get(name).and_then(|c| c.interpreted()) {
             Some(f) => {
                 let mut f = f.clone();
                 f.body = f
@@ -1416,7 +1413,7 @@ impl Environment {
         left: Option<ValueP>,
         right: Option<ValueP>,
     ) -> AplResult<ValueP> {
-        let f = match self.funcs.get(name) {
+        let f = match self.funcs.get(name).and_then(|c| c.interpreted()) {
             Some(f) => f.clone(),
             None => return Err(ErrorCode::ValueError),
         };
@@ -1723,13 +1720,12 @@ impl Environment {
                 };
                 // native ⎕NA binding takes precedence over everything:
                 // always monadic, right arg is a (possibly nested) vector
-                if self.native_bindings.contains_key(name) {
+                if let Some(crate::functions_def::Callable::Native(b)) = self.funcs.get(name) {
                     let args: Vec<ValueP> = match &right {
                         Some(v) => vec![v.clone()],
                         None => vec![ValueP::int_vector(&[])],
                     };
-                    let binding = self.native_bindings.get(name).unwrap();
-                    return binding.call(&args);
+                    return b.call(&args);
                 }
                 // defined function takes precedence; a bare name with no
                 // argument falls back to a variable reference
@@ -1744,22 +1740,28 @@ impl Environment {
             Expr::FuncCallDyad(name, a, b) => {
                 // dyadic call on a native binding: desugar to monadic with
                 // the enclosed pair (Dyalog rule — ⎕NA fns are never dyadic)
-                if self.native_bindings.contains_key(name) {
+                let is_native = matches!(
+                    self.funcs.get(name),
+                    Some(crate::functions_def::Callable::Native(_))
+                );
+                if is_native {
                     let av = self.eval(a)?;
                     let bv = self.eval(b)?;
                     let pair = ValueP::from_ravel_like(
                         &ValueP::int_vector(&[]),
                         vec![
                             Cell::Pointer(crate::cell::PointerCellData {
-                                value: av.inner.clone(),
+                                value: av.clone_inner_arc(),
                             }),
                             Cell::Pointer(crate::cell::PointerCellData {
-                                value: bv.inner.clone(),
+                                value: bv.clone_inner_arc(),
                             }),
                         ],
                     );
-                    let binding = self.native_bindings.get(name).unwrap();
-                    return binding.call(&[pair]);
+                    if let Some(crate::functions_def::Callable::Native(nb)) = self.funcs.get(name) {
+                        return nb.call(&[pair]);
+                    }
+                    unreachable!("checked above");
                 }
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
@@ -1962,7 +1964,7 @@ impl Environment {
                     }
                     None => default_name,
                 };
-                self.native_bindings.insert(name.clone(), binding);
+                self.funcs.insert_native(&name, binding);
                 // shy result: the name that was fixed
                 let cps: Vec<u32> = name.chars().map(|ch| ch as u32).collect();
                 Ok(ValueP::char_vector(&cps))

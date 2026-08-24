@@ -97,10 +97,34 @@ impl DefinedFunction {
     }
 }
 
-/// storage of all defined functions (owned by the Environment)
+/// storage of all defined functions (owned by the Environment).
+///
+/// Since Phase F4 a slot holds either an interpreted function (∇/dfn) or a
+/// native binding (⎕NA CAbi; Rust plugins and Java later). Both surface as
+/// name-class-3 callables through one dispatch point.
 #[derive(Default, Debug, Clone)]
 pub struct FunctionTable {
-    funcs: std::collections::HashMap<String, DefinedFunction>,
+    funcs: std::collections::HashMap<String, Callable>,
+}
+
+/// one entry of the function table
+#[derive(Clone, Debug)]
+pub enum Callable {
+    Interpreted(DefinedFunction),
+    Native(crate::ffi::cabi::CAbiBinding),
+}
+
+impl Callable {
+    pub fn is_native(&self) -> bool {
+        matches!(self, Callable::Native(_))
+    }
+
+    pub fn interpreted(&self) -> Option<&DefinedFunction> {
+        match self {
+            Callable::Interpreted(f) => Some(f),
+            _ => None,
+        }
+    }
 }
 
 impl FunctionTable {
@@ -108,16 +132,28 @@ impl FunctionTable {
         Self::default()
     }
 
-    pub fn get(&self, name: &str) -> Option<&DefinedFunction> {
+    /// any callable by name
+    pub fn get(&self, name: &str) -> Option<&Callable> {
         self.funcs.get(name)
     }
 
+    /// mutable access to an INTERPRETED function (errors on native slots —
+    /// dop flags etc. only apply to dfns)
     pub fn get_mut(&mut self, name: &str) -> Option<&mut DefinedFunction> {
-        self.funcs.get_mut(name)
+        self.funcs.get_mut(name).and_then(|c| match c {
+            Callable::Interpreted(f) => Some(f),
+            _ => None,
+        })
     }
 
+    /// insert an interpreted function
     pub fn insert(&mut self, f: DefinedFunction) {
-        self.funcs.insert(f.name.clone(), f);
+        self.funcs.insert(f.name.clone(), Callable::Interpreted(f));
+    }
+
+    /// insert a native binding under an APL name
+    pub fn insert_native(&mut self, name: &str, b: crate::ffi::cabi::CAbiBinding) {
+        self.funcs.insert(name.to_string(), Callable::Native(b));
     }
 
     pub fn remove(&mut self, name: &str) {
@@ -371,7 +407,11 @@ mod tests {
         let mut table = FunctionTable::new();
         define_function(&mut table, "R←FAC N", &["R←N".to_string(), "R".to_string()]).unwrap();
         assert!(table.get("FAC").is_some());
-        let f = table.get("FAC").unwrap();
+        let f = table
+            .get("FAC")
+            .unwrap()
+            .interpreted()
+            .expect("interpreted");
         assert_eq!(f.result.as_deref(), Some("R"));
         assert_eq!(f.arg_right.as_deref(), Some("N"));
         assert_eq!(f.body.len(), 2);
@@ -386,6 +426,6 @@ mod tests {
             vec!["".to_string(), "1+1".to_string()].as_slice(),
         )
         .unwrap();
-        assert_eq!(table.get("F").unwrap().body.len(), 1);
+        assert_eq!(table.get("F").unwrap().interpreted().unwrap().body.len(), 1);
     }
 }

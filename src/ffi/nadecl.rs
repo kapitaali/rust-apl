@@ -98,6 +98,39 @@ pub struct TypeSpec {
     pub is_struct: bool,
 }
 
+/// a full ⎕NA declaration
+#[derive(Clone, Debug, PartialEq)]
+pub struct CAbiSpec {
+    /// None = void/shy-nil result
+    pub result: Option<TypeSpec>,
+    /// library path (before the last '|'); empty = OS search order
+    pub library: String,
+    /// symbol name inside the library
+    pub symbol: String,
+    /// positional arguments
+    pub args: Vec<TypeSpec>,
+}
+
+impl CAbiSpec {
+    /// Reconstruct a canonical declaration string (workspace persistence:
+    /// save the TEXT, re-parse and re-dlopen on load — never raw addresses).
+    pub fn decl_text(&self) -> String {
+        let mut out = String::new();
+        if let Some(r) = &self.result {
+            out.push_str(&r.text());
+            out.push(' ');
+        }
+        out.push_str(&self.library);
+        out.push('|');
+        out.push_str(&self.symbol);
+        for a in &self.args {
+            out.push(' ');
+            out.push_str(&a.text());
+        }
+        out
+    }
+}
+
 impl TypeSpec {
     fn plain_scalar() -> TypeSpec {
         TypeSpec {
@@ -111,19 +144,62 @@ impl TypeSpec {
             is_struct: false,
         }
     }
-}
 
-/// a full ⎕NA declaration
-#[derive(Clone, Debug, PartialEq)]
-pub struct CAbiSpec {
-    /// None = void/shy-nil result
-    pub result: Option<TypeSpec>,
-    /// library path (before the last '|'); empty = OS search order
-    pub library: String,
-    /// symbol name inside the library
-    pub symbol: String,
-    /// positional arguments
-    pub args: Vec<TypeSpec>,
+    /// canonical text form (round-trips through parse_na_decl)
+    pub fn text(&self) -> String {
+        let mut out = String::new();
+        match self.dir {
+            Direction::In => out.push('<'),
+            Direction::Out => out.push('>'),
+            Direction::InOut => out.push('='),
+            Direction::Value => {}
+        }
+        match self.special {
+            Special::NulTerm => out.push('0'),
+            Special::ByteCounted => out.push('#'),
+            Special::None => {}
+        }
+        if self.is_struct {
+            out.push('{');
+            for (i, m) in self.members.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&m.text());
+            }
+            out.push('}');
+        } else {
+            out.push_str(match &self.leaf {
+                LeafType::Int => "I",
+                LeafType::UInt => "U",
+                LeafType::Char => "C",
+                LeafType::TransChar => "T",
+                LeafType::Float => "F",
+                LeafType::Decimal => "D",
+                LeafType::Complex => "J",
+                LeafType::UintPtr => "P",
+                LeafType::AplArray => "A",
+                LeafType::AplArrayHeader => "Z",
+                LeafType::FuncPointer => "\u{2207}",
+                LeafType::Utf8 => "UTF8",
+                LeafType::Utf16 => "UTF16",
+            });
+            match self.width {
+                Width::W1 => out.push('1'),
+                Width::W2 => out.push('2'),
+                Width::W4 => out.push('4'),
+                Width::W8 => out.push('8'),
+                Width::W16 => out.push_str("16"),
+                Width::None => {}
+            }
+        }
+        if let Some(n) = self.array_len {
+            out.push_str(&format!("[{}]", n));
+        } else if self.array_open {
+            out.push_str("[]");
+        }
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------

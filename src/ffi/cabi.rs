@@ -37,6 +37,7 @@ impl From<SymbolError> for CablError {
 }
 
 /// A resolved, ready-to-call native binding.
+#[derive(Clone, Debug)]
 pub struct CAbiBinding {
     pub spec: CAbiSpec,
     pub addr: usize,

@@ -55,7 +55,15 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
     // (compiler-generated, private-use name prefix) have no valid APL
     // source and are skipped.
     for fname in env.funcs.names() {
-        let f = env.funcs.get(&fname).expect("name came from names()");
+        let callable = env.funcs.get(&fname).expect("name came from names()");
+        // native ⎕NA bindings: persist the declaration text; load() re-parses
+        // and re-dlopens (never persist raw addresses)
+        if let crate::functions_def::Callable::Native(b) = callable {
+            let decl = b.spec.decl_text();
+            lines.push(format!("NA {} {}", fname, decl));
+            continue;
+        }
+        let f = callable.interpreted().expect("checked above");
         // skip anonymous dfn temporaries (private-use name prefix)
         if f.name.starts_with(crate::parser::DFNS_PREFIX) {
             continue;
@@ -120,6 +128,8 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
         Fn(String, Vec<String>),
         /// dfn name + unparsed body expression
         Dfn(String, String),
+        /// ⎕NA binding: apl name + declaration text (re-parsed on load)
+        Na(String, String),
     }
     let all: Vec<&str> = text.lines().collect();
     let mut records: Vec<Record> = Vec::new();
@@ -137,6 +147,13 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
             match rest.split_once(' ') {
                 Some((name, body)) => records.push(Record::Dfn(name.to_string(), body.to_string())),
                 None => return Err(format!("corrupt DFN record: {}", line)),
+            }
+            i += 1;
+        } else if let Some(rest) = line.strip_prefix("NA ") {
+            // NA <name> <decl-text> — re-parsed and re-dlopened on load
+            match rest.split_once(' ') {
+                Some((name, decl)) => records.push(Record::Na(name.to_string(), decl.to_string())),
+                None => return Err(format!("corrupt NA record: {}", line)),
             }
             i += 1;
         } else if let Some(header) = line.strip_prefix("FN ") {
@@ -172,6 +189,25 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
                 let def = format!("{}←{{{}}}", name, body);
                 env.eval_line(&def)
                     .map_err(|e| format!("error loading dfn {}: {:?}", name, e))?;
+            }
+            Record::Na(name, decl) => {
+                // re-parse declaration and re-dlopen; never persist addresses
+                let spec = crate::ffi::nadecl::parse_na_decl(decl)
+                    .map_err(|e| format!("corrupt NA decl {}: {:?}", decl, e))?;
+                let binding = crate::ffi::cabi::CAbiBinding::associate(&mut env.lib_cache, spec)
+                    .map_err(|e| {
+                        format!(
+                            "rebinding {} failed: {:?}",
+                            name,
+                            match e {
+                                crate::ffi::cabi::CablError::Load(_) => "library load",
+                                crate::ffi::cabi::CablError::Symbol(_) => "symbol lookup",
+                                crate::ffi::cabi::CablError::Domain(_) => "signature",
+                                crate::ffi::cabi::CablError::Syntax => "syntax",
+                            }
+                        )
+                    })?;
+                env.funcs.insert_native(name, binding);
             }
         }
     }
