@@ -2,6 +2,7 @@
  * Build: cc -shared -fPIC -o libtestmath.so testlib.c
  */
 #include <stdint.h>
+#include <string.h>
 
 double divide(int32_t a, int32_t b) {
     return (double)a / (double)b;
@@ -27,4 +28,36 @@ double dscale(double x, double k) {
 
 uintptr_t identity_ptr(uintptr_t p) {
     return p;
+}
+
+/* sum an array of n int32s (input pointer) */
+int32_t sum_i4(int32_t *v, int32_t n) {
+    int32_t s = 0;
+    for (int32_t i = 0; i < n; i++) s += v[i];
+    return s;
+}
+
+/* fill n doubles with i*1.5 (output pointer) */
+void fill_f8(double *out, int32_t n) {
+    for (int32_t i = 0; i < n; i++) out[i] = (double)i * 1.5;
+}
+
+/* increment every element in place (in/out pointer) */
+void bump_i4(int32_t *v, int32_t n, int32_t by) {
+    for (int32_t i = 0; i < n; i++) v[i] += by;
+}
+
+/* reverse a NUL-terminated string into out */
+void str_rev(char *out, const char *in) {
+    size_t n = strlen(in);
+    for (size_t i = 0; i < n; i++) out[i] = in[n - 1 - i];
+    out[n] = 0;
+}
+
+/* uppercase copy of a NUL-terminated string */
+void str_up(char *out, const char *in) {
+    for (; *in; in++, out++) {
+        *out = (*in >= 'a' && *in <= 'z') ? (char)(*in - 32) : *in;
+    }
+    *out = 0;
 }

@@ -197,6 +197,12 @@ impl ValueP {
             && matches!(self.inner.ravel.first(), Some(Cell::Char(_)))
     }
 
+    /// clone the shared inner (used by ffi/plugin code to nest values
+    /// without deep-copying)
+    pub fn clone_inner_arc(&self) -> std::sync::Arc<ValueInner> {
+        self.inner.clone()
+    }
+
     // -----------------------------------------------------------------------
     // Accessors
     // -----------------------------------------------------------------------
