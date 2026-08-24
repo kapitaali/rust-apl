@@ -1960,7 +1960,8 @@ impl Environment {
                 if *p == crate::functions::Prim::Iota {
                     return crate::index_of::index_of_io(&av, &bv, self.get_io()?);
                 }
-                p.eval_dyadic(&av, &bv)
+                // implicit disclosure of scalar Pointer args (indexed scalars)
+                crate::functions::eval_dyadic_public(*p, &av, &bv)
             }
             Expr::ErrorGuard(guard, fallback) => {
                 // ⎕EA guarded ⋄ fallback — run guard; on ANY error, run fallback

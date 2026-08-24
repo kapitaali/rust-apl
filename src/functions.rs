@@ -303,7 +303,20 @@ pub fn iota_monadic(b: &ValueP, io: i64) -> Result<ValueP, ErrorCode> {
 
 /// public wrapper for dyadic primitive dispatch (used by parser for ⎕IO shifts)
 pub fn eval_dyadic_public(p: Prim, a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
-    p.eval_dyadic(a, b)
+    // implicit disclosure: scalar Pointer args disclose before arithmetic
+    // (Dyalog: `5+⊂8` is DOMAIN ERROR, but `x←⊂8 ⋄ 5+x[0]` must work — the
+    // indexed scalar carries a Pointer cell that arithmetic cannot consume)
+    let a2 = if a.is_scalar() {
+        a.disclose()
+    } else {
+        a.clone()
+    };
+    let b2 = if b.is_scalar() {
+        b.disclose()
+    } else {
+        b.clone()
+    };
+    p.eval_dyadic(&a2, &b2)
 }
 
 /// Apply a monadic cell function over every ravel element of `b`.
