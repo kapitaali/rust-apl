@@ -6,6 +6,7 @@ description = "libapljava.so — JVM bridge for rust-apl; a CAbi-consumable shar
 
 [dependencies]
 jni = { version = "0.22", optional = true }
+libloading = "0.8"
 
 [features]
 default = []
