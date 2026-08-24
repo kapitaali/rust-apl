@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use crate::cell::Cell;
 use crate::functions::Prim;
 use crate::tokenizer::{tokenize, Tok};
 use crate::types::AplResult;
@@ -44,6 +45,9 @@ pub enum Expr {
     DyadicAxis(Prim, Box<Expr>, Box<Expr>, Box<Expr>),
     /// `⎕EA guarded ⋄ fallback` — evaluate guarded; on error, evaluate fallback
     ErrorGuard(Box<Expr>, Box<Expr>),
+    /// `[apl_name ⎕NA decl]` — associate a native function (⎕NA).
+    /// apl_name None means use the symbol name from the declaration.
+    QuadNa(Option<Box<Expr>>, Box<Expr>),
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
     Dyadic(Prim, Box<Expr>, Box<Expr>),
@@ -273,6 +277,30 @@ pub fn parse(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 /// expr := name '←' expr | name '[' expr ']' '←' expr
 ///       | '(' A⊃name ')' '←' expr | simple
 fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    // ⎕NA association: [apl_name] ⎕NA decl_string
+    // apl_name may be a Str literal ('div') or a Name (div)
+    {
+        let name_expr: Option<Box<Expr>> = match toks.first() {
+            Some(Tok::Name(n)) if n == "⎕NA" => None,
+            Some(Tok::Name(_)) | Some(Tok::Str(_)) => {
+                let second_is_na = matches!(toks.get(1), Some(Tok::Name(m)) if m == "⎕NA");
+                if second_is_na {
+                    let (e, used) = parse_term(toks)?;
+                    debug_assert_eq!(used, 1);
+                    Some(Box::new(e))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let na_at = if name_expr.is_some() { 1 } else { 0 };
+        let is_na = matches!(toks.get(na_at), Some(Tok::Name(m)) if m == "⎕NA");
+        if is_na {
+            let (decl, dused) = parse(&toks[na_at + 1..])?;
+            return Ok((Expr::QuadNa(name_expr, Box::new(decl)), na_at + 1 + dused));
+        }
+    }
     // error guard: ⎕EA guarded ⋄ fallback
     if let Some(Tok::Name(n)) = toks.first() {
         if n == "⎕EA" {
@@ -1075,6 +1103,10 @@ pub struct Environment {
     pub(crate) dfn_alpha_names: Vec<(String, String)>,
     /// name of the function currently executing (for ∇ self-reference)
     current_fn_name: Option<String>,
+    /// ⎕NA native bindings: apl name → resolved binding
+    pub(crate) native_bindings: HashMap<String, crate::ffi::cabi::CAbiBinding>,
+    /// dlopen handle cache (libraries stay loaded for process lifetime)
+    lib_cache: crate::ffi::loader::LibraryCache,
 }
 
 impl Environment {
@@ -1086,6 +1118,8 @@ impl Environment {
             dfn_counter: 0,
             dfn_alpha_names: Vec::new(),
             current_fn_name: None,
+            native_bindings: HashMap::new(),
+            lib_cache: crate::ffi::loader::LibraryCache::new(),
         }
     }
 
@@ -1687,6 +1721,16 @@ impl Environment {
                     Some(e) => Some(self.eval(e)?),
                     None => None,
                 };
+                // native ⎕NA binding takes precedence over everything:
+                // always monadic, right arg is a (possibly nested) vector
+                if self.native_bindings.contains_key(name) {
+                    let args: Vec<ValueP> = match &right {
+                        Some(v) => vec![v.clone()],
+                        None => vec![ValueP::int_vector(&[])],
+                    };
+                    let binding = self.native_bindings.get(name).unwrap();
+                    return binding.call(&args);
+                }
                 // defined function takes precedence; a bare name with no
                 // argument falls back to a variable reference
                 if self.funcs.get(name).is_some() {
@@ -1698,6 +1742,25 @@ impl Environment {
                 }
             }
             Expr::FuncCallDyad(name, a, b) => {
+                // dyadic call on a native binding: desugar to monadic with
+                // the enclosed pair (Dyalog rule — ⎕NA fns are never dyadic)
+                if self.native_bindings.contains_key(name) {
+                    let av = self.eval(a)?;
+                    let bv = self.eval(b)?;
+                    let pair = ValueP::from_ravel_like(
+                        &ValueP::int_vector(&[]),
+                        vec![
+                            Cell::Pointer(crate::cell::PointerCellData {
+                                value: av.inner.clone(),
+                            }),
+                            Cell::Pointer(crate::cell::PointerCellData {
+                                value: bv.inner.clone(),
+                            }),
+                        ],
+                    );
+                    let binding = self.native_bindings.get(name).unwrap();
+                    return binding.call(&[pair]);
+                }
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
                 self.call_function(name, Some(av), Some(bv))
@@ -1862,6 +1925,47 @@ impl Environment {
                     Ok(v) => Ok(v),
                     Err(_) => self.eval(fallback),
                 }
+            }
+            Expr::QuadNa(apl_name, decl) => {
+                // 'name' ⎕NA 'F8 lib|sym I4 I4' — associate native fn
+                let decl_v = self.eval(decl)?;
+                let decl_str = decl_v
+                    .cells()
+                    .iter()
+                    .map(|c| match c {
+                        Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                        other => panic!("⎕NA: non-char in declaration {:?}", other),
+                    })
+                    .collect::<String>();
+                let spec = crate::ffi::nadecl::parse_na_decl(&decl_str).map_err(|e| {
+                    let _ = e;
+                    ErrorCode::SyntaxError
+                })?;
+                let default_name = spec.symbol.clone();
+                let binding = crate::ffi::cabi::CAbiBinding::associate(&mut self.lib_cache, spec)
+                    .map_err(|e| match e {
+                    crate::ffi::cabi::CablError::Load(_) => ErrorCode::FileError,
+                    crate::ffi::cabi::CablError::Symbol(_)
+                    | crate::ffi::cabi::CablError::Domain(_) => ErrorCode::ValueError,
+                    crate::ffi::cabi::CablError::Syntax => ErrorCode::SyntaxError,
+                })?;
+                let name = match apl_name {
+                    Some(e) => {
+                        let nv = self.eval(e)?;
+                        nv.cells()
+                            .iter()
+                            .map(|c| match c {
+                                Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                                _ => '?',
+                            })
+                            .collect::<String>()
+                    }
+                    None => default_name,
+                };
+                self.native_bindings.insert(name.clone(), binding);
+                // shy result: the name that was fixed
+                let cps: Vec<u32> = name.chars().map(|ch| ch as u32).collect();
+                Ok(ValueP::char_vector(&cps))
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;

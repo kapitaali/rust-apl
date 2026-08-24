@@ -2,13 +2,18 @@
 //!
 //! See META-INF/EXTENSIONS.md for the architecture. Phase F1 = exchange.rs.
 
+pub mod cabi;
 pub mod exchange;
+pub mod loader;
+pub mod nadecl;
+
 #[cfg(test)]
 mod exchange_tests;
-mod nadecl;
 #[cfg(test)]
 mod nadecl_tests;
 
+pub use cabi::CAbiBinding;
+pub use loader::{LibraryCache, LoadError, SymbolError};
 pub use nadecl::{parse_na_decl, CAbiSpec, Direction, LeafType, Special, TypeSpec, Width};
 
 pub use exchange::{

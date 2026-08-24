@@ -164,6 +164,9 @@ pub enum ErrorCode {
     LimitError = 8,
     SystemError = 9,
     InternalError = 10,
+    /// FILE ERROR (⎕NA: shared object failed to dlopen — may be a missing
+    /// dependency; Dyalog reports "FILE ERROR 2 No such file or directory")
+    FileError = 11,
     // keep room; more added as subsystems are ported
 }
 
@@ -181,6 +184,7 @@ impl std::fmt::Display for ErrorCode {
             ErrorCode::LimitError => "LIMIT ERROR",
             ErrorCode::SystemError => "SYSTEM ERROR",
             ErrorCode::InternalError => "INTERNAL ERROR",
+            ErrorCode::FileError => "FILE ERROR",
         };
         write!(f, "{}", name)
     }

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 rayon = "1.10"
 smallvec = { version = "1.13", features = ["union"] }
+libloading = "0.8"
 
 [profile.release]
 opt-level = 3
