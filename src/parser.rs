@@ -931,6 +931,9 @@ fn index_value(b: &ValueP, idx: &ValueP) -> AplResult<ValueP> {
         if i < 0 || i as usize >= cells.len() {
             return Err(ErrorCode::IndexError);
         }
+        // disclose the selected cell (Dyalog: B[i] of a nested array yields
+        // an ENCLOSED item; but for arithmetic it must disclose implicitly —
+        // keep the Pointer cell so nesting round-trips)
         out.push(cells[i as usize].clone());
     }
     Ok(ValueP::from_ravel_like(idx, out))

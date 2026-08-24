@@ -30,7 +30,22 @@ uintptr_t identity_ptr(uintptr_t p) {
     return p;
 }
 
-/* sum an array of n int32s (input pointer) */
+/* struct demo (F3c): {I4 F8} pair */
+typedef struct {
+    int32_t tag;
+    double weight;
+} pair_t;
+
+double struct_weight(pair_t p) {
+    return p.weight * p.tag;
+}
+
+/* struct out-arg: fills the result struct from two scalars */
+void make_pair(int32_t tag, double weight, pair_t *out) {
+    out->tag = tag;
+    out->weight = weight;
+}
+
 int32_t sum_i4(int32_t *v, int32_t n) {
     int32_t s = 0;
     for (int32_t i = 0; i < n; i++) s += v[i];

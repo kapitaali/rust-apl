@@ -15,7 +15,7 @@ use crate::value::{ValueInner, ValueP};
 use apl_ext::{AplError, CallContext, XCell, XValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// One registered plugin function on the interpreter side.
 pub struct PluginBinding {
@@ -28,7 +28,10 @@ pub struct PluginBinding {
 }
 
 struct PluginFnInner {
-    f: Mutex<Option<Box<apl_ext::BindFn>>>,
+    // BindFn is not Send/Sync by declaration; plugin functions are called
+    // only from the interpreter thread, so this Arc is shared but never
+    // sent across threads. Documented exception (single-threaded dispatch).
+    f: std::cell::RefCell<Option<Box<apl_ext::BindFn>>>,
 }
 
 impl Clone for PluginBinding {
@@ -61,13 +64,15 @@ impl PluginBinding {
         if n < self.min_args || n > self.max_args {
             return Err(ErrorCode::DomainError);
         }
-        let guard = self.inner.f.lock().unwrap();
-        let f = match guard.as_ref() {
+        // hold the borrow for the whole call — single-threaded dispatch,
+        // and the closure below only reads through f
+        let b = self.inner.f.borrow();
+        let f = match b.as_ref() {
             Some(f) => f,
             None => return Err(ErrorCode::ValueError),
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (f)(ctx, args)));
-        drop(guard);
+        drop(b);
         match result {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => {
@@ -148,8 +153,11 @@ pub fn load_plugin(cache: &mut LibraryCache, libspec: &str) -> Result<LoadedPlug
                 min_args: entry.min_args,
                 max_args: entry.max_args,
                 parallel_safe: entry.parallel_safe,
+                // SAFETY/DESIGN: BindFn is not Send+Sync; plugin calls run on
+                // the interpreter thread only (see PluginFnInner note)
+                #[allow(clippy::arc_with_non_send_sync)]
                 inner: Arc::new(PluginFnInner {
-                    f: Mutex::new(Some(f)),
+                    f: std::cell::RefCell::new(Some(f)),
                 }),
             });
         }

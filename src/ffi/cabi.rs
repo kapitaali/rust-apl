@@ -60,11 +60,18 @@ impl CAbiBinding {
     pub fn call(&self, args: &[ValueP]) -> Result<ValueP, ErrorCode> {
         // Dyalog rule: all arguments arrive as ITEMS of the right-argument
         // vector. Explode when counts match; otherwise pass through (used
-        // by tests / programmatic callers).
+        // by tests / programmatic callers). Output-only (>) arguments are
+        // NOT supplied at the APL level — they're results.
+        let input_args = self
+            .spec
+            .args
+            .iter()
+            .filter(|ts| ts.dir != Direction::Out)
+            .count();
         let exploded: Vec<ValueP> = if args.len() == 1 {
             let v = &args[0];
             let n = v.element_count();
-            if n > 1 && n as usize == self.spec.args.len() && v.shape().get_rank() >= 1 {
+            if n > 1 && n as usize == input_args && v.shape().get_rank() >= 1 {
                 v.cells()
                     .iter()
                     .map(|c| match c {
@@ -86,13 +93,14 @@ impl CAbiBinding {
             args.to_vec()
         };
 
-        if exploded.len() != self.spec.args.len() {
+        if exploded.len() != input_args {
             return Err(ErrorCode::DomainError);
         }
 
         // Prepare arguments: scalars marshal to words; pointer args (< > =)
         // allocate C-side buffers and contribute their ADDRESS as the word.
         // Output buffers (>, =) are collected for the nested result.
+        // Out-only (>) args consume NO exploded item.
         struct OutBuf {
             /// declaration-order position (for result assembly)
             _pos: usize,
@@ -102,20 +110,43 @@ impl CAbiBinding {
         // keep raw buffers alive until after the call
         let mut owned: Vec<Vec<u8>> = Vec::new();
 
-        for (pos, (ts, v)) in self.spec.args.iter().zip(exploded.iter()).enumerate() {
+        let mut exp_iter = exploded.iter();
+        for (pos, ts) in self.spec.args.iter().enumerate() {
             match ts.dir {
                 Direction::Value => {
-                    check_arg(ts, v)?;
-                    words.push(marshal_scalar(ts, v)?);
+                    let v = match exp_iter.next() {
+                        Some(v) => (*v).clone(),
+                        None => return Err(ErrorCode::InternalError),
+                    };
+                    check_arg(ts, &v)?;
+                    words.push(marshal_scalar(ts, &v)?);
                 }
                 Direction::In | Direction::Out | Direction::InOut => {
                     // an enclosed arg (scalar Pointer cell) unwraps to its
                     // inner array for buffer purposes
-                    let dv = match (v.shape().get_rank(), v.cells().first()) {
-                        (0, Some(Cell::Pointer(p))) => ValueP {
-                            inner: p.value.clone(),
-                        },
-                        _ => v.clone(),
+                    let dv = if matches!(ts.dir, Direction::Out)
+                        && ts.array_len.is_none()
+                        && !ts.array_open
+                        && !ts.is_struct
+                    {
+                        // >scalar: pure output, no APL-side input
+                        ValueP::int_vector(&[])
+                    } else if matches!(ts.dir, Direction::Out)
+                        && (ts.is_struct || ts.array_len.is_some() || ts.array_open)
+                    {
+                        // >array / >struct with declared size: pure output too
+                        ValueP::int_vector(&[])
+                    } else {
+                        let v = exp_iter
+                            .next()
+                            .cloned()
+                            .unwrap_or_else(|| ValueP::int_vector(&[]));
+                        match (v.shape().get_rank(), v.cells().first()) {
+                            (0, Some(Cell::Pointer(p))) => ValueP {
+                                inner: p.value.clone(),
+                            },
+                            _ => v,
+                        }
                     };
                     let buf = build_arg_buffer(
                         ts,
@@ -149,8 +180,9 @@ impl CAbiBinding {
                 unsafe { call_shim_void(self.addr, &sig, &words) };
                 None
             }
-            Some(ts) if ts.is_struct || ts.dir != Direction::Value => {
-                // struct / pointer results deferred to F3c
+            Some(ts) if ts.dir != Direction::Value => {
+                // pointer-typed results deferred to F3d (rare in practice;
+                // struct results return through >{} out-args instead)
                 return Err(ErrorCode::DomainError);
             }
             Some(ts) => {
@@ -173,11 +205,11 @@ impl CAbiBinding {
         };
 
         // Convert output buffers (>, =) into values by re-reading the bytes.
-        // build_arg_buffer returned the buffers in `owned` in arg order; we
-        // mirror that order for outputs.
+        // `owned` holds buffers in arg order; walk the spec (not exploded —
+        // Out args consume no input item) and mirror that order.
         let mut owned_iter = owned.into_iter();
         let mut out_values: Vec<ValueP> = Vec::new();
-        for (ts, _v) in self.spec.args.iter().zip(exploded.iter()) {
+        for ts in self.spec.args.iter() {
             if matches!(ts.dir, Direction::Out | Direction::InOut) {
                 let buf = owned_iter.next().ok_or(ErrorCode::InternalError)?;
                 out_values.push(read_out_buffer(ts, &buf)?);
@@ -251,6 +283,19 @@ fn build_arg_buffer(
     if ts.special != Special::None {
         return build_string_buffer(ts, v, fill_from_input);
     }
+    // structs (F3c): total buffer = C sizeof (layout-computed)
+    if ts.is_struct {
+        let layout = struct_layout(ts);
+        let total = layout.last().map(|(s, sz)| s + sz).unwrap_or(0);
+        // round up to max member alignment for the trailing pad
+        let max_align = ts.members.iter().map(member_elem_width).max().unwrap_or(1);
+        let total = total.div_ceil(max_align) * max_align;
+        let mut buf = vec![0u8; total];
+        if fill_from_input {
+            fill_struct_buffer(&mut buf, ts, v)?;
+        }
+        return Ok(buf);
+    }
     let ew = leaf_width(ts)?;
     let n: usize = if let Some(k) = ts.array_len {
         k as usize
@@ -270,7 +315,7 @@ fn build_arg_buffer(
 /// Fill a buffer from an APL value per the leaf type.
 fn fill_buffer(buf: &mut [u8], ts: &TypeSpec, v: &ValueP) -> Result<(), ErrorCode> {
     if ts.is_struct {
-        return Err(ErrorCode::DomainError); // struct fill deferred to F3c
+        return fill_struct_buffer(buf, ts, v);
     }
     let ew = leaf_width(ts)?;
     let cells = v.cells();
@@ -356,6 +401,9 @@ fn read_out_buffer(ts: &TypeSpec, buf: &[u8]) -> Result<ValueP, ErrorCode> {
         let cps: Vec<u32> = decode_chars(ts, &buf[..end]);
         return Ok(ValueP::char_vector(&cps));
     }
+    if ts.is_struct {
+        return read_struct_buffer(buf, ts);
+    }
     let ew = leaf_width(ts)?;
     let n = buf.len() / ew;
     let mut cells = Vec::with_capacity(n);
@@ -379,6 +427,97 @@ fn decode_chars(ts: &TypeSpec, bytes: &[u8]) -> Vec<u32> {
             .collect(),
         _ => bytes.iter().map(|&b| b as u32).collect(),
     }
+}
+
+/// Struct fill (F3c): the APL value is an enclosed vector — item i fills
+/// member i. Each member is itself a mini-fill into the member's byte span.
+/// Padding bytes stay zero; C ABI alignment is honored by computing offsets
+/// with the same rules the compiler uses for the declared member sequence.
+fn fill_struct_buffer(buf: &mut [u8], ts: &TypeSpec, v: &ValueP) -> Result<(), ErrorCode> {
+    // unwrap one enclosure level if present
+    let inner: ValueP = match v.cells().first() {
+        Some(Cell::Pointer(p)) => ValueP {
+            inner: p.value.clone(),
+        },
+        _ => v.clone(),
+    };
+    let items: Vec<ValueP> = if inner.element_count() > 1 && inner.shape().get_rank() >= 1 {
+        inner
+            .cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Pointer(p) => ValueP {
+                    inner: p.value.clone(),
+                },
+                other => ValueP {
+                    inner: std::sync::Arc::new(ValueInner::new(
+                        Shape::scalar(),
+                        vec![other.clone()],
+                    )),
+                },
+            })
+            .collect()
+    } else {
+        vec![inner.clone()]
+    };
+    if items.len() != ts.members.len() {
+        return Err(ErrorCode::LengthError);
+    }
+    let layout = struct_layout(ts);
+    for ((m, item), (off, sz)) in ts.members.iter().zip(items.iter()).zip(layout) {
+        fill_buffer(&mut buf[off..off + sz], m, item)?;
+    }
+    Ok(())
+}
+
+/// Byte width of one struct member element (scalar or fixed array).
+fn member_elem_width(m: &TypeSpec) -> usize {
+    leaf_width(m).unwrap_or(8) // validated at associate time
+}
+
+/// Compute byte offsets+sizes of each member following C layout rules:
+/// each member starts at the next multiple of its natural alignment; the
+/// struct's total size is rounded up to the maximum member alignment.
+fn struct_layout(ts: &TypeSpec) -> Vec<(usize, usize)> {
+    let mut out = Vec::with_capacity(ts.members.len());
+    let mut off = 0usize;
+    let mut max_align = 1usize;
+    for m in &ts.members {
+        let ew = member_elem_width(m);
+        let n = m.array_len.unwrap_or(1).max(1) as usize;
+        let raw = ew * n;
+        let align = ew.max(1);
+        max_align = max_align.max(align);
+        // align up this member's start
+        let start = off.div_ceil(align) * align;
+        out.push((start, raw));
+        off = start + raw;
+    }
+    // round total up to max_align (not needed for spans themselves, kept
+    // for documentation parity with C sizeof)
+    let _ = off.div_ceil(max_align) * max_align;
+    out
+}
+
+/// Struct read-back (>{} / ={}): rebuild each member from its byte span and
+/// enclose the members into a nested result vector.
+#[allow(dead_code)]
+fn read_struct_buffer(buf: &[u8], ts: &TypeSpec) -> Result<ValueP, ErrorCode> {
+    let mut members = Vec::with_capacity(ts.members.len());
+    for (m, (off, sz)) in ts.members.iter().zip(struct_layout(ts)) {
+        members.push(read_out_buffer(m, &buf[off..off + sz])?);
+    }
+    let cells: Vec<Cell> = members
+        .into_iter()
+        .map(|mv| {
+            Cell::Pointer(crate::cell::PointerCellData {
+                value: mv.clone_inner_arc(),
+            })
+        })
+        .collect();
+    Ok(ValueP {
+        inner: std::sync::Arc::new(ValueInner::new(Shape::vector(cells.len() as i64), cells)),
+    })
 }
 
 fn raw_to_cell(leaf: &LeafType, width: Width, raw: u64) -> Result<Cell, ErrorCode> {
@@ -416,8 +555,11 @@ fn scalar_cell(v: &ValueP) -> Result<Cell, ErrorCode> {
 }
 
 fn check_arg(ts: &TypeSpec, _v: &ValueP) -> Result<(), ErrorCode> {
-    // F3: pointer/array/struct args unsupported
-    if ts.is_struct || ts.array_len.is_some() || ts.array_open {
+    // by-value structs unsupported in the shim (pass >{} pointers instead)
+    if ts.is_struct {
+        return Err(ErrorCode::DomainError);
+    }
+    if ts.array_len.is_some() || ts.array_open {
         return Err(ErrorCode::DomainError);
     }
     if ts.dir != Direction::Value && ts.special != Special::None {
