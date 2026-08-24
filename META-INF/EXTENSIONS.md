@@ -108,7 +108,7 @@ pub union XCell {
     int: i64,
     float: f64,
     chr: u32,                   // Unicode code point
-    ptr: u64,                   // nested XArray*, or opaque handle
+    ptr: u64,                   // nested: INDEX into owning XArray's child table
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -116,9 +116,11 @@ pub struct XTaggedCell { pub tag: CellTag, pub cell: XCell } // tag: I/F/C/P/Nes
 ```
 
 Rules:
-- Nested values are trees of `XArray`s; the callee owns nothing — memory is
-  owned by the interpreter-side arena and freed after return unless the
-  signature says otherwise (`>A` / `=A` copy-out semantics).
+- Nested values: a Nested cell's `ptr` is an INDEX into the owning XArray's
+  child table — NEVER a raw pointer. Foreign code cannot forge or dangle
+  nested references; ownership stays inside Rust (children freed
+  transitively on Drop). The callee owns nothing across the boundary
+  unless the signature says otherwise (`>A` / `=A` copy-out semantics).
 - Conversions `ValueP ⇄ XArray` live ONLY in `src/ffi/exchange.rs`.
   Everything else in the tree uses `ValueP` above the line and `XArray`
   below it. One conversion point per direction = one place to audit.
