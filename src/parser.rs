@@ -89,13 +89,18 @@ pub enum Expr {
     /// if-then-else: If(cond, then, else) — used for desugaring guarded
     /// expressions in dfns: {c1:e1 ⋄ c2:e2 ⋄ e3} → If(c1,e1,If(c2,e2,e3))
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    /// dop call: LO FN RO B — call dfn with operand primitives bound
-    DopCall(String, Prim, Prim, Box<Expr>),
+    /// dop call: LO FN RO B (monadic) or A LO FN RO B (dyadic) — call dfn
+    /// with operand primitives bound. left=None for monadic calls.
+    DopCall(String, Prim, Prim, Option<Box<Expr>>, Box<Expr>),
     /// Apply an operand placeholder (⍺⍺/⍵⍵) to an argument.
     /// Produced by dfn body parsing when a multi-term statement starts with
     /// AlphaAlpha or OmegaOmega. substitute_dop resolves it to Monadic(p, arg)
     /// when the dop context is known; reaching eval unresolved is a SyntaxError.
     ApplyOp(Box<Expr>, Box<Expr>),
+    /// Apply an operand placeholder (⍺⍺/⍵⍵) dyadically: `⍺ ⍺⍺ ⍵`.
+    /// Produced by dfn body parsing for 3-term bodies where the middle term
+    /// is AlphaAlpha or OmegaOmega. substitute_dop resolves to Dyadic(p, a, b).
+    DyadicApply(Box<Expr>, Box<Expr>, Box<Expr>),
     /// compile-time function reference placeholder for dop bodies.
     /// When a dfn body references a function by name (not ⍺⍺/⍵⍵), this
     /// wraps the name so substitute_dop can pass it through unchanged.
@@ -195,10 +200,11 @@ fn substitute_dop(
             Box::new(substitute_dop(a, dop_lo, dop_ro)),
             Box::new(substitute_dop(b, dop_lo, dop_ro)),
         ),
-        Expr::DopCall(name, lo, ro, rhs) => Expr::DopCall(
+        Expr::DopCall(name, lo, ro, left, rhs) => Expr::DopCall(
             name.clone(),
             *lo,
             *ro,
+            left.as_ref().map(|l| Box::new(substitute_dop(l, dop_lo, dop_ro))),
             Box::new(substitute_dop(rhs, dop_lo, dop_ro)),
         ),
         // ⍺⍺ arg → Monadic(dop_lo, arg) when dop_lo is known
@@ -220,6 +226,30 @@ fn substitute_dop(
             }
         }
         Expr::FuncRef(_) => e.clone(),
+        Expr::DyadicApply(a, f, b) => {
+            match f.as_ref() {
+                Expr::AlphaAlpha if dop_lo.is_some() => {
+                    Expr::Dyadic(
+                        dop_lo.unwrap(),
+                        Box::new(substitute_dop(a, dop_lo, dop_ro)),
+                        Box::new(substitute_dop(b, dop_lo, dop_ro)),
+                    )
+                }
+                Expr::OmegaOmega if dop_ro.is_some() => {
+                    Expr::Dyadic(
+                        dop_ro.unwrap(),
+                        Box::new(substitute_dop(a, dop_lo, dop_ro)),
+                        Box::new(substitute_dop(b, dop_lo, dop_ro)),
+                    )
+                }
+                // any other func: just recurse
+                _ => Expr::DyadicApply(
+                    Box::new(substitute_dop(a, dop_lo, dop_ro)),
+                    Box::new(substitute_dop(f, dop_lo, dop_ro)),
+                    Box::new(substitute_dop(b, dop_lo, dop_ro)),
+                ),
+            }
+        }
         other => other.clone(),
     }
 }
@@ -375,7 +405,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     let ro = *ro_p;
                     let (rhs, rused) = parse_simple(&toks[after_ro..])?;
                     return Ok((
-                        Expr::DopCall(dop_name.clone(), lo, ro, Box::new(rhs)),
+                        Expr::DopCall(dop_name.clone(), lo, ro, None, Box::new(rhs)),
                         after_ro + rused,
                     ));
                 }
@@ -419,6 +449,38 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::InnerProduct(f, g, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic dop call: A LO FN RO B — lhs is ⍺, LO is ⍺⍺, RO is ⍵⍵, B is ⍵
+    if let Some(Tok::Prim(lo_p)) = toks.get(used) {
+        if let Some(Tok::Name(dop_name)) = toks.get(used + 1) {
+            if let Some(Tok::Prim(ro_p)) = toks.get(used + 2) {
+                let after_ro = used + 3;
+                let is_dop = !matches!(
+                    toks.get(after_ro),
+                    Some(Tok::Prim(_))
+                        | Some(Tok::Reduce(_))
+                        | Some(Tok::Scan(_))
+                        | Some(Tok::Each(_))
+                        | Some(Tok::Commute)
+                );
+                if is_dop {
+                    let lo = *lo_p;
+                    let ro = *ro_p;
+                    let (rhs, rused) = parse_simple(&toks[after_ro..])?;
+                    return Ok((
+                        Expr::DopCall(
+                            dop_name.clone(),
+                            lo,
+                            ro,
+                            Some(Box::new(lhs)),
+                            Box::new(rhs),
+                        ),
+                        after_ro + rused,
+                    ));
+                }
+            }
+        }
     }
 
     // dfn call: LHS {BODY} — a value immediately followed by a brace group
@@ -502,6 +564,39 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
     }
 
+    // check for dyadic dop call: A LO FN RO B — lhs is ⍺, LO is ⍺⍺, RO is ⍵⍵, B is ⍵
+    // MUST be checked before the plain dyadic arm below
+    if let Some(Tok::Prim(lo_p)) = toks.get(used) {
+        if let Some(Tok::Name(dop_name)) = toks.get(used + 1) {
+            if let Some(Tok::Prim(ro_p)) = toks.get(used + 2) {
+                let after_ro = used + 3;
+                let is_dop = !matches!(
+                    toks.get(after_ro),
+                    Some(Tok::Prim(_))
+                        | Some(Tok::Reduce(_))
+                        | Some(Tok::Scan(_))
+                        | Some(Tok::Each(_))
+                        | Some(Tok::Commute)
+                );
+                if is_dop {
+                    let lo = *lo_p;
+                    let ro = *ro_p;
+                    let (rhs, rused) = parse_simple(&toks[after_ro..])?;
+                    return Ok((
+                        Expr::DopCall(
+                            dop_name.clone(),
+                            lo,
+                            ro,
+                            Some(Box::new(lhs)),
+                            Box::new(rhs),
+                        ),
+                        after_ro + rused,
+                    ));
+                }
+            }
+        }
+    }
+
     // check for dyadic function: lhs PRIM rest
     if let Some(Tok::Prim(p)) = toks.get(used) {
         let p = *p;
@@ -531,7 +626,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     let ro = *ro_p;
                     let (rhs, rused) = parse_simple(&toks[after_ro..])?;
                     return Ok((
-                        Expr::DopCall(dop_name.clone(), lo, ro, Box::new(rhs)),
+                        Expr::DopCall(dop_name.clone(), lo, ro, None, Box::new(rhs)),
                         after_ro + rused,
                     ));
                 }
@@ -901,17 +996,25 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
                     0 => Err(ErrorCode::SyntaxError),
                     1 => Ok(exprs.into_iter().next().unwrap()),
                     _ => {
-                        // fold multiple terms into monadic application:
-                        // F X Y → F (X Y) in APL
-                        // but for dfns, F G H → F applied to (G H)
-                        // For ⍺⍺/⍵⍵ as function position, produce ApplyOp
+                        // fold multiple terms:
+                        // 2 terms: F X → ApplyOp(F, X)  (monadic application)
+                        // 3 terms: A F B → DyadicApply(A, F, B) (dyadic application)
+                        //   where F is AlphaAlpha or OmegaOmega
+                        if exprs.len() == 3 {
+                            let a = &exprs[0];
+                            let f = &exprs[1];
+                            let b = &exprs[2];
+                            if matches!(f, Expr::AlphaAlpha | Expr::OmegaOmega) {
+                                return Ok(Expr::DyadicApply(
+                                    Box::new(a.clone()),
+                                    Box::new(f.clone()),
+                                    Box::new(b.clone()),
+                                ));
+                            }
+                        }
+                        // otherwise fold right-to-left into monadic application
                         let mut acc = exprs.pop().unwrap();
                         for e in exprs.into_iter().rev() {
-                            // AlphaAlpha/OmegaOmega as function position defer
-                            // resolution to dop call time via ApplyOp.
-                            // Prim functions are already Expr::Monadic at this point
-                            // (parse_atom converts Tok::Prim to Expr::Monadic).
-                            // For all other functions (names, calls), fall back to Seq.
                             match e {
                                 Expr::AlphaAlpha | Expr::OmegaOmega => {
                                     acc = Expr::ApplyOp(Box::new(e), Box::new(acc));
@@ -1207,6 +1310,17 @@ impl Environment {
         for local in [&f.arg_left, &f.arg_right, &f.result].into_iter().flatten() {
             shadowed.push((local.clone(), self.vars.get(local).cloned()));
         }
+        // For named dfns, arg_left may have been moved to dfn_alpha_names
+        // during AssignDfn. Look it up and shadow+bind ⍺ if a left arg was provided.
+        let alpha_name = f.arg_left.clone().or_else(|| {
+            self.dfn_alpha_names
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, a)| a.clone())
+        });
+        if let Some(n) = &alpha_name {
+            shadowed.push((n.clone(), self.vars.get(n).cloned()));
+        }
         let mut body_locals: Vec<String> = Vec::new();
         collect_assigned_names(&f.body, &mut body_locals);
         for l in &body_locals {
@@ -1214,7 +1328,15 @@ impl Environment {
         }
         let caller_fn_name = self.current_fn_name.clone();
         self.current_fn_name = Some(name.to_string());
-        if let Some(n) = &f.arg_left {
+        // For named dfns, arg_left may have been moved to dfn_alpha_names
+        // during AssignDfn. Look it up and bind ⍺ if a left arg was provided.
+        let alpha_name = f.arg_left.clone().or_else(|| {
+            self.dfn_alpha_names
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, a)| a.clone())
+        });
+        if let Some(n) = &alpha_name {
             if let Some(v) = &left {
                 self.vars.insert(n.clone(), v.clone());
             }
@@ -1518,6 +1640,11 @@ impl Environment {
                 let _ = (func, arg);
                 Err(ErrorCode::SyntaxError)
             }
+            Expr::DyadicApply(a, f, b) => {
+                // unresolved — should have been substituted via substitute_dop
+                let _ = (a, f, b);
+                Err(ErrorCode::SyntaxError)
+            }
             Expr::FuncRef(_) => Err(ErrorCode::SyntaxError),
             Expr::Seq(exprs) => {
                 let mut last = None;
@@ -1526,12 +1653,15 @@ impl Environment {
                 }
                 last.ok_or(ErrorCode::SyntaxError)
             }
-            Expr::DopCall(dop_name, lo, ro, rhs) => {
-                // LO DOP RO B — call a dfn with ⍺⍺=LO and ⍵⍵=RO bound
+            Expr::DopCall(dop_name, lo, ro, left, rhs) => {
+                // LO DOP RO B (monadic) or A LO DOP RO B (dyadic)
                 let fname = dop_name.clone();
                 let rv = self.eval(rhs)?;
-                // call with dop primitives set
-                self.call_function_dop(&fname, *lo, *ro, None, Some(rv))
+                let lv = match left {
+                    Some(l) => Some(self.eval(l)?),
+                    None => None,
+                };
+                self.call_function_dop(&fname, *lo, *ro, lv, Some(rv))
             }
             Expr::SelfCall(arg) => {
                 // ∇ B — monadic self-call
@@ -2812,5 +2942,22 @@ mod tests {
         let v = result.unwrap();
         // + DOP × 5 → dop call: ⍺⍺=+, ⍵⍵=×, ⍵=5 → body {+ 5} = 5
         assert_eq!(v.first_cell().unwrap().get_near_int().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_dop_dyadic() {
+        // DOP←{⍺ ⍺⍺ ⍵} — applies ⍺⍺ dyadically to ⍺ and ⍵
+        // 2 + DOP × 5 → ⍺=2, ⍺⍺=+, ⍵⍵=×, ⍵=5 → body {2 + 5} = 7
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("DOP←{⍺ ⍺⍺ ⍵}").unwrap();
+        if let Some(f) = env.funcs.get_mut("DOP") {
+            f.is_dop = true;
+        }
+        let result = env.eval_line("2 + DOP × 5").unwrap();
+        assert!(result.is_some());
+        let v = result.unwrap();
+        // 2 + 5 = 7
+        assert_eq!(v.first_cell().unwrap().get_near_int().unwrap(), 7);
     }
 }
