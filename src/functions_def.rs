@@ -112,6 +112,7 @@ pub struct FunctionTable {
 pub enum Callable {
     Interpreted(DefinedFunction),
     Native(crate::ffi::cabi::CAbiBinding),
+    Plugin(crate::ffi::plugin::PluginBinding),
 }
 
 impl Callable {
@@ -154,6 +155,11 @@ impl FunctionTable {
     /// insert a native binding under an APL name
     pub fn insert_native(&mut self, name: &str, b: crate::ffi::cabi::CAbiBinding) {
         self.funcs.insert(name.to_string(), Callable::Native(b));
+    }
+
+    /// insert a plugin binding under an APL name
+    pub fn insert_plugin(&mut self, name: &str, b: crate::ffi::plugin::PluginBinding) {
+        self.funcs.insert(name.to_string(), Callable::Plugin(b));
     }
 
     pub fn remove(&mut self, name: &str) {

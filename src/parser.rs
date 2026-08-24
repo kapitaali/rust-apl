@@ -12,6 +12,7 @@ use crate::tokenizer::{tokenize, Tok};
 use crate::types::AplResult;
 use crate::types::ErrorCode;
 use crate::value::ValueP;
+use apl_ext::XValue;
 
 /// A parsed expression.
 #[derive(Clone, Debug)]
@@ -48,6 +49,9 @@ pub enum Expr {
     /// `[apl_name ⎕NA decl]` — associate a native function (⎕NA).
     /// apl_name None means use the symbol name from the declaration.
     QuadNa(Option<Box<Expr>>, Box<Expr>),
+    /// `⎕LOADSO 'path'` — load a Rust plugin cdylib; registers all its
+    /// bindings into the function table.
+    QuadLoadSo(Box<Expr>),
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
     Dyadic(Prim, Box<Expr>, Box<Expr>),
@@ -274,6 +278,28 @@ pub fn parse(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     parse_expr(toks)
 }
 
+/// Invoke a plugin binding with one APL value (converted to XValue).
+///
+/// Unlike ⎕NA CAbi calls, plugin bindings declare their own arity and each
+/// takes its arguments as ENCLOSED items: `FN ⊂arg1 ⊂arg2`. A single
+/// non-enclosed value passes as-is.
+fn call_plugin(pb: &crate::ffi::plugin::PluginBinding, arg_v: &ValueP) -> AplResult<ValueP> {
+    let xargs: Vec<XValue> = if arg_v.is_scalar() {
+        match arg_v.cells().first() {
+            Some(Cell::Pointer(p)) => vec![crate::ffi::plugin::value_to_xvalue(&ValueP {
+                inner: p.value.clone(),
+            })?],
+            _ => vec![crate::ffi::plugin::value_to_xvalue(arg_v)?],
+        }
+    } else {
+        vec![crate::ffi::plugin::value_to_xvalue(arg_v)?]
+    };
+
+    let ctx = crate::ffi::plugin::make_context(0, 1e-13);
+    let out = pb.call(&ctx, &xargs)?;
+    crate::ffi::plugin::xvalue_to_value(&out)
+}
+
 /// expr := name '←' expr | name '[' expr ']' '←' expr
 ///       | '(' A⊃name ')' '←' expr | simple
 fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
@@ -299,6 +325,13 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if is_na {
             let (decl, dused) = parse(&toks[na_at + 1..])?;
             return Ok((Expr::QuadNa(name_expr, Box::new(decl)), na_at + 1 + dused));
+        }
+    }
+    // ⎕LOADSO 'path' — load a Rust plugin cdylib and register its bindings
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕LOADSO" {
+            let (spec, sused) = parse(&toks[1..])?;
+            return Ok((Expr::QuadLoadSo(Box::new(spec)), 1 + sused));
         }
     }
     // error guard: ⎕EA guarded ⋄ fallback
@@ -1727,6 +1760,11 @@ impl Environment {
                     };
                     return b.call(&args);
                 }
+                // plugin binding: typed XValue path with panic containment
+                if let Some(crate::functions_def::Callable::Plugin(pb)) = self.funcs.get(name) {
+                    let arg_v = right.unwrap_or_else(|| ValueP::int_vector(&[]));
+                    return call_plugin(pb, &arg_v);
+                }
                 // defined function takes precedence; a bare name with no
                 // argument falls back to a variable reference
                 if self.funcs.get(name).is_some() {
@@ -1968,6 +2006,30 @@ impl Environment {
                 // shy result: the name that was fixed
                 let cps: Vec<u32> = name.chars().map(|ch| ch as u32).collect();
                 Ok(ValueP::char_vector(&cps))
+            }
+            Expr::QuadLoadSo(spec) => {
+                // ⎕LOADSO 'path' — load plugin, register all its bindings
+                let spec_v = self.eval(spec)?;
+                let path = spec_v
+                    .cells()
+                    .iter()
+                    .map(|c| match c {
+                        Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                        _ => '?',
+                    })
+                    .collect::<String>();
+                let loaded = crate::ffi::plugin::load_plugin(&mut self.lib_cache, &path)
+                    .map_err(|_| ErrorCode::FileError)?;
+                let mut names: Vec<String> = Vec::new();
+                for b in loaded.bindings {
+                    names.push(b.apl_name.clone());
+                    let name = b.apl_name.clone();
+                    self.funcs.insert_plugin(&name, b);
+                }
+                names.sort();
+                // result: vector of registered APL names
+                let flat: Vec<u32> = names.join(" ").chars().map(|ch| ch as u32).collect();
+                Ok(ValueP::char_vector(&flat))
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;

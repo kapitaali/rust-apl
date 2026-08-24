@@ -1,0 +1,14 @@
+[package]
+name = "demo-plugin"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+apl-ext = { path = "../apl-ext" }
+
+[lib]
+crate-type = ["cdylib"]
+# NOTE: panic strategy must be unwind (workspace default). The workspace
+# root sets panic = "unwind" in [profile.release] so catch_unwind works
+# across the .so boundary — do NOT add a profile section here.
+

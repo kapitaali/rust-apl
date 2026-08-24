@@ -3,11 +3,16 @@ name = "apl"
 version = "2.0.0"
 edition = "2021"
 
+[workspace]
+members = ["crates/apl-ext", "crates/demo-plugin"]
+
 [dependencies]
 rayon = "1.10"
 smallvec = { version = "1.13", features = ["union"] }
 libloading = "0.8"
+apl-ext = { path = "crates/apl-ext" }
 
 [profile.release]
 opt-level = 3
 lto = true
+panic = "unwind"

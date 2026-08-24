@@ -6,6 +6,7 @@ pub mod cabi;
 pub mod exchange;
 pub mod loader;
 pub mod nadecl;
+pub mod plugin;
 
 #[cfg(test)]
 mod exchange_tests;

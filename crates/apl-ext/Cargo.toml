@@ -1,0 +1,8 @@
+[package]
+name = "apl-ext"
+version = "1.0.0"
+edition = "2021"
+description = "Contract crate for rust-apl native plugins — plugins depend on THIS, never on the interpreter"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
