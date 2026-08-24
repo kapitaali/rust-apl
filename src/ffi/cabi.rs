@@ -375,6 +375,9 @@ fn build_string_buffer(
         Special::NulTerm => {
             if fill_from_input {
                 buf.push(0);
+            } else if let Some(k) = ts.array_len {
+                // declared [n]: exactly n bytes, NUL-terminated by contract
+                buf.resize(k as usize, 0);
             } else {
                 // output: allocate generously (input len + 64) — C writes at
                 // most this much; caller must respect the cap
@@ -384,8 +387,12 @@ fn build_string_buffer(
         }
         Special::ByteCounted => {
             if !fill_from_input {
-                let base = buf.len();
-                buf.resize(base + 64, 0);
+                if let Some(k) = ts.array_len {
+                    buf.resize(k as usize, 0);
+                } else {
+                    let base = buf.len();
+                    buf.resize(base + 64, 0);
+                }
             }
         }
         Special::None => unreachable!(),
