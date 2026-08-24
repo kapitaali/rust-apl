@@ -10,6 +10,7 @@ pub mod domino;
 pub mod enclose;
 pub mod enlist;
 pub mod epsilon;
+pub mod ffi;
 pub mod functions;
 pub mod functions_def;
 pub mod index_of;

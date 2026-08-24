@@ -1,0 +1,11 @@
+//! Foreign-function interface: CAbi (⎕NA), Rust plugins, Java bridge.
+//!
+//! See META-INF/EXTENSIONS.md for the architecture. Phase F1 = exchange.rs.
+
+pub mod exchange;
+#[cfg(test)]
+mod exchange_tests;
+
+pub use exchange::{
+    value_to_xarray, xarray_to_value, CellTag, XArray, XCell, XTaggedCell, EXCHANGE_ABI, MAX_RANK,
+};

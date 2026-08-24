@@ -204,7 +204,8 @@ fn substitute_dop(
             name.clone(),
             *lo,
             *ro,
-            left.as_ref().map(|l| Box::new(substitute_dop(l, dop_lo, dop_ro))),
+            left.as_ref()
+                .map(|l| Box::new(substitute_dop(l, dop_lo, dop_ro))),
             Box::new(substitute_dop(rhs, dop_lo, dop_ro)),
         ),
         // ⍺⍺ arg → Monadic(dop_lo, arg) when dop_lo is known
@@ -228,20 +229,16 @@ fn substitute_dop(
         Expr::FuncRef(_) => e.clone(),
         Expr::DyadicApply(a, f, b) => {
             match f.as_ref() {
-                Expr::AlphaAlpha if dop_lo.is_some() => {
-                    Expr::Dyadic(
-                        dop_lo.unwrap(),
-                        Box::new(substitute_dop(a, dop_lo, dop_ro)),
-                        Box::new(substitute_dop(b, dop_lo, dop_ro)),
-                    )
-                }
-                Expr::OmegaOmega if dop_ro.is_some() => {
-                    Expr::Dyadic(
-                        dop_ro.unwrap(),
-                        Box::new(substitute_dop(a, dop_lo, dop_ro)),
-                        Box::new(substitute_dop(b, dop_lo, dop_ro)),
-                    )
-                }
+                Expr::AlphaAlpha if dop_lo.is_some() => Expr::Dyadic(
+                    dop_lo.unwrap(),
+                    Box::new(substitute_dop(a, dop_lo, dop_ro)),
+                    Box::new(substitute_dop(b, dop_lo, dop_ro)),
+                ),
+                Expr::OmegaOmega if dop_ro.is_some() => Expr::Dyadic(
+                    dop_ro.unwrap(),
+                    Box::new(substitute_dop(a, dop_lo, dop_ro)),
+                    Box::new(substitute_dop(b, dop_lo, dop_ro)),
+                ),
                 // any other func: just recurse
                 _ => Expr::DyadicApply(
                     Box::new(substitute_dop(a, dop_lo, dop_ro)),
@@ -388,7 +385,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     // dop call: LO FN RO B — call a dfn that references ⍺⍺/⍵⍵,
     // binding LO to ⍺⍺ and RO to ⍵⍵. Detected by: Prim(f) Name(dop) Prim(g) rest
     // where rest is not another operator (which would be a regular dyadic chain).
-    if let Some(Tok::Prim(lo_p)) = toks.get(0) {
+    if let Some(Tok::Prim(lo_p)) = toks.first() {
         if let Some(Tok::Name(dop_name)) = toks.get(1) {
             if let Some(Tok::Prim(ro_p)) = toks.get(2) {
                 let after_ro = 3;
@@ -413,7 +410,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
     }
 
-    let (mut lhs, mut used) = parse_term(toks)?;
+    let (lhs, mut used) = parse_term(toks)?;
 
     // commute operator: F⍨ after a value means the NEXT function is
     // commuted: `A F⍨ B` = B F A. We detect PRIM COMMUTE here.
@@ -449,38 +446,6 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::InnerProduct(f, g, Box::new(lhs), Box::new(rhs)), used));
-    }
-
-    // dyadic dop call: A LO FN RO B — lhs is ⍺, LO is ⍺⍺, RO is ⍵⍵, B is ⍵
-    if let Some(Tok::Prim(lo_p)) = toks.get(used) {
-        if let Some(Tok::Name(dop_name)) = toks.get(used + 1) {
-            if let Some(Tok::Prim(ro_p)) = toks.get(used + 2) {
-                let after_ro = used + 3;
-                let is_dop = !matches!(
-                    toks.get(after_ro),
-                    Some(Tok::Prim(_))
-                        | Some(Tok::Reduce(_))
-                        | Some(Tok::Scan(_))
-                        | Some(Tok::Each(_))
-                        | Some(Tok::Commute)
-                );
-                if is_dop {
-                    let lo = *lo_p;
-                    let ro = *ro_p;
-                    let (rhs, rused) = parse_simple(&toks[after_ro..])?;
-                    return Ok((
-                        Expr::DopCall(
-                            dop_name.clone(),
-                            lo,
-                            ro,
-                            Some(Box::new(lhs)),
-                            Box::new(rhs),
-                        ),
-                        after_ro + rused,
-                    ));
-                }
-            }
-        }
     }
 
     // dfn call: LHS {BODY} — a value immediately followed by a brace group
@@ -583,13 +548,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     let ro = *ro_p;
                     let (rhs, rused) = parse_simple(&toks[after_ro..])?;
                     return Ok((
-                        Expr::DopCall(
-                            dop_name.clone(),
-                            lo,
-                            ro,
-                            Some(Box::new(lhs)),
-                            Box::new(rhs),
-                        ),
+                        Expr::DopCall(dop_name.clone(), lo, ro, Some(Box::new(lhs)), Box::new(rhs)),
                         after_ro + rused,
                     ));
                 }
@@ -1627,7 +1586,7 @@ impl Environment {
             }
             Expr::If(cond, then_b, else_b) => {
                 let cv = self.eval(cond)?;
-                if cv.first_cell().map_or(false, |c| c.get_near_int() == Ok(0)) {
+                if cv.first_cell().is_some_and(|c| c.get_near_int() == Ok(0)) {
                     self.eval(else_b)
                 } else {
                     self.eval(then_b)
@@ -1649,7 +1608,7 @@ impl Environment {
             Expr::Seq(exprs) => {
                 let mut last = None;
                 for e in exprs {
-                    last = Some(self.eval(&e)?);
+                    last = Some(self.eval(e)?);
                 }
                 last.ok_or(ErrorCode::SyntaxError)
             }
@@ -1679,7 +1638,7 @@ impl Environment {
             Expr::DiamondList(exprs) => {
                 let mut last = None;
                 for e in exprs {
-                    last = Some(self.eval(&e)?);
+                    last = Some(self.eval(e)?);
                 }
                 last.ok_or(ErrorCode::SyntaxError)
             }
