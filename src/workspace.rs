@@ -54,6 +54,11 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
     // round-trip through define_function on load. Anonymous dfn temporaries
     // (compiler-generated, private-use name prefix) have no valid APL
     // source and are skipped.
+    // plugin .so specs first: load() re-issues ⎕LOADSO before function
+    // records so Plugin bindings re-register
+    for spec in &env.loaded_plugins {
+        lines.push(format!("PLG {}", spec));
+    }
     for fname in env.funcs.names() {
         let callable = env.funcs.get(&fname).expect("name came from names()");
         // native ⎕NA bindings: persist the declaration text; load() re-parses
@@ -61,6 +66,10 @@ pub fn save(env: &Environment, name: &str) -> Result<String, String> {
         if let crate::functions_def::Callable::Native(b) = callable {
             let decl = b.spec.decl_text();
             lines.push(format!("NA {} {}", fname, decl));
+            continue;
+        }
+        // plugin bindings are covered by their PLG record; skip the slot
+        if matches!(callable, crate::functions_def::Callable::Plugin(_)) {
             continue;
         }
         let f = callable.interpreted().expect("checked above");
@@ -130,6 +139,8 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
         Dfn(String, String),
         /// ⎕NA binding: apl name + declaration text (re-parsed on load)
         Na(String, String),
+        /// plugin .so spec (re-loaded via ⎕LOADSO path on load)
+        Plg(String),
     }
     let all: Vec<&str> = text.lines().collect();
     let mut records: Vec<Record> = Vec::new();
@@ -155,6 +166,10 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
                 Some((name, decl)) => records.push(Record::Na(name.to_string(), decl.to_string())),
                 None => return Err(format!("corrupt NA record: {}", line)),
             }
+            i += 1;
+        } else if let Some(rest) = line.strip_prefix("PLG ") {
+            // PLG <so-spec> — re-issued as ⎕LOADSO on load
+            records.push(Record::Plg(rest.to_string()));
             i += 1;
         } else if let Some(header) = line.strip_prefix("FN ") {
             let mut body: Vec<String> = Vec::new();
@@ -208,6 +223,18 @@ pub fn load(env: &mut Environment, name: &str) -> Result<String, String> {
                         )
                     })?;
                 env.funcs.insert_native(name, binding);
+            }
+            Record::Plg(spec) => {
+                // re-load the plugin .so; insert each binding into the table
+                let loaded = crate::ffi::plugin::load_plugin(&mut env.lib_cache, spec)
+                    .map_err(|e| format!("plugin {} failed to reload: {}", spec, e))?;
+                for b in loaded.bindings {
+                    let name = b.apl_name.clone();
+                    env.funcs.insert_plugin(&name, b);
+                }
+                if !env.loaded_plugins.contains(spec) {
+                    env.loaded_plugins.push(spec.clone());
+                }
             }
         }
     }

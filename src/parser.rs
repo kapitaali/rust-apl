@@ -1141,6 +1141,8 @@ pub struct Environment {
     current_fn_name: Option<String>,
     /// dlopen handle cache (libraries stay loaded for process lifetime)
     pub(crate) lib_cache: crate::ffi::loader::LibraryCache,
+    /// plugin .so specs loaded via ⎕LOADSO (for workspace PLG records)
+    pub(crate) loaded_plugins: Vec<String>,
 }
 
 impl Environment {
@@ -1153,6 +1155,7 @@ impl Environment {
             dfn_alpha_names: Vec::new(),
             current_fn_name: None,
             lib_cache: crate::ffi::loader::LibraryCache::new(),
+            loaded_plugins: Vec::new(),
         }
     }
 
@@ -2024,6 +2027,10 @@ impl Environment {
                     .collect::<String>();
                 let loaded = crate::ffi::plugin::load_plugin(&mut self.lib_cache, &path)
                     .map_err(|_| ErrorCode::FileError)?;
+                // remember the spec for workspace PLG records (dedupe)
+                if !self.loaded_plugins.contains(&path) {
+                    self.loaded_plugins.push(path.clone());
+                }
                 let mut names: Vec<String> = Vec::new();
                 for b in loaded.bindings {
                     names.push(b.apl_name.clone());
