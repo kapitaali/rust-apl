@@ -7,9 +7,14 @@
 //! Exported surface (fixed, tiny — see EXTENSIONS.md §7.3):
 //!   j_init(classpath) -> env handle
 //!   j_ready() -> 1 once initialized
-//!   j_new(env, class) -> object handle
+//!   j_new(class) -> object handle
 //!   j_live_handles() -> diagnostics count
-//!   j_free(env, handle) -> release a handle
+//!   j_free(handle) -> release a handle
+//!   j_call(handle, method, sig, a0, a1, out_buf) -> i32 (instance method)
+//!   j_call_s(handle, method, sig, cap, out_buf) -> i32 (String instance method)
+//!   j_call_static(class, method, sig, arg, cap, out_buf) -> i32 (static method)
+//!   j_get_field(handle, field, sig, out_buf) -> i32
+//!   j_set_field(handle, field, sig, val) -> i32
 //!
 //! Feature `java`: real JNI Invocation API via JNI_CreateJavaVM loaded
 //! dynamically from $JAVA_HOME/lib/server/libjvm.so. Without it the same
@@ -26,12 +31,9 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 /// live object handles -> declared type (diagnostics)
 static HANDLES: Mutex<Option<HashMap<u64, String>>> = Mutex::new(None);
 
-/// handle -> raw jobject global reference (usize; JNI global refs are valid
+/// handle -> global ref to the OBJECT INSTANCE (usize; JNI global refs are valid
 /// across threads, and usize sidesteps raw-pointer Send restrictions on the
 /// static). Owned for process lifetime — v1 never deletes refs.
-/// handle -> global ref to the OBJECT INSTANCE (usize-free: Global is owned
-/// for process lifetime — v1 never deletes refs). j_call derives the class
-/// from the instance via GetObjectClass, so no second ref is needed.
 #[cfg(feature = "java")]
 static GLOBAL_REFS: Mutex<
     Option<HashMap<u64, jni::objects::Global<jni::objects::JObject<'static>>>>,
@@ -210,12 +212,12 @@ pub extern "C" fn j_init(_classpath: usize) -> i64 {
     -10
 }
 
-/// `j_new P <0T` → P : instantiate `class` via its no-arg ctor; returns a
+/// `j_new <0T` → P : instantiate `class` via its no-arg ctor; returns a
 /// global-ref handle. Errors: -20 not ready, -22 FindClass fail,
 /// -23 NewObject fail, -24 global-ref fail.
 #[cfg(feature = "java")]
 #[no_mangle]
-pub extern "C" fn j_new(_env: usize, class: usize) -> i64 {
+pub extern "C" fn j_new(class: usize) -> i64 {
     if !JVM_READY.load(Ordering::SeqCst) {
         return -20;
     }
@@ -247,11 +249,7 @@ pub extern "C" fn j_new(_env: usize, class: usize) -> i64 {
             jni::signature::RuntimeMethodSignature::from_str("()V").map_err(|_| -23)?;
         let ctor = parsed_ctor.method_signature();
         let obj: JObject = env.new_object(&cls, ctor, &[]).map_err(|_| -23)?;
-        // Store a global ref to the OBJECT INSTANCE (not the class!). The
-        // first WIP stored Global<JClass>, so j_call invoked instance methods
-        // with java.lang.Class as receiver — SIGSEGV inside
-        // jni_invoke_nonstatic. Global<JObject> keeps the instance alive for
-        // process lifetime; j_call derives its class via GetObjectClass.
+        // Store a global ref to the OBJECT INSTANCE (not the class!).
         let obj_ref: jni::objects::Global<jni::objects::JObject<'static>> =
             env.new_global_ref(&obj).map_err(|_| -24)?;
         GLOBAL_REFS
@@ -272,11 +270,11 @@ pub extern "C" fn j_new(_env: usize, class: usize) -> i64 {
 
 #[cfg(not(feature = "java"))]
 #[no_mangle]
-pub extern "C" fn j_new(_env: usize, _class: usize) -> i64 {
+pub extern "C" fn j_new(_class: usize) -> i64 {
     -10
 }
 
-/// `j_call_static P <0T <0T <0T <0T <I4 >0T[256]` → I4 : invoke a static method.
+/// `j_call_static <0T <0T <0T <0T <I4 >0T[256]` → I4 : invoke a static method.
 ///
 /// # Safety
 /// `out_buf` must point to `cap` writable bytes (the ⎕NA-declared `>0T[n]`
@@ -284,14 +282,13 @@ pub extern "C" fn j_new(_env: usize, _class: usize) -> i64 {
 /// Args: class name, method name, JNI signature, single-String argument
 /// (empty = niladic), output capacity, out buffer. NOTE: the capacity MUST
 /// be passed explicitly — ⎕NA hands callees only the buffer ADDRESS, so a
-/// hidden length parameter would read register garbage (found the hard way:
-/// results silently truncated). Returns 0 on success, negative on failure:
+/// hidden length parameter would read register garbage. Returns 0 on success,
+/// negative on failure:
 ///   -20 not ready, -25 FindClass fail, -26 GetStaticMethodID fail,
 ///   -27 call failed, -29 null/zero buffer.
 #[cfg(feature = "java")]
 #[no_mangle]
 pub unsafe extern "C" fn j_call_static(
-    _env: usize,
     class: usize,
     method: usize,
     sig: usize,
@@ -340,7 +337,6 @@ pub unsafe extern "C" fn j_call_static(
             .map_err(|_| -26)?;
 
         // v1: single-String-arg methods only. Empty arg string = no args.
-        // call_static_method_unchecked wants the RETURN type + raw jvalues.
         let ret_jtype = jni::signature::JavaType::Object;
         let ret = if a_str.is_empty() {
             unsafe {
@@ -379,7 +375,6 @@ pub unsafe extern "C" fn j_call_static(
 #[cfg(not(feature = "java"))]
 #[no_mangle]
 pub unsafe extern "C" fn j_call_static(
-    _env: usize,
     _class: usize,
     _method: usize,
     _sig: usize,
@@ -399,12 +394,11 @@ unsafe fn cstr_at(p: usize) -> String {
     }
 }
 
-/// `j_call P <0T <0T <0T <I4 <I4 >I8` → I4 : invoke an INSTANCE method on a
+/// `j_call P <0T <0T I8 I8 >I8` → I4 : invoke an INSTANCE method on a
 /// live handle. Args: object handle, method name, JNI signature, two int
 /// arguments (unused slots pass 0 — the signature determines how many are
 /// consumed), out buffer receiving an i64 result. v1 supports methods whose
-/// args/return are among (), I (int), J (long); String returns go through
-/// j_call_static-style text handling later. Returns 0 on success, negative:
+/// args/return are among (), I (int), J (long). Returns 0 on success, negative:
 ///   -20 not ready, -21 unknown handle, -26 GetMethodID fail,
 ///   -27 call failed, -29 null buffer.
 ///
@@ -414,7 +408,6 @@ unsafe fn cstr_at(p: usize) -> String {
 #[cfg(feature = "java")]
 #[no_mangle]
 pub unsafe extern "C" fn j_call(
-    _env: usize,
     handle: u64,
     method: usize,
     sig: usize,
@@ -498,6 +491,7 @@ pub unsafe extern "C" fn j_call(
                 eprintln!("[apl-java] GetMethodID {m_name}{m_sig} failed: {e:?}");
                 -26
             })?;
+
         let ret_jtype = match ret {
             JavaType::Primitive(Primitive::Int) | JavaType::Primitive(Primitive::Long) => ret,
             JavaType::Object | JavaType::Array => JavaType::Object,
@@ -526,7 +520,6 @@ pub unsafe extern "C" fn j_call(
 #[cfg(not(feature = "java"))]
 #[no_mangle]
 pub unsafe extern "C" fn j_call(
-    _env: usize,
     _handle: u64,
     _method: usize,
     _sig: usize,
@@ -543,10 +536,10 @@ pub extern "C" fn j_ready() -> i32 {
     JVM_READY.load(Ordering::SeqCst) as i32
 }
 
-/// `j_call_s P I8 <0T <0T <I4 >0T[n]` → I4 : invoke an INSTANCE method that
+/// `j_call_s P <0T <0T <I4 >0T[n]` → I4 : invoke an INSTANCE method that
 /// returns a String (or any object — its toString() is taken, same as the
-/// static path). Args: env handle, object handle, method name, JNI
-/// signature, output capacity, out buffer. v1: zero-arg methods only.
+/// static path). Args: object handle, method name, JNI signature, output
+/// capacity, out buffer. v1: zero-arg methods only.
 /// Errors: -20 not ready, -21 unknown handle, -25 GetObjectClass fail,
 /// -26 GetMethodID fail, -27 call failed, -29 null/zero buffer,
 /// -42 toString fail.
@@ -557,7 +550,6 @@ pub extern "C" fn j_ready() -> i32 {
 #[cfg(feature = "java")]
 #[no_mangle]
 pub unsafe extern "C" fn j_call_s(
-    _env: usize,
     handle: u64,
     method: usize,
     sig: usize,
@@ -656,13 +648,183 @@ pub unsafe extern "C" fn j_call_s(
 #[cfg(not(feature = "java"))]
 #[no_mangle]
 pub unsafe extern "C" fn j_call_s(
-    _env: usize,
     _handle: u64,
     _method: usize,
     _sig: usize,
     _cap: usize,
     _out_buf: *mut u8,
 ) -> i32 {
+    -10
+}
+
+/// `j_get_field P <0T <0T >I8` → I4 : read an instance field whose type is
+/// int or long. Args: object handle, field name, JNI signature (e.g. "I" or
+/// "J"), out buffer receiving the i64 value. Returns 0 on success, negative:
+///   -20 not ready, -21 unknown handle, -25 GetObjectClass fail,
+///   -35 GetFieldID fail, -36 field read fail.
+///
+/// # Safety
+/// `out_buf` must point to 8 writable bytes; field/sig must be valid
+/// NUL-terminated C strings.
+#[cfg(feature = "java")]
+#[no_mangle]
+pub unsafe extern "C" fn j_get_field(
+    handle: u64,
+    field: usize,
+    sig: usize,
+    out_buf: *mut i64,
+) -> i32 {
+    if !JVM_READY.load(Ordering::SeqCst) {
+        return -20;
+    }
+    if out_buf.is_null() {
+        return -29;
+    }
+    let guard = GLOBAL_REFS.lock().unwrap();
+    if !guard
+        .as_ref()
+        .map(|m| m.contains_key(&handle))
+        .unwrap_or(false)
+    {
+        return -21;
+    }
+    let f_name = unsafe { cstr_at(field) };
+    let f_sig = unsafe { cstr_at(sig) };
+
+    let read = vm::with_env(|env| -> Result<(), i64> {
+        use jni::signature::{JavaType, Primitive, RuntimeFieldSignature};
+        use jni::strings::JNIString;
+
+        let parsed_sig = RuntimeFieldSignature::from_str(&f_sig).map_err(|_| -35)?;
+        let jsig = parsed_sig.field_signature();
+        let ret: JavaType = jsig.ty();
+
+        let global: &jni::objects::Global<jni::objects::JObject<'static>> = guard
+            .as_ref()
+            .and_then(|m| m.get(&handle))
+            .expect("checked above");
+        let jobj: &jni::objects::JObject = global.as_ref();
+        let cls = env.get_object_class(jobj).map_err(|e| {
+            env.exception_clear();
+            eprintln!("[apl-java] GetObjectClass for handle {handle} failed: {e:?}");
+            -25i64
+        })?;
+        let jfield = env
+            .get_field_id(&cls, JNIString::from(f_name.as_str()), jsig)
+            .map_err(|e| {
+                env.exception_clear();
+                eprintln!("[apl-java] GetFieldID {f_name}{f_sig} failed: {e:?}");
+                -35i64
+            })?;
+
+        let val = unsafe { env.get_field_unchecked(jobj, jfield, ret) }.map_err(|e| {
+            env.exception_clear();
+            eprintln!("[apl-java] get_field {f_name} failed: {e:?}");
+            -36i64
+        })?;
+        let n: i64 = match ret {
+            JavaType::Primitive(Primitive::Int) => val.i().map_err(|_| -36)? as i64,
+            JavaType::Primitive(Primitive::Long) => val.j().map_err(|_| -36)?,
+            _ => return Err(-36),
+        };
+        unsafe { *out_buf = n };
+        Ok(())
+    });
+    match read {
+        Ok(_) => 0,
+        Err(code) => code as i32,
+    }
+}
+
+#[cfg(not(feature = "java"))]
+#[no_mangle]
+pub unsafe extern "C" fn j_get_field(
+    _handle: u64,
+    _field: usize,
+    _sig: usize,
+    _out_buf: *mut i64,
+) -> i32 {
+    -10
+}
+
+/// `j_set_field P <0T <0T I8` → I4 : write an instance field whose type is
+/// int or long. Args: object handle, field name, JNI signature (e.g. "I" or
+/// "J"), i64 value. Returns 0 on success, negative:
+///   -20 not ready, -21 unknown handle, -25 GetObjectClass fail,
+///   -35 GetFieldID fail, -36 field write fail.
+#[cfg(feature = "java")]
+#[no_mangle]
+pub unsafe extern "C" fn j_set_field(handle: u64, field: usize, sig: usize, val: i64) -> i32 {
+    if !JVM_READY.load(Ordering::SeqCst) {
+        return -20;
+    }
+    let guard = GLOBAL_REFS.lock().unwrap();
+    if !guard
+        .as_ref()
+        .map(|m| m.contains_key(&handle))
+        .unwrap_or(false)
+    {
+        return -21;
+    }
+    let f_name = unsafe { cstr_at(field) };
+    let f_sig = unsafe { cstr_at(sig) };
+
+    let wrote = vm::with_env(|env| -> Result<(), i64> {
+        use jni::signature::{JavaType, Primitive, RuntimeFieldSignature};
+        use jni::strings::JNIString;
+
+        let parsed_sig = RuntimeFieldSignature::from_str(&f_sig).map_err(|_| -35)?;
+        let jsig = parsed_sig.field_signature();
+        let ret: JavaType = jsig.ty();
+
+        let global: &jni::objects::Global<jni::objects::JObject<'static>> = guard
+            .as_ref()
+            .and_then(|m| m.get(&handle))
+            .expect("checked above");
+        let jobj: &jni::objects::JObject = global.as_ref();
+        let cls = env.get_object_class(jobj).map_err(|e| {
+            env.exception_clear();
+            eprintln!("[apl-java] GetObjectClass for handle {handle} failed: {e:?}");
+            -25i64
+        })?;
+        let jfield = env
+            .get_field_id(&cls, JNIString::from(f_name.as_str()), jsig)
+            .map_err(|e| {
+                env.exception_clear();
+                eprintln!("[apl-java] GetFieldID {f_name}{f_sig} failed: {e:?}");
+                -35i64
+            })?;
+
+        match ret {
+            JavaType::Primitive(Primitive::Int) => {
+                env.set_field_unchecked(jobj, jfield, jni::objects::JValue::from(val as i32))
+                    .map_err(|e| {
+                        env.exception_clear();
+                        eprintln!("[apl-java] set_field {f_name} failed: {e:?}");
+                        -36i64
+                    })?;
+            }
+            JavaType::Primitive(Primitive::Long) => {
+                env.set_field_unchecked(jobj, jfield, jni::objects::JValue::from(val))
+                    .map_err(|e| {
+                        env.exception_clear();
+                        eprintln!("[apl-java] set_field {f_name} failed: {e:?}");
+                        -36i64
+                    })?;
+            }
+            _ => return Err(-36),
+        }
+        Ok(())
+    });
+    match wrote {
+        Ok(_) => 0,
+        Err(code) => code as i32,
+    }
+}
+
+#[cfg(not(feature = "java"))]
+#[no_mangle]
+pub unsafe extern "C" fn j_set_field(_handle: u64, _field: usize, _sig: usize, _val: i64) -> i32 {
     -10
 }
 
@@ -673,11 +835,15 @@ pub extern "C" fn j_live_handles() -> u64 {
     h.as_ref().map(|m| m.len() as u64).unwrap_or(0)
 }
 
-/// `j_free P P` → I4 : release an object handle; returns 0.
+/// `j_free P` → I4 : release an object handle; returns 0.
 #[no_mangle]
-pub extern "C" fn j_free(_env: usize, handle: u64) -> i32 {
+pub extern "C" fn j_free(handle: u64) -> i32 {
     let mut h = HANDLES.lock().unwrap();
     if let Some(m) = h.as_mut() {
+        m.remove(&handle);
+    }
+    let mut g = GLOBAL_REFS.lock().unwrap();
+    if let Some(m) = g.as_mut() {
         m.remove(&handle);
     }
     0
