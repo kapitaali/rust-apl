@@ -21,6 +21,7 @@ pub mod outer;
 #[cfg(test)]
 pub mod parallel_tests;
 pub mod parser;
+pub mod partition;
 pub mod pick;
 pub mod replicate;
 pub mod rotate;

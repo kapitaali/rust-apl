@@ -279,6 +279,11 @@ impl Prim {
             // A,B — catenate (last axis)
             Prim::Comma => crate::comma::catenate(a, b),
 
+            // A⊂B — partition: split B into enclosed pieces where
+            // consecutive elements of A have the same non-zero key.
+            // Simplified: A is a boolean/int vector, B is a simple vector.
+            Prim::Enclose => crate::partition::partition(a, b),
+
             // A ⍴ B → reshape
             Prim::Rho => {
                 let dims = a
