@@ -12,3 +12,4 @@ Cargo.lock
 
 # Workspace files persisted by the interpreter (user data, not code)
 *.aplws
+hs_err_pid*.log
