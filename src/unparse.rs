@@ -56,6 +56,13 @@ fn prim_symbol(p: Prim) -> &'static str {
     }
 }
 
+/// True when the expression starts with a prim glyph (monadic application)
+/// and needs parentheses when used as a function-call operand — because
+/// `⊂⍵` as the first token of a right arg fails to parse without parens.
+fn needs_operand_parens(e: &Expr) -> bool {
+    matches!(e, Expr::Monadic(_, _))
+}
+
 /// unparse an expression. `atom` = true when the caller guarantees the
 /// expression sits in a context where a bare value suffices.
 pub fn unparse(e: &Expr) -> String {
@@ -187,7 +194,17 @@ pub fn unparse(e: &Expr) -> String {
         }
         Expr::Assign(name, rhs) => format!("{}←{}", name, unparse(rhs)),
         Expr::FuncCallMono(name, arg) => match arg {
-            Some(a) => format!("{} {}", name, unparse(a)),
+            Some(a) => {
+                // Parenthesize the operand if it starts with a prim glyph
+                // (⊂ as first token of right arg fails to parse; wrapping
+                // in parens makes it re-parse correctly).
+                let s = unparse(a);
+                if needs_operand_parens(a) {
+                    format!("{} ({})", name, s)
+                } else {
+                    format!("{} {}", name, s)
+                }
+            }
             None => name.clone(),
         },
         Expr::FuncCallDyad(name, l, r) => {
@@ -297,5 +314,21 @@ mod tests {
             println!("trying {}", src);
             roundtrip(src);
         }
+    }
+
+    #[test]
+    fn test_unparse_func_call_with_monadic_operand() {
+        // FuncCallMono with a Monadic(Enclose, ...) operand must
+        // parenthesize the operand so it re-parses correctly.
+        // JInit←{JI (⊂⍵)} unparses as "JI (⊂ ⍵)" not "JI ⊂ ⍵"
+        use crate::functions::Prim;
+        let inner = Expr::Monadic(Prim::Enclose, Box::new(Expr::Var("⍵".to_string())));
+        let call = Expr::FuncCallMono("JI".to_string(), Some(Box::new(inner)));
+        let text = unparse(&call);
+        assert_eq!(text, "JI (⊂ ⍵)");
+        // Verify it re-parses
+        let toks = crate::tokenizer::tokenize(&text).unwrap();
+        let (e, _) = crate::parser::parse(&toks).unwrap();
+        assert!(matches!(e, Expr::FuncCallMono(_, Some(_))));
     }
 }
