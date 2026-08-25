@@ -26,6 +26,17 @@ static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 /// live object handles -> declared type (diagnostics)
 static HANDLES: Mutex<Option<HashMap<u64, String>>> = Mutex::new(None);
 
+/// handle -> raw jobject global reference (usize; JNI global refs are valid
+/// across threads, and usize sidesteps raw-pointer Send restrictions on the
+/// static). Owned for process lifetime — v1 never deletes refs.
+/// handle -> global ref to the OBJECT INSTANCE (usize-free: Global is owned
+/// for process lifetime — v1 never deletes refs). j_call derives the class
+/// from the instance via GetObjectClass, so no second ref is needed.
+#[cfg(feature = "java")]
+static GLOBAL_REFS: Mutex<
+    Option<HashMap<u64, jni::objects::Global<jni::objects::JObject<'static>>>>,
+> = Mutex::new(None);
+
 /// JVM state. v1: single JVM per process; false until j_init succeeds.
 static JVM_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -236,11 +247,22 @@ pub extern "C" fn j_new(_env: usize, class: usize) -> i64 {
             jni::signature::RuntimeMethodSignature::from_str("()V").map_err(|_| -23)?;
         let ctor = parsed_ctor.method_signature();
         let obj: JObject = env.new_object(&cls, ctor, &[]).map_err(|_| -23)?;
-        let r = env.new_global_ref(&obj).map_err(|_| -24)?;
+        // Store a global ref to the OBJECT INSTANCE (not the class!). The
+        // first WIP stored Global<JClass>, so j_call invoked instance methods
+        // with java.lang.Class as receiver — SIGSEGV inside
+        // jni_invoke_nonstatic. Global<JObject> keeps the instance alive for
+        // process lifetime; j_call derives its class via GetObjectClass.
+        let obj_ref: jni::objects::Global<jni::objects::JObject<'static>> =
+            env.new_global_ref(&obj).map_err(|_| -24)?;
+        GLOBAL_REFS
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(handle, obj_ref);
         let mut h = HANDLES.lock().unwrap();
         h.get_or_insert_with(HashMap::new)
             .insert(handle, name.clone());
-        Ok(r.as_raw() as u64 as usize)
+        Ok(handle as usize)
     });
     match made {
         Ok(_) => handle as i64,
@@ -375,6 +397,144 @@ unsafe fn cstr_at(p: usize) -> String {
     } else {
         cstr_to_string(p as *const std::os::raw::c_char)
     }
+}
+
+/// `j_call P <0T <0T <0T <I4 <I4 >I8` → I4 : invoke an INSTANCE method on a
+/// live handle. Args: object handle, method name, JNI signature, two int
+/// arguments (unused slots pass 0 — the signature determines how many are
+/// consumed), out buffer receiving an i64 result. v1 supports methods whose
+/// args/return are among (), I (int), J (long); String returns go through
+/// j_call_static-style text handling later. Returns 0 on success, negative:
+///   -20 not ready, -21 unknown handle, -26 GetMethodID fail,
+///   -27 call failed, -29 null buffer.
+///
+/// # Safety
+/// `out_buf` must point to 8 writable bytes; method/sig must be valid
+/// NUL-terminated C strings.
+#[cfg(feature = "java")]
+#[no_mangle]
+pub unsafe extern "C" fn j_call(
+    _env: usize,
+    handle: u64,
+    method: usize,
+    sig: usize,
+    a0: i64,
+    a1: i64,
+    out_buf: *mut i64,
+) -> i32 {
+    if !JVM_READY.load(Ordering::SeqCst) {
+        return -20;
+    }
+    if out_buf.is_null() {
+        return -29;
+    }
+    // look up the global ref BEFORE attaching (no JVM touch); hold the
+    // registry lock for the whole call so the Global can be borrowed
+    let guard = GLOBAL_REFS.lock().unwrap();
+    if !guard
+        .as_ref()
+        .map(|m| m.contains_key(&handle))
+        .unwrap_or(false)
+    {
+        return -21;
+    }
+    let m_name = unsafe { cstr_at(method) };
+    let m_sig = unsafe { cstr_at(sig) };
+
+    let wrote = vm::with_env(|env| -> Result<(), i64> {
+        use jni::signature::{JavaType, Primitive, RuntimeMethodSignature};
+        use jni::strings::JNIString;
+
+        let parsed = RuntimeMethodSignature::from_str(&m_sig).map_err(|_| -26)?;
+        let msig = parsed.method_signature();
+        let args: Vec<JavaType> = msig.args().to_vec();
+        let mut vals: Vec<jni::sys::jvalue> = Vec::new();
+        // consume int-arg slots sequentially: first Int/Long param gets a0,
+        // the next gets a1 (add(a,b) must NOT become add(a,a))
+        let mut next = 0u32;
+        for p in args.iter() {
+            let v = match p {
+                JavaType::Primitive(Primitive::Int) => {
+                    let x = if next == 0 { a0 } else { a1 };
+                    next += 1;
+                    jni::sys::jvalue { i: x as i32 }
+                }
+                JavaType::Primitive(Primitive::Long) => {
+                    let x = if next == 0 { a0 } else { a1 };
+                    next += 1;
+                    jni::sys::jvalue { j: x }
+                }
+                _ => return Err(-30), // unsupported param type in v1
+            };
+            vals.push(v);
+        }
+
+        // return type comes from the borrowed signature
+        let ret: JavaType = msig.ret();
+
+        // Borrow the owned Global<JObject> (the instance) from the registry
+        // and derive its class here — GetObjectClass on the global ref is
+        // valid for process lifetime and needs no extra bookkeeping.
+        let global: &jni::objects::Global<jni::objects::JObject<'static>> = guard
+            .as_ref()
+            .and_then(|m| m.get(&handle))
+            .expect("checked above");
+        let jobj: &jni::objects::JObject = global.as_ref();
+        let cls = env.get_object_class(jobj).map_err(|e| {
+            env.exception_clear();
+            eprintln!("[apl-java] GetObjectClass for handle {handle} failed: {e:?}");
+            -25i64
+        })?;
+        let jmethod = env
+            .get_method_id(
+                &cls,
+                JNIString::from(m_name.as_str()),
+                parsed.method_signature(),
+            )
+            .map_err(|e| {
+                // a failed lookup leaves a pending exception that would
+                // poison every later JNI call in this session
+                env.exception_clear();
+                eprintln!("[apl-java] GetMethodID {m_name}{m_sig} failed: {e:?}");
+                -26
+            })?;
+        let ret_jtype = match ret {
+            JavaType::Primitive(Primitive::Int) | JavaType::Primitive(Primitive::Long) => ret,
+            JavaType::Object | JavaType::Array => JavaType::Object,
+            _ => {
+                drop(guard);
+                return Err(-30);
+            }
+        };
+        let call = unsafe { env.call_method_unchecked(jobj, jmethod, ret_jtype, &vals) };
+        drop(guard);
+        let out = call.map_err(|_| -27)?;
+        let n: i64 = match ret {
+            JavaType::Primitive(Primitive::Int) => out.i().map_err(|_| -28)? as i64,
+            JavaType::Primitive(Primitive::Long) => out.j().map_err(|_| -28)?,
+            _ => return Err(-30),
+        };
+        unsafe { *out_buf = n };
+        Ok(())
+    });
+    match wrote {
+        Ok(_) => 0,
+        Err(code) => code as i32,
+    }
+}
+
+#[cfg(not(feature = "java"))]
+#[no_mangle]
+pub unsafe extern "C" fn j_call(
+    _env: usize,
+    _handle: u64,
+    _method: usize,
+    _sig: usize,
+    _a0: i64,
+    _a1: i64,
+    _out_buf: *mut i64,
+) -> i32 {
+    -10
 }
 
 /// `j_ready` → I4 : 1 once j_init has succeeded, else 0.
