@@ -9,6 +9,7 @@ pub mod comma;
 pub mod depth;
 pub mod domino;
 pub mod enclose;
+pub mod encode_decode;
 pub mod enlist;
 pub mod epsilon;
 pub mod ffi;

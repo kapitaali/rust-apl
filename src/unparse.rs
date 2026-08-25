@@ -39,6 +39,8 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Epsilon => "∈",
         Prim::Enclose => "⊂",
         Prim::Disclose => "⊃",
+        Prim::Encode => "⊤",
+        Prim::Decode => "⊥",
         Prim::Depth => "≡",
         Prim::Transpose => "⍉",
         Prim::Domino => "⌹",

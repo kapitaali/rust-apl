@@ -90,6 +90,8 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("∊", Prim::Epsilon), // SMALL ELEMENT OF — alias used by GNU APL
     ("⊂", Prim::Enclose),
     ("⊃", Prim::Disclose),
+    ("⊤", Prim::Encode),
+    ("⊥", Prim::Decode),
     ("≡", Prim::Depth),
     ("≤", Prim::LessEq),
     ("<", Prim::Less),

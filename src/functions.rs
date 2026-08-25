@@ -55,6 +55,8 @@ pub enum Prim {
     And,
     Or,
     Comma,
+    Encode, // ⊤ — dyadic: A⊤B (representation)
+    Decode, // ⊥ — dyadic: A⊥B (base value)
 }
 
 impl Prim {
@@ -86,6 +88,8 @@ impl Prim {
             "⍉" => Prim::Transpose,
             "⊂" => Prim::Enclose,
             "⊃" => Prim::Disclose,
+            "⊤" => Prim::Encode,
+            "⊥" => Prim::Decode,
             "≡" => Prim::Depth,
             "≤" => Prim::LessEq,
             "<" => Prim::Less,
@@ -283,6 +287,11 @@ impl Prim {
             // consecutive elements of A have the same non-zero key.
             // Simplified: A is a boolean/int vector, B is a simple vector.
             Prim::Enclose => crate::partition::partition(a, b),
+
+            // A⊤B — encode (representation)
+            Prim::Encode => crate::encode_decode::encode(a, b),
+            // A⊥B — decode (base value)
+            Prim::Decode => crate::encode_decode::decode(a, b),
 
             // A ⍴ B → reshape
             Prim::Rho => {
