@@ -56,6 +56,14 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::And => "∧",
         Prim::Or => "∨",
         Prim::Without => "∼",
+        Prim::Union => "∪",
+        Prim::Inter => "∩",
+        Prim::Comma1 => "⍪",
+        Prim::NotMatch => "≢",
+        Prim::Left => "⊣",
+        Prim::Right => "⊢",
+        Prim::Nand => "⍲",
+        Prim::Nor => "⍱",
         _ => "?",
     }
 }

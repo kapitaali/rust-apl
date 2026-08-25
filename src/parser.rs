@@ -3346,4 +3346,154 @@ mod tests {
             .collect();
         assert_eq!(ints, vec![1, 2]);
     }
+
+    #[test]
+    fn test_unique_monadic() {
+        // ∪1 2 1 3 2 = 1 2 3
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "∪1 2 1 3 2");
+        assert_eq!(v.element_count(), 3);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_union_dyadic() {
+        // 1 2 3∪3 4 5 = 1 2 3 4 5
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2 3∪3 4 5");
+        assert_eq!(v.element_count(), 5);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_intersection_dyadic() {
+        // 1 2 3 4∩2 4 6 = 2 4
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2 3 4∩2 4 6");
+        assert_eq!(v.element_count(), 2);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![2, 4]);
+    }
+
+    #[test]
+    fn test_table_monadic() {
+        // ⍪1 2 3 = 3×1 matrix
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍪1 2 3");
+        assert_eq!(v.rank(), 2);
+        assert_eq!(v.get_shape_item(0), 3);
+        assert_eq!(v.get_shape_item(1), 1);
+    }
+
+    #[test]
+    fn test_tally_monadic() {
+        // ≢1 2 3 = 3
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "≢1 2 3");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_tally_scalar() {
+        // ≢42 = 1
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "≢42");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_catenate_first() {
+        // 1 2⍪3 4 5 = 1 2 3 4 5
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2⍪3 4 5");
+        assert_eq!(v.element_count(), 5);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_not_match_same() {
+        // 1 2 3≢1 2 3 = 0
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2 3≢1 2 3");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_not_match_diff() {
+        // 1 2 3≢1 2 4 = 1
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2 3≢1 2 4");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_left_dyadic() {
+        // 1⊣2 = 1
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1⊣2");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_right_dyadic() {
+        // 1⊢2 = 2
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1⊢2");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_left_monadic() {
+        // ⊣1 2 3 = 1 2 3 (identity)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⊣1 2 3");
+        assert_eq!(v.element_count(), 3);
+    }
+
+    #[test]
+    fn test_right_monadic() {
+        // ⊢1 2 3 = 1 2 3 (identity)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⊢1 2 3");
+        assert_eq!(v.element_count(), 3);
+    }
+
+    #[test]
+    fn test_nand() {
+        // 0⍲0 = 1, 1⍲1 = 0
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "0⍲0");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+        let v = eval_one(&mut env, "1⍲1");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_nor() {
+        // 0⍱0 = 1, 1⍱0 = 0
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "0⍱0");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+        let v = eval_one(&mut env, "1⍱0");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 0);
+    }
 }

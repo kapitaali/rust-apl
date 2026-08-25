@@ -84,6 +84,14 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⍟", Prim::NatLog),
     ("∣", Prim::Magnitude),
     ("∼", Prim::Without),
+    ("∪", Prim::Union),
+    ("∩", Prim::Inter),
+    ("⍪", Prim::Comma1),
+    ("≢", Prim::NotMatch),
+    ("⊣", Prim::Left),
+    ("⊢", Prim::Right),
+    ("⍲", Prim::Nand),
+    ("⍱", Prim::Nor),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
     ("⌽", Prim::Reverse),
@@ -480,5 +488,31 @@ mod tests {
         // ∼ should tokenize as Without
         let toks = tokenize("1 2 3∼2 3 4").unwrap();
         assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Without)));
+    }
+
+    #[test]
+    fn test_union_inter_tokenize() {
+        // ∪ should tokenize as Union
+        let toks = tokenize("∪1 2 1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Union)));
+        // ∩ should tokenize as Inter
+        let toks = tokenize("1 2∩2 3").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Inter)));
+    }
+
+    #[test]
+    fn test_new_primitives_tokenize() {
+        let toks = tokenize("⍪1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Comma1)));
+        let toks = tokenize("≢1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NotMatch)));
+        let toks = tokenize("⊣1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Left)));
+        let toks = tokenize("⊢1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Right)));
+        let toks = tokenize("1⍲1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Nand)));
+        let toks = tokenize("1⍱1").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Nor)));
     }
 }

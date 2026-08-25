@@ -55,9 +55,17 @@ pub enum Prim {
     And,
     Or,
     Comma,
-    Encode,  // ⊤ — dyadic: A⊤B (representation)
-    Decode,  // ⊥ — dyadic: A⊥B (base value)
-    Without, // ∼ — dyadic: A∼B (set difference)
+    Encode,   // ⊤ — dyadic: A⊤B (representation)
+    Decode,   // ⊥ — dyadic: A⊥B (base value)
+    Without,  // ∼ — dyadic: A∼B (set difference)
+    Union,    // ∪ — monadic: unique, dyadic: A∪B (union)
+    Inter,    // ∩ — dyadic: A∩B (intersection)
+    Comma1,   // ⍪ — monadic: table, dyadic: catenate first axis
+    NotMatch, // ≢ — monadic: tally, dyadic: not match
+    Left,     // ⊣ — monadic: identity, dyadic: A
+    Right,    // ⊢ — monadic: identity, dyadic: B
+    Nand,     // ⍲ — dyadic: not and
+    Nor,      // ⍱ — dyadic: not or
 }
 
 impl Prim {
@@ -80,9 +88,17 @@ impl Prim {
             "○" => Prim::PiTimes,
             "⍟" => Prim::NatLog,
             "∣" => Prim::Magnitude,
-            "?" => Prim::Roll,    // ? = roll
-            "∼" => Prim::Without, // ∼ = without (set difference)
-            "~" => Prim::Not,     // ~ (ASCII tilde) = logical not
+            "?" => Prim::Roll,     // ? = roll
+            "∼" => Prim::Without,  // ∼ = without (set difference)
+            "∪" => Prim::Union,    // ∪ = union (unique / set union)
+            "∩" => Prim::Inter,    // ∩ = intersection
+            "⍪" => Prim::Comma1,   // ⍪ = table / catenate first axis
+            "≢" => Prim::NotMatch, // ≢ = tally / not match
+            "⊣" => Prim::Left,     // ⊣ = left (identity / A)
+            "⊢" => Prim::Right,    // ⊢ = right (identity / B)
+            "⍲" => Prim::Nand,     // ⍲ = not and
+            "⍱" => Prim::Nor,      // ⍱ = not or
+            "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
             "⌽" => Prim::Reverse,
@@ -152,6 +168,9 @@ impl Prim {
             // ⊂B — enclose
             Prim::Enclose => crate::enclose::enclose(b),
 
+            // ∪B — unique (monadic)
+            Prim::Union => crate::union::unique(b),
+
             // ⊃B — disclose
             Prim::Disclose => crate::enclose::disclose(b),
 
@@ -172,6 +191,18 @@ impl Prim {
             // ⍋B / ⍒B — grade up/down
             Prim::GradeUp => crate::sort::grade_up(b),
             Prim::GradeDown => crate::sort::grade_down(b),
+
+            // ⍪B — table: turn B into a matrix (1-column for vectors)
+            Prim::Comma1 => crate::comma1::table(b),
+
+            // ≢B — tally: number of elements in B (rank-1 length)
+            Prim::NotMatch => crate::comma1::tally(b),
+
+            // ⊣B — left: identity (returns B unchanged)
+            Prim::Left => Ok(b.clone()),
+
+            // ⊢B — right: identity (returns B unchanged)
+            Prim::Right => Ok(b.clone()),
 
             // ?B — roll: random integer from 0..B-1
             Prim::Roll => {
@@ -327,6 +358,22 @@ impl Prim {
             Prim::Decode => crate::encode_decode::decode(a, b),
             // A∼B — without: elements of A not in B (set difference)
             Prim::Without => without(a, b),
+            // A∪B — union: unique of A,B concatenated
+            Prim::Union => crate::union::union(a, b),
+            // A∩B — intersection: elements of A also in B
+            Prim::Inter => crate::union::intersection(a, b),
+            // A⍪B — catenate along first axis
+            Prim::Comma1 => crate::comma1::catenate_first(a, b),
+            // A≢B — not match: 0 if match, 1 if not
+            Prim::NotMatch => crate::not_match::not_match(a, b),
+            // A⊣B — left: returns A
+            Prim::Left => Ok(a.clone()),
+            // A⊢B — right: returns B
+            Prim::Right => Ok(b.clone()),
+            // A⍲B — nand
+            Prim::Nand => elementwise(a, b, cell::bif_nand),
+            // A⍱B — nor
+            Prim::Nor => elementwise(a, b, cell::bif_nor),
             // A⍟B — logarithm base A of B
             Prim::NatLog => elementwise(a, b, cell::bif_logarithm),
 

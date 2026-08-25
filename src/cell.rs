@@ -699,6 +699,28 @@ pub fn bif_or(a: &Cell, b: &Cell) -> AplResult<Cell> {
     }
 }
 
+/// Dyadic `⍲` — logical NAND.
+pub fn bif_nand(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    let x = cell_as_f64(a)?;
+    let y = cell_as_f64(b)?;
+    if x == 0.0 || y == 0.0 {
+        Ok(Cell::Int(1))
+    } else {
+        Ok(Cell::Int(0))
+    }
+}
+
+/// Dyadic `⍱` — logical NOR.
+pub fn bif_nor(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    let x = cell_as_f64(a)?;
+    let y = cell_as_f64(b)?;
+    if x == 0.0 && y == 0.0 {
+        Ok(Cell::Int(1))
+    } else {
+        Ok(Cell::Int(0))
+    }
+}
+
 /// greatest common divisor of non-negative magnitudes
 fn gcd(a: i64, b: i64) -> i64 {
     let (mut a, mut b) = (a.abs(), b.abs());

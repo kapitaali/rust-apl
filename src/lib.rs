@@ -6,6 +6,7 @@
 pub mod boxdisplay;
 pub mod cell;
 pub mod comma;
+pub mod comma1;
 pub mod depth;
 pub mod domino;
 pub mod enclose;
@@ -17,6 +18,7 @@ pub mod functions;
 pub mod functions_def;
 pub mod index_of;
 pub mod inner;
+pub mod not_match;
 pub mod operators;
 pub mod outer;
 #[cfg(test)]
@@ -33,6 +35,7 @@ pub mod take_drop;
 pub mod tokenizer;
 pub mod transpose;
 pub mod types;
+pub mod union;
 pub mod unparse;
 pub mod value;
 pub mod workspace;
