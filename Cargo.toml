@@ -10,6 +10,7 @@ members = ["crates/apl-ext", "crates/demo-plugin", "crates/apl-java"]
 rayon = "1.10"
 smallvec = { version = "1.13", features = ["union"] }
 libloading = "0.8"
+rand = "0.8"
 apl-ext = { path = "crates/apl-ext" }
 
 [profile.release]

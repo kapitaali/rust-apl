@@ -34,6 +34,7 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Take => "↑",
         Prim::Drop => "↓",
         Prim::Reverse | Prim::Rotate => "⌽",
+        Prim::Roll => "?",
         Prim::GradeUp => "⍋",
         Prim::GradeDown => "⍒",
         Prim::Epsilon => "∈",

@@ -55,8 +55,8 @@ pub enum Prim {
     And,
     Or,
     Comma,
-    Encode, // ⊤ — dyadic: A⊤B (representation)
-    Decode, // ⊥ — dyadic: A⊥B (base value)
+    Encode,  // ⊤ — dyadic: A⊤B (representation)
+    Decode,  // ⊥ — dyadic: A⊥B (base value)
 }
 
 impl Prim {
@@ -170,6 +170,17 @@ impl Prim {
             Prim::GradeUp => crate::sort::grade_up(b),
             Prim::GradeDown => crate::sort::grade_down(b),
 
+            // ?B — roll: random integer from 0..B-1
+            Prim::Roll => {
+                use rand::Rng;
+                let n = b.first_cell().map(|c| c.get_int_value()).unwrap_or(Ok(1))?;
+                if n <= 0 {
+                    return Err(ErrorCode::DomainError);
+                }
+                let val = rand::thread_rng().gen_range(0..n);
+                Ok(ValueP::scalar_from(Cell::Int(val)))
+            }
+
             // ── structural ────────────────────────────────────────────────
             // ⍴B → shape vector
             Prim::Rho => {
@@ -274,6 +285,25 @@ impl Prim {
 
             // A⌹B — matrix divide (solve B X = A)
             Prim::Domino => crate::domino::domino_dyadic(a, b),
+
+            // A?B — deal: A unique random integers from 0..B-1
+            Prim::Roll => {
+                use rand::Rng;
+                let n = b.first_cell().map(|c| c.get_int_value()).unwrap_or(Ok(1))?;
+                let k = a.first_cell().map(|c| c.get_int_value()).unwrap_or(Ok(1))?;
+                if n <= 0 || k < 0 || k > n {
+                    return Err(ErrorCode::DomainError);
+                }
+                let mut rng = rand::thread_rng();
+                let mut pool: Vec<i64> = (0..n).collect();
+                for i in 0..k as usize {
+                    let j = rng.gen_range(i..n as usize);
+                    pool.swap(i, j);
+                }
+                pool.truncate(k as usize);
+                Ok(ValueP::int_vector(&pool))
+            }
+
             Prim::And => elementwise(a, b, cell::bif_and),
             Prim::Or => elementwise(a, b, cell::bif_or),
 

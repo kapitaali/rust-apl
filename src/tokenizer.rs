@@ -73,6 +73,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("×", Prim::Multiply),
     ("÷", Prim::Divide),
     ("!", Prim::Factorial),
+    ("?", Prim::Roll),
     ("⌈", Prim::Ceiling),
     ("⌊", Prim::Floor),
     ("⍳", Prim::Iota),
