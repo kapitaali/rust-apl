@@ -487,6 +487,22 @@ pub fn bif_nat_log(b: &Cell) -> AplResult<Cell> {
     })
 }
 
+/// Dyadic logarithm: A⍟B = log_A(B) = ln(B) / ln(A)
+pub fn bif_logarithm(a: &Cell, b: &Cell) -> AplResult<Cell> {
+    // For complex or mixed, compute via complex logs
+    let ca = a.get_complex_value()?;
+    let cb = b.get_complex_value()?;
+    let ln_a = APLComplex::new(ca.re.abs().ln(), ca.im.atan2(ca.re));
+    let ln_b = APLComplex::new(cb.re.abs().ln(), cb.im.atan2(cb.re));
+    let result = ln_b / ln_a;
+    // If both inputs were real and result is real, return Float
+    if ca.im == 0.0 && cb.im == 0.0 && result.im == 0.0 {
+        Ok(Cell::Float(result.re))
+    } else {
+        Ok(Cell::Complex(result))
+    }
+}
+
 pub fn bif_floor(b: &Cell) -> AplResult<Cell> {
     Ok(match b {
         Cell::Int(v) => Cell::Int(*v),
@@ -1016,6 +1032,26 @@ mod tests {
         match bif_direction(&Cell::int(-7)).unwrap() {
             Cell::Int(v) => assert_eq!(v, -1),
             _ => panic!("expected int"),
+        }
+    }
+
+    #[test]
+    fn test_logarithm() {
+        // 2⍟8 = 3 (log base 2 of 8)
+        match bif_logarithm(&Cell::int(2), &Cell::int(8)).unwrap() {
+            Cell::Float(v) => assert!((v - 3.0).abs() < 1e-13),
+            _ => panic!("expected float"),
+        }
+        // 10⍟1000 = 3
+        match bif_logarithm(&Cell::int(10), &Cell::int(1000)).unwrap() {
+            Cell::Float(v) => assert!((v - 3.0).abs() < 1e-13),
+            _ => panic!("expected float"),
+        }
+        // ⍟ is the same symbol for both monadic and dyadic
+        // monadic: ⍟e = 1
+        match bif_nat_log(&Cell::Float(std::f64::consts::E)).unwrap() {
+            Cell::Float(v) => assert!((v - 1.0).abs() < 1e-13),
+            _ => panic!("expected float"),
         }
     }
 }

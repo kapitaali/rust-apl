@@ -55,8 +55,8 @@ pub enum Prim {
     And,
     Or,
     Comma,
-    Encode,  // ⊤ — dyadic: A⊤B (representation)
-    Decode,  // ⊥ — dyadic: A⊥B (base value)
+    Encode, // ⊤ — dyadic: A⊤B (representation)
+    Decode, // ⊥ — dyadic: A⊥B (base value)
 }
 
 impl Prim {
@@ -77,6 +77,7 @@ impl Prim {
             "," | "¸" => Prim::Comma,
             "*" | "⋆" => Prim::Exponential,
             "○" => Prim::PiTimes,
+            "⍟" => Prim::NatLog,
             "∣" => Prim::Magnitude,
             "?" | "∼" => Prim::Roll, // ? = roll; ∼ (TILDE OPERATOR) kept as roll alias
             "~" => Prim::Not,        // ~ (ASCII tilde) = logical not
@@ -322,6 +323,8 @@ impl Prim {
             Prim::Encode => crate::encode_decode::encode(a, b),
             // A⊥B — decode (base value)
             Prim::Decode => crate::encode_decode::decode(a, b),
+            // A⍟B — logarithm base A of B
+            Prim::NatLog => elementwise(a, b, cell::bif_logarithm),
 
             // A ⍴ B → reshape
             Prim::Rho => {

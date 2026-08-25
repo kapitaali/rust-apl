@@ -81,6 +81,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     (",", Prim::Comma),
     ("⋆", Prim::Exponential),
     ("○", Prim::PiTimes),
+    ("⍟", Prim::NatLog),
     ("∣", Prim::Magnitude),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
@@ -461,5 +462,15 @@ mod tests {
             crate::functions::Prim::And,
             crate::functions::Prim::Equal
         )));
+    }
+
+    #[test]
+    fn test_logarithm_tokenize() {
+        // ⍟ should tokenize as NatLog
+        let toks = tokenize("⍟2").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NatLog)));
+        // dyadic: 2⍟8
+        let toks = tokenize("2⍟8").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NatLog)));
     }
 }
