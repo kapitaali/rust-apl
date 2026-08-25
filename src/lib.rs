@@ -30,6 +30,7 @@ pub mod replicate;
 pub mod rotate;
 pub mod shape;
 pub mod sort;
+pub mod squad;
 pub mod sysvars;
 pub mod take_drop;
 pub mod tokenizer;

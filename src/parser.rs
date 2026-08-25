@@ -752,7 +752,9 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 let (operand, used) = parse_simple(&toks[1..])?;
                 return Ok((Expr::Monadic(p, Box::new(operand)), used + 1));
             }
-            let (operand, used) = parse_term(&toks[1..])?;
+            // monadic functions bind to the WHOLE expression to their right
+            // (APL semantics): ⊖2 3⍴⍳6 = ⊖(2 3⍴⍳6), not (⊖2) 3⍴⍳6
+            let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::Monadic(p, Box::new(operand)), used + 1))
         }
         Tok::Commute => {
@@ -2073,6 +2075,21 @@ impl Environment {
                 // A⍳B results are ⎕IO-shifted
                 if *p == crate::functions::Prim::Iota {
                     return crate::index_of::index_of_io(&av, &bv, self.get_io()?);
+                }
+                // A⌷B — general index: honor ⎕IO
+                if *p == crate::functions::Prim::Squad {
+                    let io = self.get_io()?;
+                    let shifted = if io == 0 {
+                        av
+                    } else {
+                        let minus_io = ValueP::scalar_from(crate::cell::Cell::Int(-io));
+                        crate::functions::eval_dyadic_public(
+                            crate::functions::Prim::Add,
+                            &av,
+                            &minus_io,
+                        )?
+                    };
+                    return crate::squad::squad(&shifted, &bv);
                 }
                 // implicit disclosure of scalar Pointer args (indexed scalars)
                 crate::functions::eval_dyadic_public(*p, &av, &bv)
@@ -3495,5 +3512,47 @@ mod tests {
         assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
         let v = eval_one(&mut env, "1⍱0");
         assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_squad_vector() {
+        // 2⌷10 20 30 = 30 (0-based, so index 2 → value 30)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "2⌷10 20 30");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 30);
+    }
+
+    #[test]
+    fn test_squad_matrix() {
+        // 2 3⌷3 4⍴⍳12 → row 2, col 3 → value 11 (0-based)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "2 3⌷3 4⍴⍳12");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 11);
+    }
+
+    #[test]
+    fn test_reverse_first_axis() {
+        // ⊖2 3⍴⍳6 = [[3 4 5] [0 1 2]] (0-based)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⊖2 3⍴⍳6");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![3, 4, 5, 0, 1, 2]);
+    }
+
+    #[test]
+    fn test_rotate_first_axis() {
+        // 1⊖2 3⍴⍳6 = [[3 4 5] [0 1 2]] (0-based)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1⊖2 3⍴⍳6");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![3, 4, 5, 0, 1, 2]);
     }
 }

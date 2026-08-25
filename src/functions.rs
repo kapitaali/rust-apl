@@ -66,6 +66,8 @@ pub enum Prim {
     Right,    // ⊢ — monadic: identity, dyadic: B
     Nand,     // ⍲ — dyadic: not and
     Nor,      // ⍱ — dyadic: not or
+    Squad,    // ⌷ — dyadic: general index
+    Rotate1,  // ⊖ — monadic: reverse first axis, dyadic: rotate first axis
 }
 
 impl Prim {
@@ -98,6 +100,8 @@ impl Prim {
             "⊢" => Prim::Right,    // ⊢ = right (identity / B)
             "⍲" => Prim::Nand,     // ⍲ = not and
             "⍱" => Prim::Nor,      // ⍱ = not or
+            "⌷" => Prim::Squad,    // ⌷ = general index
+            "⊖" => Prim::Rotate1,  // ⊖ = reverse/rotate first axis
             "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
@@ -203,6 +207,12 @@ impl Prim {
 
             // ⊢B — right: identity (returns B unchanged)
             Prim::Right => Ok(b.clone()),
+
+            // ⊖B — reverse first axis
+            Prim::Rotate1 => crate::squad::reverse_first(b),
+
+            // ⌷B — general index (monadic: identity-like, but rarely used alone)
+            Prim::Squad => Ok(b.clone()),
 
             // ?B — roll: random integer from 0..B-1
             Prim::Roll => {
@@ -374,6 +384,10 @@ impl Prim {
             Prim::Nand => elementwise(a, b, cell::bif_nand),
             // A⍱B — nor
             Prim::Nor => elementwise(a, b, cell::bif_nor),
+            // A⊖B — rotate first axis
+            Prim::Rotate1 => crate::squad::rotate_first(a, b),
+            // A⌷B — general index
+            Prim::Squad => crate::squad::squad(a, b),
             // A⍟B — logarithm base A of B
             Prim::NatLog => elementwise(a, b, cell::bif_logarithm),
 

@@ -92,6 +92,8 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⊢", Prim::Right),
     ("⍲", Prim::Nand),
     ("⍱", Prim::Nor),
+    ("⌷", Prim::Squad),
+    ("⊖", Prim::Rotate1),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
     ("⌽", Prim::Reverse),
