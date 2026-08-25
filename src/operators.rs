@@ -163,6 +163,9 @@ fn apply_prim(lo: Prim, a: &Cell, b: &Cell) -> AplResult<Cell> {
         Prim::Power => crate::cell::bif_power(a, b),
         Prim::And => crate::cell::bif_and(a, b),
         Prim::Or => crate::cell::bif_or(a, b),
+        // ,/ — reduce-catenate: not a scalar fold; unsupported here (the
+        // parser rejects Comma in reduce position before reaching this arm)
+        Prim::Comma => Err(ErrorCode::NonceError),
         Prim::Equal => crate::cell::bif_equal(a, b),
         Prim::NotEqual => crate::cell::bif_not_equal(a, b),
         Prim::Less => crate::cell::bif_less(a, b),

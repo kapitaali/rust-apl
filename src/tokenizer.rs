@@ -77,6 +77,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⌊", Prim::Floor),
     ("⍳", Prim::Iota),
     ("⍴", Prim::Rho),
+    (",", Prim::Comma),
     ("⋆", Prim::Exponential),
     ("○", Prim::PiTimes),
     ("∣", Prim::Magnitude),

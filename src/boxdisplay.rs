@@ -278,10 +278,14 @@ mod tests {
 
     #[test]
     fn test_mixed_matrix_rows() {
-        // 2 2⍴1 'a' 2 'b': mixed matrix renders per-cell boxes in rows
+        // 2 2⍴1 'a' 2 'b': all cells SIMPLE (scalar strand items flatten),
+        // so GNU APL renders it as a plain matrix — no boxes. Verified
+        // against reference APL output "1 a / 2 b".
         let m = env_vec("N←2 2⍴1 'a' 2 'b'");
         let lines = render(&m);
-        // two rows of boxes → at least 4 lines (top/bottom per row)
-        assert!(lines.iter().filter(|l| l.contains('┏')).count() >= 2);
+        assert_eq!(lines.len(), 2); // one plain text line per row
+        assert!(lines.iter().all(|l| !l.contains('┏')));
+        assert!(lines[0].contains('1') && lines[0].contains('a'));
+        assert!(lines[1].contains('2') && lines[1].contains('b'));
     }
 }

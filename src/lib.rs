@@ -5,6 +5,7 @@
 
 pub mod boxdisplay;
 pub mod cell;
+pub mod comma;
 pub mod depth;
 pub mod domino;
 pub mod enclose;

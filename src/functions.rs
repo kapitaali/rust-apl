@@ -54,6 +54,7 @@ pub enum Prim {
     Domino,
     And,
     Or,
+    Comma,
 }
 
 impl Prim {
@@ -71,6 +72,7 @@ impl Prim {
             "∧" => Prim::And,
             "∨" => Prim::Or,
             "⍴" => Prim::Rho,
+            "," | "¸" => Prim::Comma,
             "*" | "⋆" => Prim::Exponential,
             "○" => Prim::PiTimes,
             "∣" => Prim::Magnitude,
@@ -151,6 +153,9 @@ impl Prim {
 
             // ≡B — depth
             Prim::Depth => crate::depth::depth(b),
+
+            // ,B — ravel
+            Prim::Comma => crate::comma::ravel(b),
 
             // ↑B — disclose (pick first/nested value out of a pointer scalar)
             Prim::Take if b.first_cell().map(|c| c.is_pointer_cell()).unwrap_or(false) => {
@@ -270,6 +275,9 @@ impl Prim {
 
             // A≡B — match
             Prim::Depth => crate::depth::equiv(a, b),
+
+            // A,B — catenate (last axis)
+            Prim::Comma => crate::comma::catenate(a, b),
 
             // A ⍴ B → reshape
             Prim::Rho => {

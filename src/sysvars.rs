@@ -117,6 +117,38 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         }
         "OFF" => None, // caller exits
         "" => Some(vec!["(empty system command)".to_string()]),
+        "COPY" | "IN" => {
+            // minimal )COPY: evaluate each line of an APL source file in
+            // the live workspace. Covers ⎕NA associations, variable and
+            // dfn definitions (single-line bodies). Stops at first error.
+            let name = parts.next().unwrap_or("");
+            if name.is_empty() {
+                return Some(vec![format!("USAGE: ){} file", cmd)]);
+            }
+            let text = match std::fs::read_to_string(name) {
+                Ok(t) => t,
+                Err(e) => return Some(vec![format!("ERROR: cannot read {name}: {e}")]),
+            };
+            for (lineno, raw) in text.lines().enumerate() {
+                let line = raw.trim();
+                if line.is_empty() || line.starts_with('⍝') {
+                    continue;
+                }
+                // system commands inside a copied file run too
+                if let Some(rest) = line.strip_prefix(')') {
+                    if let Some(out) = syscmd(rest, env) {
+                        for l in out {
+                            println!("{l}");
+                        }
+                    }
+                    continue;
+                }
+                if let Err(e) = env.eval_line(line) {
+                    return Some(vec![format!("ERROR: {} line {}: {}", name, lineno + 1, e)]);
+                }
+            }
+            Some(vec![format!("COPIED {}", name)])
+        }
         other => Some(vec![format!("UNKNOWN SYSTEM COMMAND: {})", other)]),
     }
 }

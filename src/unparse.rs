@@ -25,6 +25,7 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Floor => "⌊",
         Prim::Iota => "⍳",
         Prim::Rho => "⍴",
+        Prim::Comma => ",",
         Prim::Exponential => "⋆",
         Prim::NatLog => "⍟",
         Prim::Magnitude => "∣",

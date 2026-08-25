@@ -789,7 +789,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::Scan1Op(p, Box::new(operand)), used + 1))
         }
-        Tok::Num(_) => parse_strand(toks),
+        Tok::Num(_) | Tok::Str(_) => parse_strand(toks),
         _ => parse_atom(toks),
     }
 }
@@ -880,8 +880,18 @@ fn parse_nested_strand_from(toks: &[Tok], mut acc: Vec<(Expr, usize)>) -> AplRes
         }
     }
 
-    // each element evaluates to an enclosed value; build NestedVec
-    let items: Vec<Expr> = acc.into_iter().map(|(e, _)| e).collect();
+    // Each element must contribute ONE enclosed cell. Wrap items in an
+    // explicit Enclose unless they're already syntactic enclosures
+    // (`⊂…`) — eval's strand rule keeps rank-0 (pointer) results as-is,
+    // so `(1)(2 3)` → nested [1],[2 3] and `(⊂x)(⊂y)` doesn't
+    // double-encode.
+    let items: Vec<Expr> = acc
+        .into_iter()
+        .map(|(e, _)| match e {
+            ref m @ Expr::Monadic(crate::functions::Prim::Enclose, _) => m.clone(),
+            other => Expr::Monadic(crate::functions::Prim::Enclose, Box::new(other)),
+        })
+        .collect();
     Ok((Expr::NestedVec(items), used))
 }
 
@@ -1621,15 +1631,25 @@ impl Environment {
                 vs.iter().map(|&v| crate::cell::Cell::from_f64(v)).collect(),
             )),
             Expr::NestedVec(items) => {
-                // evaluate each element and enclose it
-                let mut ravel = Vec::with_capacity(items.len());
+                // Strand semantics (GNU APL): any SINGLE-ELEMENT item
+                // contributes its cell directly (`1 'a' 2` → flat mixed
+                // vector, ≡ = 1 — a one-char string is still one cell);
+                // multi-element items are enclosed once (`'ab' 'cd'` →
+                // 2-element nested vector). Paren-strand items arrive
+                // pre-wrapped in Enclose, so their rank-0 pointer results
+                // pass through unchanged ((1)(2 3) → ≡ = 2).
+                let mut ravel: Vec<crate::cell::Cell> = Vec::new();
                 for item in items {
                     let v = self.eval(item)?;
-                    let enclosed = ValueP::nested(v);
-                    ravel.push(enclosed.first_cell().unwrap().clone());
+                    if v.element_count() == 1 {
+                        ravel.push(v.first_cell().unwrap().clone());
+                    } else {
+                        let enclosed = ValueP::nested(v);
+                        ravel.push(enclosed.first_cell().unwrap().clone());
+                    }
                 }
                 Ok(ValueP::from_ravel_like(
-                    &ValueP::vector(items.len() as i64),
+                    &ValueP::vector(ravel.len() as i64),
                     ravel,
                 ))
             }
@@ -2320,27 +2340,18 @@ mod tests {
 
     #[test]
     fn test_mixed_strand() {
-        // 1 'a' 2 is a mixed strand → nested vector of enclosed scalars
+        // 1 'a' 2 is a mixed SIMPLE strand → flat vector (GNU APL rule:
+        // scalar strand items contribute their cell directly; ≡ = 1)
         let mut env = Environment::new();
         let v = eval_one(&mut env, "1 'a' 2");
         assert_eq!(v.element_count(), 3);
-        for c in v.cells() {
-            assert!(
-                matches!(c, crate::cell::Cell::Pointer(_)),
-                "expected pointers in a mixed strand"
-            );
-        }
-        // disclose: 1 'a' 2
-        let first = match &v.cells()[0] {
-            crate::cell::Cell::Pointer(p) => p.value.clone(),
-            _ => panic!(),
-        };
-        assert_eq!(first.cells(), &[crate::cell::Cell::Int(1)][..]);
-        let second = match &v.cells()[1] {
-            crate::cell::Cell::Pointer(p) => p.value.clone(),
-            _ => panic!(),
-        };
-        assert_eq!(second.cells(), &[crate::cell::Cell::Char(97)][..]); // 'a'
+        assert_eq!(
+            crate::depth::depth(&v).unwrap().first_cell().cloned(),
+            Some(crate::cell::Cell::Int(1))
+        );
+        assert_eq!(v.cells()[0], crate::cell::Cell::Int(1));
+        assert_eq!(v.cells()[1], crate::cell::Cell::Char(97)); // 'a'
+        assert_eq!(v.cells()[2], crate::cell::Cell::Int(2));
     }
 
     #[test]
