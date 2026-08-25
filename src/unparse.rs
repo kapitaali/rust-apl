@@ -66,6 +66,8 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Nor => "⍱",
         Prim::Squad => "⌷",
         Prim::Rotate1 => "⊖",
+        Prim::Format => "⍕",
+        Prim::Where => "⍸",
         _ => "?",
     }
 }

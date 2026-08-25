@@ -2,7 +2,6 @@
 //!
 //! Mirrors `Bif_F2_INDEX` and `Bif_F12_ROTATE1` in C++ (simplified).
 
-use crate::cell::Cell;
 use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
@@ -28,7 +27,7 @@ pub fn squad(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         .collect::<Result<Vec<_>, _>>()?;
     // Bounds check
     for (i, &idx) in indices.iter().enumerate() {
-        let axis_len = if i < rank as usize {
+        let axis_len = if i < rank {
             b.get_shape_item(i as i16)
         } else {
             1
@@ -110,6 +109,7 @@ pub fn rotate_first(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell::Cell;
 
     #[test]
     fn test_squad_vector() {

@@ -2015,6 +2015,25 @@ impl Environment {
                         self.get_io()?,
                     );
                 }
+                // ⍸B yields positions, so it is ⎕IO-shifted too
+                if *p == crate::functions::Prim::Where {
+                    let zero_based = crate::format::where_indices(&bv)?;
+                    let io = self.get_io()?;
+                    if io == 0 {
+                        return Ok(zero_based);
+                    }
+                    let plus_io = ValueP::scalar_from(crate::cell::Cell::Int(io));
+                    return crate::functions::eval_dyadic_public(
+                        crate::functions::Prim::Add,
+                        &zero_based,
+                        &plus_io,
+                    );
+                }
+                // ⍕B honors ⎕PP for float rendering
+                if *p == crate::functions::Prim::Format {
+                    let pp = crate::sysvars::get_pp(self).unwrap_or(10);
+                    return crate::format::format_with_pp(&bv, pp);
+                }
                 p.eval_monadic(&bv)
             }
             Expr::ReduceOp(p, b) => {
@@ -3554,5 +3573,70 @@ mod tests {
             .map(|c| c.get_int_value().unwrap())
             .collect();
         assert_eq!(ints, vec![3, 4, 5, 0, 1, 2]);
+    }
+
+    #[test]
+    fn test_format_monadic_gives_chars() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍕1 2 3");
+        let s: String = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
+        assert_eq!(s, "1 2 3");
+    }
+
+    #[test]
+    fn test_format_dyadic_decimals_in_repl() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "2⍕1.5");
+        let s: String = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
+        assert_eq!(s, "1.50");
+    }
+
+    #[test]
+    fn test_where_honors_index_origin() {
+        let mut env = Environment::new();
+        // default ⎕IO=0 → positions 1 3
+        let v = eval_one(&mut env, "⍸0 1 0 1");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 3]);
+        // ⎕IO=1 shifts to 2 4
+        env.eval_line("⎕IO←1").unwrap();
+        let v = eval_one(&mut env, "⍸0 1 0 1");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![2, 4]);
+    }
+
+    #[test]
+    fn test_where_composes_with_comparison() {
+        // ⍸3<1 5 2 7 → positions of elements > 3 → 1 3 (0-based)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍸3<1 5 2 7");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 3]);
     }
 }

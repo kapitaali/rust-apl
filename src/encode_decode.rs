@@ -95,7 +95,7 @@ pub fn encode(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         }
         let mut digits = Vec::new();
         for bc in b_cells.iter() {
-            let val = cell_to_f64(&bc)? as i64;
+            let val = cell_to_f64(bc)? as i64;
             let mut d = val;
             let mut row = Vec::new();
             if d == 0 {

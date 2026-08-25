@@ -68,6 +68,8 @@ pub enum Prim {
     Nor,      // ⍱ — dyadic: not or
     Squad,    // ⌷ — dyadic: general index
     Rotate1,  // ⊖ — monadic: reverse first axis, dyadic: rotate first axis
+    Format,   // ⍕ — monadic: format, dyadic: width/decimals format
+    Where,    // ⍸ — monadic: indices of 1s in a boolean array
 }
 
 impl Prim {
@@ -102,6 +104,8 @@ impl Prim {
             "⍱" => Prim::Nor,      // ⍱ = not or
             "⌷" => Prim::Squad,    // ⌷ = general index
             "⊖" => Prim::Rotate1,  // ⊖ = reverse/rotate first axis
+            "⍕" => Prim::Format,   // ⍕ = format
+            "⍸" => Prim::Where,    // ⍸ = where (indices of 1s)
             "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
@@ -210,6 +214,8 @@ impl Prim {
 
             // ⊖B — reverse first axis
             Prim::Rotate1 => crate::squad::reverse_first(b),
+            Prim::Format => crate::format::format(b),
+            Prim::Where => crate::format::where_indices(b),
 
             // ⌷B — general index (monadic: identity-like, but rarely used alone)
             Prim::Squad => Ok(b.clone()),
@@ -386,6 +392,7 @@ impl Prim {
             Prim::Nor => elementwise(a, b, cell::bif_nor),
             // A⊖B — rotate first axis
             Prim::Rotate1 => crate::squad::rotate_first(a, b),
+            Prim::Format => crate::format::format_dyadic(a, b),
             // A⌷B — general index
             Prim::Squad => crate::squad::squad(a, b),
             // A⍟B — logarithm base A of B

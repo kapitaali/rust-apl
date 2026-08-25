@@ -160,9 +160,13 @@ fn main() {
             Ok(Some(v)) => {
                 // ⎕PP print precision (default 10)
                 let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
-                // nested/matrix values get boxed display (4⎕CR-style)
+                // All display goes through the shared renderer so character
+                // arrays print unseparated ('hello' → hello) and nested /
+                // matrix values get boxed display (4⎕CR-style).
                 let has_pointer = v.cells().iter().any(|c| c.is_pointer_cell());
-                if has_pointer || v.rank() >= 2 {
+                let all_chars =
+                    !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
+                if has_pointer || v.rank() >= 2 || all_chars {
                     for l in apl::boxdisplay::render_with_pp(&v, pp) {
                         println!("{}", l);
                     }

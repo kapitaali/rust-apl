@@ -43,25 +43,29 @@ pub fn render_with_pp(v: &ValueP, pp: usize) -> Vec<String> {
         };
     }
     if is_simple && v.rank() == 1 {
-        // simple vector → single line, no box at top level
+        // simple vector → single line, no box at top level.
+        // Character vectors print with NO separator (GNU APL prints 'hello'
+        // as hello, not h e l l o); numeric vectors are space-separated.
+        let sep = if all_chars(v.cells()) { "" } else { " " };
         return vec![v
             .cells()
             .iter()
             .map(|c| plain_cell(c, pp))
             .collect::<Vec<_>>()
-            .join(" ")];
+            .join(sep)];
     }
     if is_simple && v.rank() >= 2 {
         // simple matrix → plain rows (GNU APL prints simple matrices bare)
         let cols = v.get_shape_item(1) as usize;
         let cells = v.cells();
+        let sep = if all_chars(cells) { "" } else { " " };
         let mut rows = Vec::new();
         for r in 0..(cells.len() / cols.max(1)) {
             let line: Vec<String> = cells[r * cols..(r + 1) * cols]
                 .iter()
                 .map(|c| plain_cell(c, pp))
                 .collect();
-            rows.push(line.join(" "));
+            rows.push(line.join(sep));
         }
         return rows;
     }
@@ -111,6 +115,12 @@ pub fn render_with_pp(v: &ValueP, pp: usize) -> Vec<String> {
 
 fn is_nested(v: &ValueP) -> bool {
     !v.cells().iter().all(|c| c.is_simple_cell())
+}
+
+/// true iff every cell is a character (a simple character array, which
+/// GNU APL prints without separators)
+fn all_chars(cells: &[Cell]) -> bool {
+    !cells.is_empty() && cells.iter().all(|c| matches!(c, Cell::Char(_)))
 }
 
 fn plain_cell(c: &Cell, pp: usize) -> String {
@@ -216,6 +226,23 @@ mod tests {
         let v = ValueP::int_vector(&[1, 2, 3]);
         let lines = render(&v);
         assert_eq!(lines, vec!["1 2 3"]);
+    }
+
+    #[test]
+    fn test_char_vector_has_no_separators() {
+        // GNU APL prints 'hello' as hello, not h e l l o
+        let cps: Vec<u32> = "hello".chars().map(|c| c as u32).collect();
+        let v = ValueP::char_vector(&cps);
+        let lines = render(&v);
+        assert_eq!(lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_char_matrix_rows_have_no_separators() {
+        let cps: Vec<Cell> = "abcd".chars().map(|c| Cell::Char(c as u32)).collect();
+        let v = ValueP::from_parts(Shape::matrix(2, 2), cps).unwrap();
+        let lines = render(&v);
+        assert_eq!(lines, vec!["ab", "cd"]);
     }
 
     #[test]
