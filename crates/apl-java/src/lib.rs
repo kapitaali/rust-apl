@@ -543,6 +543,129 @@ pub extern "C" fn j_ready() -> i32 {
     JVM_READY.load(Ordering::SeqCst) as i32
 }
 
+/// `j_call_s P I8 <0T <0T <I4 >0T[n]` → I4 : invoke an INSTANCE method that
+/// returns a String (or any object — its toString() is taken, same as the
+/// static path). Args: env handle, object handle, method name, JNI
+/// signature, output capacity, out buffer. v1: zero-arg methods only.
+/// Errors: -20 not ready, -21 unknown handle, -25 GetObjectClass fail,
+/// -26 GetMethodID fail, -27 call failed, -29 null/zero buffer,
+/// -42 toString fail.
+///
+/// # Safety
+/// `out_buf` must point to `cap` writable bytes; method/sig must be valid
+/// NUL-terminated C strings (or 0).
+#[cfg(feature = "java")]
+#[no_mangle]
+pub unsafe extern "C" fn j_call_s(
+    _env: usize,
+    handle: u64,
+    method: usize,
+    sig: usize,
+    cap: usize,
+    out_buf: *mut u8,
+) -> i32 {
+    if !JVM_READY.load(Ordering::SeqCst) {
+        return -20;
+    }
+    if out_buf.is_null() || cap == 0 {
+        return -29;
+    }
+    let out_cap = cap;
+    let guard = GLOBAL_REFS.lock().unwrap();
+    if !guard
+        .as_ref()
+        .map(|m| m.contains_key(&handle))
+        .unwrap_or(false)
+    {
+        return -21;
+    }
+    let m_name = unsafe { cstr_at(method) };
+    let m_sig = unsafe { cstr_at(sig) };
+
+    let wrote = vm::with_env(|env| -> Result<usize, i64> {
+        use jni::signature::{JavaType, RuntimeMethodSignature};
+        use jni::strings::JNIString;
+
+        let parsed = RuntimeMethodSignature::from_str(&m_sig).map_err(|_| -26)?;
+        let msig = parsed.method_signature();
+        // v1: zero-arg string/object-returning methods only
+        if !msig.args().is_empty() {
+            return Err(-30);
+        }
+        // decide return handling BEFORE msig is consumed by GetMethodID
+        let is_string_ret =
+            matches!(msig.ret(), JavaType::Object) && m_sig.ends_with("Ljava/lang/String;");
+        let ret_jtype = match msig.ret() {
+            JavaType::Object | JavaType::Array => JavaType::Object,
+            _ => return Err(-30),
+        };
+
+        let global: &jni::objects::Global<jni::objects::JObject<'static>> = guard
+            .as_ref()
+            .and_then(|m| m.get(&handle))
+            .expect("checked above");
+        let jobj: &jni::objects::JObject = global.as_ref();
+        let cls = env.get_object_class(jobj).map_err(|e| {
+            env.exception_clear();
+            eprintln!("[apl-java] GetObjectClass for handle {handle} failed: {e:?}");
+            -25i64
+        })?;
+        let jmethod = env
+            .get_method_id(&cls, JNIString::from(m_name.as_str()), msig)
+            .map_err(|e| {
+                env.exception_clear();
+                eprintln!("[apl-java] GetMethodID {m_name}{m_sig} failed: {e:?}");
+                -26i64
+            })?;
+
+        // String result → take it directly; any other object → toString()
+        let ret = unsafe { env.call_method_unchecked(jobj, jmethod, ret_jtype, &[]) }
+            .and_then(|v| v.l())
+            .map_err(|e| {
+                env.exception_clear();
+                eprintln!("[apl-java] call {m_name} failed: {e:?}");
+                -27i64
+            })?;
+
+        let text = if is_string_ret {
+            // JString::from_raw + lossy MUTF-8 decode, per jni 0.22 API
+            let js = jni::objects::JString::from_raw(env, ret.as_raw());
+            js.to_string()
+        } else {
+            vm::to_rust_string(env, &ret)?
+        };
+
+        let bytes = text.as_bytes();
+        let n = bytes.len().min(out_cap - 1);
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, n);
+            *out_buf.add(n) = 0;
+        }
+        Ok(n)
+    });
+    match wrote {
+        Ok(_) => 0,
+        Err(code) => code as i32,
+    }
+}
+
+/// Stub build: no JVM support compiled in.
+///
+/// # Safety
+/// Signature-compatible with the real `j_call_s`; arguments are ignored.
+#[cfg(not(feature = "java"))]
+#[no_mangle]
+pub unsafe extern "C" fn j_call_s(
+    _env: usize,
+    _handle: u64,
+    _method: usize,
+    _sig: usize,
+    _cap: usize,
+    _out_buf: *mut u8,
+) -> i32 {
+    -10
+}
+
 /// `j_live_handles` → P : number of registered object handles (diagnostics).
 #[no_mangle]
 pub extern "C" fn j_live_handles() -> u64 {
