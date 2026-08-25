@@ -55,8 +55,9 @@ pub enum Prim {
     And,
     Or,
     Comma,
-    Encode, // ⊤ — dyadic: A⊤B (representation)
-    Decode, // ⊥ — dyadic: A⊥B (base value)
+    Encode,  // ⊤ — dyadic: A⊤B (representation)
+    Decode,  // ⊥ — dyadic: A⊥B (base value)
+    Without, // ∼ — dyadic: A∼B (set difference)
 }
 
 impl Prim {
@@ -79,8 +80,9 @@ impl Prim {
             "○" => Prim::PiTimes,
             "⍟" => Prim::NatLog,
             "∣" => Prim::Magnitude,
-            "?" | "∼" => Prim::Roll, // ? = roll; ∼ (TILDE OPERATOR) kept as roll alias
-            "~" => Prim::Not,        // ~ (ASCII tilde) = logical not
+            "?" => Prim::Roll,    // ? = roll
+            "∼" => Prim::Without, // ∼ = without (set difference)
+            "~" => Prim::Not,     // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
             "⌽" => Prim::Reverse,
@@ -323,6 +325,8 @@ impl Prim {
             Prim::Encode => crate::encode_decode::encode(a, b),
             // A⊥B — decode (base value)
             Prim::Decode => crate::encode_decode::decode(a, b),
+            // A∼B — without: elements of A not in B (set difference)
+            Prim::Without => without(a, b),
             // A⍟B — logarithm base A of B
             Prim::NatLog => elementwise(a, b, cell::bif_logarithm),
 
@@ -430,6 +434,32 @@ pub fn elementwise(
         }
     }
     Ok(ValueP::from_ravel_like(if ac > 1 { a } else { b }, out))
+}
+
+/// A∼B — without: elements of A not found in B (set difference).
+/// Both A and B are raveled. Result is a flat vector.
+/// Mirrors `Bif_F12_WITHOUT::eval_AB` in C++ (simplified: rank ≤ 1, no axis).
+fn without(a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
+    if a.rank() > 1 || b.rank() > 1 {
+        return Err(ErrorCode::RankError);
+    }
+    let acells = a.cells();
+    let bcells = b.cells();
+    let qct = Cell::DEFAULT_CT;
+    let mut out = Vec::new();
+    for ca in acells {
+        let found = bcells.iter().any(|cb| ca.equal(cb, qct));
+        if !found {
+            out.push(ca.clone());
+        }
+    }
+    // result is always a vector (possibly empty)
+    let shape = if out.is_empty() {
+        Shape::vector(0)
+    } else {
+        Shape::vector(out.len() as i64)
+    };
+    ValueP::from_parts(shape, out)
 }
 
 /// reshape: `A ⍴ B`

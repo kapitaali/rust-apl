@@ -55,6 +55,7 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Branch => "→",
         Prim::And => "∧",
         Prim::Or => "∨",
+        Prim::Without => "∼",
         _ => "?",
     }
 }

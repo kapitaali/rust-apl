@@ -83,6 +83,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("○", Prim::PiTimes),
     ("⍟", Prim::NatLog),
     ("∣", Prim::Magnitude),
+    ("∼", Prim::Without),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
     ("⌽", Prim::Reverse),
@@ -472,5 +473,12 @@ mod tests {
         // dyadic: 2⍟8
         let toks = tokenize("2⍟8").unwrap();
         assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NatLog)));
+    }
+
+    #[test]
+    fn test_without_tokenize() {
+        // ∼ should tokenize as Without
+        let toks = tokenize("1 2 3∼2 3 4").unwrap();
+        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Without)));
     }
 }

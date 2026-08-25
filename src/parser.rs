@@ -3307,4 +3307,43 @@ mod tests {
         assert_eq!(pair.element_count(), 2);
         assert_eq!(pair.shape().get_rank(), 1);
     }
+
+    #[test]
+    fn test_without_basic() {
+        // 1 2 3∼2 3 4 = 1
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2 3∼2 3 4");
+        assert_eq!(v.cells().len(), 1);
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_without_empty_result() {
+        // 1 2∼1 2 = empty vector
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2∼1 2");
+        assert_eq!(v.element_count(), 0);
+    }
+
+    #[test]
+    fn test_without_all_removed() {
+        // 'abc'∼'abc' = empty
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "'abc'∼'abc'");
+        assert_eq!(v.element_count(), 0);
+    }
+
+    #[test]
+    fn test_without_no_overlap() {
+        // 1 2∼3 4 = 1 2
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2∼3 4");
+        assert_eq!(v.element_count(), 2);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 2]);
+    }
 }
