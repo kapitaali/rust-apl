@@ -289,6 +289,20 @@ CASES = [
     ("⊤r2", ",2 2 2⊤5 3"),
     ("⊤r2", "⍴2 2 2⊤5 3"),
     ("⊥r2", "2⊥2 3⍴1 0 1 1 1 0"),
+
+    # ══ NEW: selective assignment (reads back the mutated variable) ═══════
+    ("asgn", "V←10 20 30 ⋄ V[2]←99 ⋄ V"),
+    ("asgn", "V←10 20 30 ⋄ V[1 3]←7 8 ⋄ V"),
+    ("asgn", "V←10 20 30 ⋄ V[1 3]←0 ⋄ V"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[1;2]←99 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[1;]←0 0 0 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[;1]←7 7 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[1 2;1 2]←100 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[2;3]←0 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[;]←0 ⋄ ,M"),
+    ("asgn", "M←2 3⍴⍳6 ⋄ M[1;2]←99 ⋄ ⍴M"),
+    ("asgn", "C←2 2 2⍴⍳8 ⋄ C[1;2;1]←0 ⋄ ,C"),
+    ("asgn", "C←2 2 2⍴⍳8 ⋄ C[1;;]←0 ⋄ ,C"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")

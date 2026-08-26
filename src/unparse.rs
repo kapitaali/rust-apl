@@ -270,6 +270,16 @@ pub fn unparse(e: &Expr) -> String {
 fn expr_debug_tag(e: &Expr) -> String {
     match e {
         Expr::AssignIndexed(n, _, _) => format!("AssignIndexed({})", n),
+        Expr::AssignIndexAxes(n, axes, rhs) => {
+            let inner: Vec<String> = axes
+                .iter()
+                .map(|a| match a {
+                    Some(e) => unparse(e),
+                    None => String::new(),
+                })
+                .collect();
+            format!("{}[{}]←{}", n, inner.join(";"), unparse(rhs))
+        }
         Expr::AssignPick(n, _, _) => format!("AssignPick({})", n),
         Expr::Dfn(_) => "{dfn}".to_string(),
         Expr::DfnCallMono(_, _) => "{dfncall}".to_string(),

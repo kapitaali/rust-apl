@@ -61,6 +61,9 @@ pub enum Expr {
     Assign(String, Box<Expr>),
     /// selective assignment: `NAME[idx] ← expr`
     AssignIndexed(String, Box<Expr>, Box<Expr>),
+    /// Multi-axis selective assignment: `NAME[i;j;...] ← expr`. One entry per
+    /// axis; `None` is an elided index (that whole axis).
+    AssignIndexAxes(String, Vec<Option<Expr>>, Box<Expr>),
     /// selective pick assignment: `(A⊃NAME) ← expr`
     AssignPick(String, Box<Expr>, Box<Expr>),
     /// defined-function call: monadic `FN B` or ambivalent `FN`
@@ -392,17 +395,29 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (rhs, used) = parse_expr(&toks[2..])?;
             return Ok((Expr::Assign(name, Box::new(rhs)), used + 2));
         }
-        // selective assignment: NAME[expr] ← expr
+        // selective assignment: NAME[expr] ← expr  or  NAME[i;j;...] ← expr
         if matches!(toks.get(1), Some(Tok::LBracket)) {
-            let (idx, iused) = parse_expr(&toks[2..])?;
-            if matches!(toks.get(iused + 2), Some(Tok::RBracket))
-                && matches!(toks.get(iused + 3), Some(Tok::Assign))
-            {
-                let (rhs, rused) = parse_expr(&toks[iused + 4..])?;
-                return Ok((
-                    Expr::AssignIndexed(name, Box::new(idx), Box::new(rhs)),
-                    iused + 4 + rused,
-                ));
+            if let Some((parts, close)) = split_index_axes(&toks[2..]) {
+                // toks[2 + close] is the ']'; an Assign must follow it
+                let after = 2 + close + 1;
+                if matches!(toks.get(after), Some(Tok::Assign)) {
+                    let axes = parse_index_axes(&parts)?;
+                    let (rhs, rused) = parse_expr(&toks[after + 1..])?;
+                    let consumed = after + 1 + rused;
+                    if axes.len() == 1 {
+                        // single index, no semicolon: keep the 1-D form
+                        let idx = axes
+                            .into_iter()
+                            .next()
+                            .flatten()
+                            .ok_or(ErrorCode::SyntaxError)?;
+                        return Ok((
+                            Expr::AssignIndexed(name, Box::new(idx), Box::new(rhs)),
+                            consumed,
+                        ));
+                    }
+                    return Ok((Expr::AssignIndexAxes(name, axes, Box::new(rhs)), consumed));
+                }
             }
             // fall through: not an assignment — the bracket use is an
             // ordinary index expression handled by parse_simple
@@ -1317,7 +1332,10 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
 fn collect_assigned_names(body: &[Expr], out: &mut Vec<String>) {
     for e in body {
         match e {
-            Expr::Assign(n, _) | Expr::AssignIndexed(n, _, _) | Expr::AssignPick(n, _, _)
+            Expr::Assign(n, _)
+            | Expr::AssignIndexed(n, _, _)
+            | Expr::AssignIndexAxes(n, _, _)
+            | Expr::AssignPick(n, _, _)
                 if !out.contains(n) =>
             {
                 out.push(n.clone());
@@ -2094,25 +2112,108 @@ impl Environment {
                 Ok(v)
             }
             Expr::AssignIndexed(name, idx, rhs) => {
-                // selective assignment: B[idx] ← value (mutates B in place)
+                // B[idx] ← value. The index is ⎕IO-relative, and a
+                // multi-element right side is distributed ELEMENTWISE
+                // (`W[1 3]←7 8` sets two different values); a scalar right
+                // side broadcasts to every selected position.
                 let iv = self.eval(idx)?;
                 let rv = self.eval(rhs)?;
-                let target = self
-                    .vars
-                    .get_mut(name)
-                    .ok_or(ErrorCode::ValueError)?
-                    .clone();
+                let io = self.get_io()?;
+                let mut positions = Vec::with_capacity(iv.element_count() as usize);
+                for c in iv.cells() {
+                    positions.push(c.get_int_value()? - io);
+                }
+                let target = self.vars.get(name).ok_or(ErrorCode::ValueError)?.clone();
                 let mut writable = target;
                 writable.isolate(); // COW: never mutate a shared value
                 {
                     let cells = writable.make_mut().ravel_mut();
-                    for c in iv.cells() {
-                        let i = c.get_int_value()?;
+                    let rc = rv.cells();
+                    if rc.len() != 1 && rc.len() != positions.len() {
+                        return Err(ErrorCode::LengthError);
+                    }
+                    for (k, &i) in positions.iter().enumerate() {
                         if i < 0 || i as usize >= cells.len() {
                             return Err(ErrorCode::IndexError);
                         }
-                        let src = rv.cells()[0].clone();
+                        let src = if rc.len() == 1 {
+                            rc[0].clone()
+                        } else {
+                            rc[k].clone()
+                        };
                         cells[i as usize] = src;
+                    }
+                }
+                self.vars.insert(name.clone(), writable.clone());
+                Ok(writable)
+            }
+            Expr::AssignIndexAxes(name, axes, rhs) => {
+                // B[i;j;...] ← value — write into the cartesian product of the
+                // per-axis selections, in row-major order.
+                let rv = self.eval(rhs)?;
+                let io = self.get_io()?;
+                let target = self.vars.get(name).ok_or(ErrorCode::ValueError)?.clone();
+                let rank = target.rank() as usize;
+                if axes.len() != rank {
+                    return Err(ErrorCode::RankError);
+                }
+                let dims: Vec<i64> = (0..rank).map(|i| target.get_shape_item(i as i16)).collect();
+
+                // resolve each axis to the list of positions it selects
+                let mut picks: Vec<Vec<i64>> = Vec::with_capacity(rank);
+                for (ax, a) in axes.iter().enumerate() {
+                    match a {
+                        None => picks.push((0..dims[ax]).collect()),
+                        Some(e) => {
+                            let v = self.eval(e)?;
+                            let mut list = Vec::with_capacity(v.element_count() as usize);
+                            for c in v.cells() {
+                                let i = c.get_int_value()? - io;
+                                if i < 0 || i >= dims[ax] {
+                                    return Err(ErrorCode::IndexError);
+                                }
+                                list.push(i);
+                            }
+                            picks.push(list);
+                        }
+                    }
+                }
+
+                let strides = {
+                    let mut st = vec![1i64; rank];
+                    for i in (0..rank.saturating_sub(1)).rev() {
+                        st[i] = st[i + 1] * dims[i + 1];
+                    }
+                    st
+                };
+                let total: usize = picks.iter().map(|p| p.len()).product();
+                let rc = rv.cells();
+                if rc.len() != 1 && rc.len() != total {
+                    return Err(ErrorCode::LengthError);
+                }
+
+                let mut writable = target;
+                writable.isolate();
+                {
+                    let cells = writable.make_mut().ravel_mut();
+                    let mut counter = vec![0usize; rank];
+                    for k in 0..total {
+                        let mut off = 0i64;
+                        for ax in 0..rank {
+                            off += picks[ax][counter[ax]] * strides[ax];
+                        }
+                        cells[off as usize] = if rc.len() == 1 {
+                            rc[0].clone()
+                        } else {
+                            rc[k].clone()
+                        };
+                        for ax in (0..rank).rev() {
+                            counter[ax] += 1;
+                            if counter[ax] < picks[ax].len() {
+                                break;
+                            }
+                            counter[ax] = 0;
+                        }
                     }
                 }
                 self.vars.insert(name.clone(), writable.clone());
@@ -2407,14 +2508,57 @@ impl Environment {
         if matches!(toks.first(), Some(Tok::End)) || toks.len() < 2 {
             return Ok(None); // empty line
         }
-        let (expr, used) = parse(&toks)?;
-        if !matches!(toks.get(used), Some(Tok::End)) {
+
+        // Multi-statement line: `A ⋄ B ⋄ C` runs each statement left to right
+        // and displays only the LAST one's value. Diamonds inside braces or
+        // brackets belong to a dfn body / index list, so only split at depth 0.
+        // (⎕EA has its own diamond handling and must not be split here.)
+        let is_quad_ea = matches!(toks.first(), Some(Tok::Name(n)) if n == "⎕EA");
+        if !is_quad_ea {
+            let mut depth = 0usize;
+            let mut cuts: Vec<usize> = Vec::new();
+            for (i, t) in toks.iter().enumerate() {
+                match t {
+                    Tok::LBrace | Tok::LBracket | Tok::LParen => depth += 1,
+                    Tok::RBrace | Tok::RBracket | Tok::RParen => depth = depth.saturating_sub(1),
+                    Tok::Diamond if depth == 0 => cuts.push(i),
+                    _ => {}
+                }
+            }
+            if !cuts.is_empty() {
+                let mut last: Option<ValueP> = None;
+                let mut start = 0usize;
+                for cut in cuts.iter().copied().chain(std::iter::once(toks.len())) {
+                    let stmt = &toks[start..cut];
+                    start = cut + 1;
+                    // skip empty statements (trailing ⋄, or ⋄ before End)
+                    if stmt.is_empty() || matches!(stmt.first(), Some(Tok::End)) {
+                        continue;
+                    }
+                    last = self.eval_statement(stmt)?;
+                }
+                return Ok(last);
+            }
+        }
+
+        self.eval_statement(&toks)
+    }
+
+    /// Evaluate ONE statement's tokens (no top-level diamonds).
+    fn eval_statement(&mut self, toks: &[Tok]) -> AplResult<Option<ValueP>> {
+        if toks.is_empty() || matches!(toks.first(), Some(Tok::End)) {
+            return Ok(None);
+        }
+        let (expr, used) = parse(toks)?;
+        // a statement split out of a diamond list has no trailing End
+        if used != toks.len() && !matches!(toks.get(used), Some(Tok::End)) {
             return Err(ErrorCode::SyntaxError);
         }
         let is_assign = matches!(
             expr,
             Expr::Assign(_, _)
                 | Expr::AssignIndexed(_, _, _)
+                | Expr::AssignIndexAxes(_, _, _)
                 | Expr::AssignPick(_, _, _)
                 | Expr::AssignDfn(_, _)
         );
@@ -4340,5 +4484,151 @@ mod tests {
         assert!(env.eval_line("M[1;1;1]").is_err());
         // unclosed bracket
         assert!(env.eval_line("M[1;1").is_err());
+    }
+
+    // ── selective assignment M[i;j]←v ──────────────────────────────────────
+    // All expectations reference-verified.
+
+    #[test]
+    fn test_indexed_assign_honors_index_origin() {
+        // the 1-D path ignored ⎕IO entirely: V[2]←99 was an INDEX ERROR
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←10 20 30").unwrap();
+        env.eval_line("V[2]←99").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![10, 99, 30]);
+    }
+
+    #[test]
+    fn test_indexed_assign_distributes_elementwise() {
+        // a multi-element right side pairs up with the indices; a scalar
+        // right side broadcasts. The old code always wrote rv.cells()[0].
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("W←10 20 30").unwrap();
+        env.eval_line("W[1 3]←7 8").unwrap();
+        assert_eq!(ravel_ints(&mut env, "W"), vec![7, 20, 8]);
+        env.eval_line("X←10 20 30").unwrap();
+        env.eval_line("X[1 3]←0").unwrap();
+        assert_eq!(ravel_ints(&mut env, "X"), vec![0, 20, 0]);
+    }
+
+    #[test]
+    fn test_indexed_assign_length_mismatch_errors() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←10 20 30").unwrap();
+        assert!(env.eval_line("V[1 2]←1 2 3").is_err());
+    }
+
+    #[test]
+    fn test_assign_two_axes() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("M[1;2]←99").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![1, 99, 3, 4, 5, 6]);
+        // the shape must survive the write
+        assert_eq!(ravel_ints(&mut env, "⍴M"), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_assign_whole_row_and_column() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("M[1;]←0 0 0").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![0, 0, 0, 4, 5, 6]);
+        env.eval_line("N←2 3⍴⍳6").unwrap();
+        env.eval_line("N[;1]←7 7").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",N"), vec![7, 2, 3, 7, 5, 6]);
+    }
+
+    #[test]
+    fn test_assign_submatrix_broadcasts_scalar() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("M[1 2;1 2]←100").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![100, 100, 3, 100, 100, 6]);
+    }
+
+    #[test]
+    fn test_assign_all_elided_fills_everything() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("M[;]←0").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_assign_rank3() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("C←2 2 2⍴⍳8").unwrap();
+        env.eval_line("C[1;2;1]←0").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",C"), vec![1, 2, 0, 4, 5, 6, 7, 8]);
+        env.eval_line("D←2 2 2⍴⍳8").unwrap();
+        env.eval_line("D[1;;]←0").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",D"), vec![0, 0, 0, 0, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_assign_is_shy() {
+        // an indexed assignment displays nothing, like a plain one
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert!(env.eval_line("M[1;2]←99").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_assign_axis_errors() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert!(env.eval_line("M[9;1]←0").is_err()); // row out of range
+        assert!(env.eval_line("M[1;9]←0").is_err()); // column out of range
+        assert!(env.eval_line("M[1;1;1]←0").is_err()); // too many axes
+    }
+
+    // ── multi-statement lines with ⋄ ────────────────────────────────────────
+
+    #[test]
+    fn test_top_level_diamond_runs_each_statement() {
+        // ⋄ was only handled inside ⎕EA and dfn bodies, so a plain
+        // `A ⋄ B` line was a SYNTAX ERROR at the REPL
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "2+3 ⋄ 4+5");
+        // only the LAST statement's value is displayed
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 9);
+    }
+
+    #[test]
+    fn test_top_level_diamond_sequences_side_effects() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "Q←7 ⋄ Q+1");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 8);
+    }
+
+    #[test]
+    fn test_diamond_inside_dfn_still_belongs_to_the_dfn() {
+        // splitting must be depth-aware: this ⋄ is a dfn body separator
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "{Z←⍵ ⋄ Z+1} 5");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 6);
+    }
+
+    #[test]
+    fn test_error_guard_diamond_still_works() {
+        // ⎕EA has its own diamond handling and must not be split by the new
+        // top-level splitter: the guard fails, so the fallback runs
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⎕EA NOPE+1 ⋄ 42");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 42);
+        // and when the guard succeeds, ITS value is the result
+        let v = eval_one(&mut env, "⎕EA 5+5 ⋄ NOPE");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 10);
     }
 }
