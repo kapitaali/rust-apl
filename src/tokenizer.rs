@@ -83,6 +83,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("○", Prim::PiTimes),
     ("⍟", Prim::NatLog),
     ("∣", Prim::Magnitude),
+    ("|", Prim::Magnitude), // ASCII bar — GNU APL accepts both | and ∣
     ("∼", Prim::Without),
     ("∪", Prim::Union),
     ("∩", Prim::Inter),

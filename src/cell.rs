@@ -791,25 +791,33 @@ pub fn bif_greater_eq(a: &Cell, b: &Cell) -> AplResult<Cell> {
 
 /// Dyadic `!` — binomial coefficient (public entry used by functions.rs).
 ///
-/// A!B = N over K for integer arguments, generalized via gamma otherwise.
+/// `A!B` is "B choose A": A is the LOWER index, B the upper. Verified against
+/// the reference GNU APL: 2!5 is 10, 5!2 is 0, 1!5 is 5, 2!4 is 6. The
+/// arguments were previously swapped, so 2!5 computed C(2,5) = 0.
 pub fn bif_binomial_public(a: &Cell, b: &Cell) -> AplResult<Cell> {
     use Cell::*;
     match (a, b) {
-        (Int(n), Int(k)) => {
-            if *k < 0 || *k > *n {
+        (Int(k), Int(n)) => {
+            let (k, n) = (*k, *n);
+            if k < 0 || k > n {
                 return Ok(Int(0));
             }
+            // multiply before dividing on an exactly-divisible running value:
+            // C(n,k) = Π (n-k+i)/i for i in 1..=k. Using the smaller of k and
+            // n-k keeps the loop short and the intermediates small.
+            let k = k.min(n - k);
             let mut result: APLInteger = 1;
-            for i in 0..*k {
-                result = result.wrapping_mul(*n - i).wrapping_div(i + 1);
+            for i in 1..=k {
+                result = result.wrapping_mul(n - k + i) / i;
             }
             Ok(Int(result))
         }
         _ => {
-            let n = a.get_real_value()?;
-            let k = b.get_real_value()?;
+            // generalized via gamma: C(n,k) = Γ(n+1) / (Γ(k+1)·Γ(n-k+1))
+            let k = a.get_real_value()?;
+            let n = b.get_real_value()?;
             Ok(Float(
-                tgamma(k + 1.0) / (tgamma(n + 1.0) * tgamma(k - n + 1.0)),
+                tgamma(n + 1.0) / (tgamma(k + 1.0) * tgamma(n - k + 1.0)),
             ))
         }
     }
@@ -1037,6 +1045,46 @@ mod tests {
         match bif_factorial(&Cell::float(0.5)).unwrap() {
             Cell::Float(v) => assert!((v - 0.886226925).abs() < 1e-6),
             _ => panic!("expected float"),
+        }
+    }
+
+    #[test]
+    fn test_binomial_arg_order_is_b_choose_a() {
+        // A!B is "B choose A" — A is the LOWER index. All values verified
+        // against the reference GNU APL binary. The arguments used to be
+        // swapped, so 2!5 returned 0 instead of 10 and no test caught it.
+        let cases = [
+            (2, 5, 10), // 5 choose 2
+            (3, 5, 10), // 5 choose 3
+            (1, 5, 5),
+            (0, 5, 1),
+            (5, 5, 1),
+            (2, 4, 6),
+            (5, 2, 0), // lower > upper → 0
+        ];
+        for (a, b, want) in cases {
+            match bif_binomial_public(&Cell::int(a), &Cell::int(b)).unwrap() {
+                Cell::Int(v) => assert_eq!(v, want, "{a}!{b} should be {want}"),
+                other => panic!("expected int for {a}!{b}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_binomial_negative_lower_is_zero() {
+        match bif_binomial_public(&Cell::int(-1), &Cell::int(5)).unwrap() {
+            Cell::Int(v) => assert_eq!(v, 0),
+            other => panic!("expected int, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_binomial_large_does_not_overflow_midway() {
+        // C(30,15) = 155117520 — the old loop divided after each multiply,
+        // which could truncate; this exercises the reordered computation
+        match bif_binomial_public(&Cell::int(15), &Cell::int(30)).unwrap() {
+            Cell::Int(v) => assert_eq!(v, 155117520),
+            other => panic!("expected int, got {other:?}"),
         }
     }
 

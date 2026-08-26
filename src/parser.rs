@@ -2322,6 +2322,17 @@ mod tests {
         }
     }
 
+    /// numeric value of an expression against an EXISTING environment,
+    /// accepting Int or Float (⌊ and | may return either representation)
+    fn eval_num_in(env: &mut Environment, line: &str) -> f64 {
+        let v = eval_one(env, line);
+        match v.first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => *i as f64,
+            crate::cell::Cell::Float(f) => *f,
+            other => panic!("expected a number for {line:?}, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_right_to_left() {
         // 2×3+4 must be 2×(3+4)=14, not (2×3)+4=10
@@ -3927,5 +3938,38 @@ mod tests {
                 .unwrap(),
             6
         );
+    }
+
+    // ── glyph coverage found by differential testing ───────────────────────
+
+    #[test]
+    fn test_ascii_bar_is_magnitude_like_the_apl_glyph() {
+        // GNU APL accepts BOTH | (ASCII) and ∣ (U+2223); only ∣ was wired,
+        // so every `3|10` style expression was a SYNTAX ERROR
+        let mut env = Environment::new();
+        assert_eq!(eval_num_in(&mut env, "3|10"), 1.0);
+        assert_eq!(eval_num_in(&mut env, "3∣10"), 1.0);
+        assert_eq!(eval_num_in(&mut env, "|¯7"), 7.0);
+        assert_eq!(eval_num_in(&mut env, "¯3|10"), -2.0);
+    }
+
+    #[test]
+    fn test_monadic_star_is_exponential() {
+        // * tokenizes as Power (the dyadic glyph) but MONADIC * is
+        // exponential; without an eval_monadic arm `*1` was a SYNTAX ERROR
+        // even though `2*10` worked.
+        let mut env = Environment::new();
+        assert_eq!(eval_num_in(&mut env, "⌊*1"), 2.0); // ⌊e = 2
+        assert_eq!(eval_num_in(&mut env, "2*10"), 1024.0);
+        assert_eq!(eval_num_in(&mut env, "⌊⋆1"), 2.0); // ⋆ still works
+    }
+
+    #[test]
+    fn test_binomial_in_repl() {
+        // A!B is B choose A
+        let mut env = Environment::new();
+        assert_eq!(eval_num_in(&mut env, "2!5"), 10.0);
+        assert_eq!(eval_num_in(&mut env, "5!2"), 0.0);
+        assert_eq!(eval_num_in(&mut env, "2!4"), 6.0);
     }
 }

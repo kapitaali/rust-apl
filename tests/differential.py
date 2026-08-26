@@ -1,87 +1,186 @@
 #!/usr/bin/env python3
 """Differential-test the Rust APL against the reference C++ GNU APL binary.
 
-Each expression is run in its OWN interpreter invocation, so an empty result
-or multi-line output can never misalign the comparison (batching them did).
-Both sides get an explicit `⎕IO←1` first, because the Rust Environment
-defaults to ⎕IO=0 while GNU APL defaults to 1.
+    python3 tests/differential.py            # every case
+    python3 tests/differential.py ⍷ ⌽        # only the named primitives
+    python3 tests/differential.py --list     # show primitive tags
 
-Matrices are raveled with `,` in the case list and rank probed separately via
-`≢⍴E`, so boxed-display differences are never what we're comparing.
+Each expression runs in its OWN interpreter invocation, so an empty result or
+multi-line output can never misalign the comparison (batching them did, and
+cost an hour). Both sides get an explicit `⎕IO←1` first, because the Rust
+Environment defaults to ⎕IO=0 while GNU APL defaults to 1 — without pinning
+it, every index-returning primitive falsely mismatches.
+
+Probe expressions prefer `,E` (ravel to one line) and `≢⍴E` (rank) so that
+boxed-display differences are never what is being compared. NOTE: ravel
+itself was broken once, which made correct primitives look wrong — when a
+whole primitive's cases fail, sanity-check the PROBE before hunting the
+primitive.
 """
 import subprocess, sys, os
+from collections import OrderedDict
 
 HOME = os.path.expanduser("~")
 REF = f"{HOME}/Apps/apl-2.0/src/apl"
 RUST = f"{HOME}/Apps/apl-2.0/rust-apl/target/release/apl"
 
 CASES = [
+    # ══ previously verified (regression guards) ═══════════════════════════
     ("⍸", "⍸0 1 0 1 1"),
     ("⍸", "⍸0 0 0"),
-    ("⍸", "⍸1 1 1"),
     ("⍸", "⍸3<1 5 2 7"),
-    ("⍸", "≢⍸0 1 0 1"),
-    ("⍸", ",⍸2 2⍴0 1 1 0"),
-
     ("⍷", "1 2⍷1 2 3 1 2"),
     ("⍷", "'ab'⍷'xabyab'"),
     ("⍷", "+/'the'⍷'the cat and the dog'"),
-    ("⍷", "2⍷1 2 3 2"),
-    ("⍷", "1 1⍷1 1 1"),
-    ("⍷", "9 9⍷1 2 3"),
-    ("⍷", "1 2 3 4⍷1 2"),
-    ("⍷", ",3 4⍷2 3⍴1 2 3 3 4 5"),
-    ("⍷", "≢⍴3 4⍷2 3⍴1 2 3 3 4 5"),
-    ("⍷", "⍸1 2⍷1 2 3 1 2"),
-
     ("⌷", "2⌷10 20 30"),
-    ("⌷", "1⌷10 20 30"),
-    ("⌷", "3⌷10 20 30"),
     ("⌷", "2 3⌷3 4⍴⍳12"),
-    ("⌷", "1 1⌷2 3⍴⍳6"),
-    ("⌷", "2 2⌷2 3⍴⍳6"),
-
     ("⊖", ",⊖2 3⍴⍳6"),
-    ("⊖", "≢⍴⊖2 3⍴⍳6"),
     ("⊖", ",1⊖2 3⍴⍳6"),
-    ("⊖", ",2⊖2 3⍴⍳6"),
-    ("⊖", ",¯1⊖2 3⍴⍳6"),
-    ("⊖", "⊖1 2 3"),
-    ("⊖", "1⊖1 2 3"),
-    ("⊖", ",⊖3 2⍴⍳6"),
-
     ("⍕", "⍕42"),
-    ("⍕", "⍕1 2 3"),
-    ("⍕", "≢⍕1 2 3"),
-    ("⍕", "≢⍕42"),
     ("⍕", "⍕¯5"),
-    ("⍕", "≢⍴⍕2 2⍴⍳4"),
-
-    ("⍕d", "2⍕1.5"),
-    ("⍕d", "2⍕1.5 2.25"),
-    ("⍕d", "6 2⍕1.5"),
-    ("⍕d", "0⍕3.7"),
-    ("⍕d", "1⍕¯2.5"),
-    ("⍕d", "≢6 2⍕1.5"),
-
+    ("⍕", "2⍕1.5"),
     ("⍎", "⍎'2+3'"),
-    ("⍎", "⍎'1 2 3'"),
     ("⍎", "⍎⍕42"),
-    ("⍎", ",⍎'2 3⍴⍳6'"),
-    ("⍎", "⍎'⍳4'"),
-    ("⍎", "1+⍎'2'"),
-
-    # partition, already fixed — kept as a regression guard
-    ("⊂", "≢1 1 2 2⊂'abcd'"),
     ("⊂", "≢2 2 1 1⊂'abcd'"),
-    ("⊂", "≢1 1 2 2 1⊂'abcde'"),
+    (",", "≢,2 3⍴⍳6"),
+    (",", "≢⍴,2 3⍴⍳6"),
+    ("empty", "≢(0⍴0)+1"),
+
+    # ══ NEW: arithmetic / math ════════════════════════════════════════════
+    ("⍟", "⍟1"),
+    ("⍟", "2⍟8"),
+    ("⍟", "10⍟100"),
+    ("⍟", "⌊0.5+⍟2.718281828"),
+    ("!", "!5"),
+    ("!", "2!5"),
+    ("○", "⌊1000×○1"),
+    ("|", "3|10"),
+    ("|", "|¯7"),
+    ("|", "¯3|10"),
+    ("*", "2*10"),
+    ("*", "⌊*1"),
+    ("⌈", "⌈2.3"),
+    ("⌈", "⌈¯2.3"),
+    ("⌈", "3⌈5"),
+    ("⌊", "⌊2.7"),
+    ("⌊", "⌊¯2.7"),
+    ("⌊", "3⌊5"),
+    ("÷", "÷4"),
+    ("÷", "10÷4"),
+
+    # ══ NEW: set operations ═══════════════════════════════════════════════
+    ("∼", "1 2 3 4∼2 4"),
+    ("∼", "≢1 2 3∼1 2 3"),
+    ("∪", "∪1 2 1 3 2"),
+    ("∪", "1 2 3∪3 4 5"),
+    ("∩", "1 2 3 4∩2 4 6"),
+    ("∩", "≢1 2∩3 4"),
+    ("∊", "∊2 2⍴⍳4"),
+    ("∈", "2∈1 2 3"),
+    ("∈", "5∈1 2 3"),
+    ("∈", "1 5∈1 2 3"),
+
+    # ══ NEW: structural ══════════════════════════════════════════════════
+    ("⍴", "⍴2 3⍴⍳6"),
+    ("⍴", "≢⍴42"),
+    ("⌽", "⌽1 2 3"),
+    ("⌽", "1⌽1 2 3"),
+    ("⌽", "¯1⌽1 2 3"),
+    ("⌽", ",⌽2 3⍴⍳6"),
+    ("⍉", ",⍉2 3⍴⍳6"),
+    ("⍉", "⍴⍉2 3⍴⍳6"),
+    ("↑", "3↑1 2 3 4 5"),
+    ("↑", "¯2↑1 2 3 4 5"),
+    ("↑", "7↑1 2 3"),
+    ("↓", "2↓1 2 3 4 5"),
+    ("↓", "¯2↓1 2 3 4 5"),
+    ("↓", "≢9↓1 2 3"),
+    ("⍪", ",⍪1 2 3"),
+    ("⍪", "⍴⍪1 2 3"),
+    ("⍪", "1 2⍪3 4"),
+    ("≢", "≢1 2 3"),
+    ("≢", "≢42"),
+    ("≢", "1 2 3≢1 2 3"),
+    ("≡", "≡1 2 3"),
+    ("≡", "1 2 3≡1 2 3"),
+    ("≡", "1 2 3≡1 2 4"),
+
+    # ══ NEW: encode / decode ══════════════════════════════════════════════
+    ("⊤", "2 2 2⊤5"),
+    ("⊤", "10 10⊤42"),
+    ("⊥", "2⊥1 0 1"),
+    ("⊥", "10⊥1 2 3"),
+    ("⊥", "24 60 60⊥1 2 3"),
+
+    # ══ NEW: grade / sort ═════════════════════════════════════════════════
+    ("⍋", "⍋3 1 2"),
+    ("⍋", "⍋1 2 3"),
+    ("⍒", "⍒3 1 2"),
+    ("⍒", "⍒1 2 3"),
+
+    # ══ NEW: logical ══════════════════════════════════════════════════════
+    ("∧", "1∧1"),
+    ("∧", "1∧0"),
+    ("∨", "1∨0"),
+    ("∨", "0∨0"),
+    ("⍲", "0⍲0"),
+    ("⍲", "1⍲1"),
+    ("⍱", "0⍱0"),
+    ("⍱", "1⍱0"),
+    ("~", "~1"),
+    ("~", "~0 1 0"),
+
+    # ══ NEW: comparison ═══════════════════════════════════════════════════
+    ("<", "3<5"),
+    ("≤", "3≤3"),
+    ("=", "3=3"),
+    ("≥", "3≥5"),
+    (">", "5>3"),
+    ("≠", "3≠3"),
+
+    # ══ NEW: identity ═════════════════════════════════════════════════════
+    ("⊣", "1⊣2"),
+    ("⊢", "1⊢2"),
+
+    # ══ NEW: enclose / disclose ═══════════════════════════════════════════
+    ("⊃", "⊃1 2 3"),
+    ("⊃", "≡⊂1 2 3"),
+    ("⊂", "≢⊂1 2 3"),
+
+    # ══ NEW: operators (reduce / scan / each) ═════════════════════════════
+    ("/", "+/1 2 3 4"),
+    ("/", "×/1 2 3 4"),
+    ("/", "+/⍳10"),
+    ("/", "⌈/3 1 4 1 5"),
+    ("/", "-/1 2 3"),
+    ("\\", "+\\1 2 3 4"),
+    ("\\", "×\\1 2 3 4"),
+    ("⌿", ",+⌿2 3⍴⍳6"),
+    ("∘.", ",1 2∘.×1 2 3"),
+    ("∘.", "⍴1 2∘.×1 2 3"),
+    ("f.g", "1 2 3+.×1 2 3"),
+
+    # ══ NEW: replicate / expand ═══════════════════════════════════════════
+    ("rep", "2 3/1 2"),
+    ("rep", "1 0 1/1 2 3"),
+
+    # ══ NEW: iota / index-of ══════════════════════════════════════════════
+    ("⍳", "⍳5"),
+    ("⍳", "≢⍳0"),
+    ("⍳", "1 2 3⍳2"),
+    ("⍳", "1 2 3⍳9"),
+
+    # ══ NEW: index origin sensitivity ═════════════════════════════════════
+    ("io", "⍳3"),
+    ("io", "⍋3 1 2"),
+    ("io", "1 2 3⍳3"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
 
 
 def run_one(binary, expr, is_ref):
-    """Run a single expression, return its output text (may be '' or an error)."""
+    """Run one expression; return its output text ('<empty>' if none)."""
     script = f"⎕IO←1\n{expr}\n)OFF\n"
     try:
         p = subprocess.run(
@@ -100,13 +199,20 @@ def run_one(binary, expr, is_ref):
 
 
 def norm(s):
-    # collapse whitespace; the reference pads numeric columns differently
     return " ".join(s.split())
 
 
 def main():
-    only = sys.argv[1] if len(sys.argv) > 1 else None
-    cases = [c for c in CASES if only is None or c[0] == only]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--list" in sys.argv:
+        tags = OrderedDict((p, 0) for p, _ in CASES)
+        for p, _ in CASES:
+            tags[p] += 1
+        print(" ".join(f"{t}({n})" for t, n in tags.items()))
+        return 0
+
+    cases = [c for c in CASES if not args or c[0] in args]
+    print(f"running {len(cases)} cases against the reference...\n")
 
     bad, errs = [], []
     for prim, expr in cases:
@@ -121,22 +227,18 @@ def main():
     print(f"{total} cases: {total - len(bad) - len(errs)} agree, "
           f"{len(bad)} differ, {len(errs)} rust-only errors\n")
 
+    def table(title, rows):
+        print(f"=== {title} ===")
+        print(f"{'prim':6} {'expression':30} {'reference':22} rust")
+        print("-" * 96)
+        for prim, expr, r, u in rows:
+            print(f"{prim:6} {expr:30} {r[:20]:22} {u[:28]}")
+        print()
+
     if errs:
-        print("=== RUST ERRORS (reference succeeds) ===")
-        print(f"{'prim':5} {'expression':32} {'reference':20} rust")
-        print("-" * 92)
-        for prim, expr, r, u in errs:
-            print(f"{prim:5} {expr:32} {r[:18]:20} {u[:30]}")
-        print()
-
+        table("RUST ERRORS (reference succeeds)", errs)
     if bad:
-        print("=== MISMATCHES ===")
-        print(f"{'prim':5} {'expression':32} {'reference':20} rust")
-        print("-" * 92)
-        for prim, expr, r, u in bad:
-            print(f"{prim:5} {expr:32} {r[:18]:20} {u[:30]}")
-        print()
-
+        table("MISMATCHES", bad)
     if not bad and not errs:
         print("All cases agree with the reference implementation.")
     return 1 if (bad or errs) else 0

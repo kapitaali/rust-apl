@@ -94,7 +94,7 @@ impl Prim {
             "*" | "⋆" => Prim::Exponential,
             "○" => Prim::PiTimes,
             "⍟" => Prim::NatLog,
-            "∣" => Prim::Magnitude,
+            "∣" | "|" => Prim::Magnitude,
             "?" => Prim::Roll,      // ? = roll
             "∼" => Prim::Without,   // ∼ = without (set difference)
             "∪" => Prim::Union,     // ∪ = union (unique / set union)
@@ -142,7 +142,12 @@ impl Prim {
             Prim::Add => map_cells(b, cell::bif_conjugate),
             Prim::Subtract => map_cells(b, cell::bif_negative),
             Prim::Divide => map_cells(b, cell::bif_reciprocal),
+            // ⋆B / *B — exponential (e to the B)
             Prim::Exponential => map_cells(b, cell::bif_exponential),
+            // *B is tokenized as Power (it is dyadic-power's glyph), but
+            // MONADIC * is exponential — without this arm `*1` was a SYNTAX
+            // ERROR while `2*10` worked.
+            Prim::Power => map_cells(b, cell::bif_exponential),
             Prim::NatLog => map_cells(b, cell::bif_nat_log),
             Prim::Ceiling => map_cells(b, cell::bif_ceiling),
             Prim::Floor => map_cells(b, cell::bif_floor),
