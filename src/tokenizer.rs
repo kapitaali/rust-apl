@@ -52,6 +52,8 @@ pub enum Tok {
     RBrace,
     /// dfn guard separator `:`
     Colon,
+    /// index-axis separator `;` inside brackets: `M[i;j]`
+    Semicolon,
     /// dfn left argument `⍺`
     Alpha,
     /// dfn right argument `⍵`
@@ -154,6 +156,10 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
             }
             ']' => {
                 toks.push(Tok::RBracket);
+                i += 1;
+            }
+            ';' => {
+                toks.push(Tok::Semicolon);
                 i += 1;
             }
             '{' => {

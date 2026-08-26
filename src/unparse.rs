@@ -211,6 +211,17 @@ pub fn unparse(e: &Expr) -> String {
         Expr::Index(base, idx) => {
             format!("{}[{}]", unparse(base), unparse(idx))
         }
+        Expr::IndexAxes(base, axes) => {
+            // elided axes render as an empty slot: M[1;] / M[;1]
+            let inner: Vec<String> = axes
+                .iter()
+                .map(|a| match a {
+                    Some(e) => unparse(e),
+                    None => String::new(),
+                })
+                .collect();
+            format!("{}[{}]", unparse(base), inner.join(";"))
+        }
         Expr::Assign(name, rhs) => format!("{}←{}", name, unparse(rhs)),
         Expr::FuncCallMono(name, arg) => match arg {
             Some(a) => {

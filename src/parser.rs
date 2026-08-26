@@ -54,6 +54,9 @@ pub enum Expr {
     QuadLoadSo(Box<Expr>),
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
+    /// Multi-axis bracket index `B[i;j;...]`. One entry per axis; `None` is an
+    /// ELIDED index, which selects that whole axis (`M[1;]` = row 1).
+    IndexAxes(Box<Expr>, Vec<Option<Expr>>),
     Dyadic(Prim, Box<Expr>, Box<Expr>),
     Assign(String, Box<Expr>),
     /// selective assignment: `NAME[idx] ← expr`
@@ -733,6 +736,24 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
             let total = used + 2;
 
+            // bracket indexing directly on a parenthesised value:
+            // `(2 3⍴⍳6)[1;1]`
+            if matches!(toks.get(total), Some(Tok::LBracket)) {
+                let (parts, close) =
+                    split_index_axes(&toks[total + 1..]).ok_or(ErrorCode::SyntaxError)?;
+                let consumed = total + 1 + close + 1;
+                let axes = parse_index_axes(&parts)?;
+                if axes.len() == 1 {
+                    let idx = axes
+                        .into_iter()
+                        .next()
+                        .flatten()
+                        .ok_or(ErrorCode::SyntaxError)?;
+                    return Ok((Expr::Index(Box::new(e), Box::new(idx)), consumed));
+                }
+                return Ok((Expr::IndexAxes(Box::new(e), axes), consumed));
+            }
+
             // nested strand: `(expr)(expr)...` — adjacent paren groups form
             // a vector of enclosed values
             if matches!(toks.get(total), Some(Tok::LParen)) {
@@ -897,21 +918,76 @@ fn parse_nested_strand_from(toks: &[Tok], mut acc: Vec<(Expr, usize)>) -> AplRes
     Ok((Expr::NestedVec(items), used))
 }
 
+/// Split the tokens inside `[...]` on TOP-LEVEL semicolons.
+///
+/// Returns one slice per axis plus the offset of the closing bracket. An empty
+/// slice means an ELIDED index (`M[1;]` → `[Some(1), None]`). Nested
+/// brackets/parens/braces are skipped so `M[(A[1]);2]` splits correctly.
+/// Returns None when the bracket never closes.
+fn split_index_axes(toks: &[Tok]) -> Option<(Vec<&[Tok]>, usize)> {
+    let mut depth = 0usize;
+    let mut parts: Vec<&[Tok]> = Vec::new();
+    let mut start = 0usize;
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            Tok::LBracket | Tok::LParen | Tok::LBrace => depth += 1,
+            Tok::RParen | Tok::RBrace => depth = depth.checked_sub(1)?,
+            Tok::RBracket => {
+                if depth == 0 {
+                    parts.push(&toks[start..i]);
+                    return Some((parts, i));
+                }
+                depth -= 1;
+            }
+            Tok::Semicolon if depth == 0 => {
+                parts.push(&toks[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse each axis slice of an already-split bracket index.
+fn parse_index_axes(parts: &[&[Tok]]) -> AplResult<Vec<Option<Expr>>> {
+    let mut axes = Vec::with_capacity(parts.len());
+    for part in parts {
+        if part.is_empty() {
+            axes.push(None); // elided → whole axis
+            continue;
+        }
+        let (e, used) = parse_expr(part)?;
+        if used != part.len() {
+            return Err(ErrorCode::SyntaxError);
+        }
+        axes.push(Some(e));
+    }
+    Ok(axes)
+}
+
 fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::Num(v) => Ok((Expr::Num(*v), 1)),
         Tok::Str(s) => Ok((Expr::Str(s.clone()), 1)),
         Tok::Name(n) => {
             let n = n.clone();
-            // bracket indexing: NAME[expr] (selective assignment not yet supported)
+            // bracket indexing: NAME[expr] or NAME[i;j;...]
             if matches!(toks.get(1), Some(Tok::LBracket)) {
-                let (idx, used) = parse_expr(&toks[2..])?;
-                match toks.get(used + 2) {
-                    Some(Tok::RBracket) => {
-                        return Ok((Expr::Index(Box::new(Expr::Var(n)), Box::new(idx)), used + 3))
-                    }
-                    _ => return Err(ErrorCode::SyntaxError),
+                let (parts, close) = split_index_axes(&toks[2..]).ok_or(ErrorCode::SyntaxError)?;
+                let total = 2 + close + 1; // name + '[' + body + ']'
+                if parts.len() == 1 {
+                    // single index, no semicolon: keep the existing 1-D path
+                    let axes = parse_index_axes(&parts)?;
+                    let idx = axes
+                        .into_iter()
+                        .next()
+                        .flatten()
+                        .ok_or(ErrorCode::SyntaxError)?;
+                    return Ok((Expr::Index(Box::new(Expr::Var(n)), Box::new(idx)), total));
                 }
+                let axes = parse_index_axes(&parts)?;
+                return Ok((Expr::IndexAxes(Box::new(Expr::Var(n)), axes), total));
             }
             // monadic defined-function call: NAME <value> (name in function
             // position). Only when the next token starts a VALUE — a Prim
@@ -949,6 +1025,85 @@ fn index_value(b: &ValueP, idx: &ValueP) -> AplResult<ValueP> {
         out.push(cells[i as usize].clone());
     }
     Ok(ValueP::from_ravel_like(idx, out))
+}
+
+/// `B[i;j;...]` — select along each axis independently.
+///
+/// `sel` holds one entry per axis of B: `None` is an elided index (take the
+/// whole axis), `Some((idx, drop))` a list of 0-based positions where `drop`
+/// says the selector was written as a SCALAR.
+///
+/// Axis-dropping follows APL and keys off the SYNTAX, not the count: an axis
+/// indexed by a scalar disappears from the result, while a vector keeps it
+/// even when it holds one element. For a 2×3 matrix, `⍴M[1;1]` is empty,
+/// `⍴M[1;]` is `3`, `⍴M[;1]` is `2`, `⍴M[1 2;1 2]` is `2 2`, and `⍴M[1 1;]`
+/// is `2 3` — all reference-verified.
+fn index_axes(b: &ValueP, sel: &[Option<(Vec<i64>, bool)>]) -> AplResult<ValueP> {
+    let rank = b.rank() as usize;
+    if sel.len() != rank {
+        return Err(ErrorCode::RankError);
+    }
+    let dims: Vec<i64> = (0..rank).map(|i| b.get_shape_item(i as i16)).collect();
+
+    // resolve each axis to the concrete list of positions to take
+    let mut picks: Vec<Vec<i64>> = Vec::with_capacity(rank);
+    for (ax, s) in sel.iter().enumerate() {
+        match s {
+            None => picks.push((0..dims[ax]).collect()),
+            Some((idx, _)) => {
+                for &i in idx {
+                    if i < 0 || i >= dims[ax] {
+                        return Err(ErrorCode::IndexError);
+                    }
+                }
+                picks.push(idx.clone());
+            }
+        }
+    }
+
+    // result shape keeps only the axes that were NOT scalar-indexed
+    let out_dims: Vec<i64> = picks
+        .iter()
+        .zip(sel)
+        .filter(|(_, s)| !matches!(s, Some((_, true))))
+        .map(|(p, _)| p.len() as i64)
+        .collect();
+
+    let strides = {
+        let mut st = vec![1i64; rank];
+        for i in (0..rank.saturating_sub(1)).rev() {
+            st[i] = st[i + 1] * dims[i + 1];
+        }
+        st
+    };
+
+    let cells = b.cells();
+    let total: i64 = picks.iter().map(|p| p.len() as i64).product();
+    let mut out = Vec::with_capacity(total.max(0) as usize);
+    // walk the cartesian product of the per-axis pick lists, row-major
+    let mut counter = vec![0usize; rank];
+    for _ in 0..total {
+        let mut off = 0i64;
+        for ax in 0..rank {
+            off += picks[ax][counter[ax]] * strides[ax];
+        }
+        out.push(cells[off as usize].clone());
+        for ax in (0..rank).rev() {
+            counter[ax] += 1;
+            if counter[ax] < picks[ax].len() {
+                break;
+            }
+            counter[ax] = 0;
+        }
+    }
+
+    if out_dims.is_empty() {
+        // every axis was scalar-indexed → a scalar result
+        return Ok(ValueP::scalar_from(
+            out.into_iter().next().ok_or(ErrorCode::IndexError)?,
+        ));
+    }
+    ValueP::from_parts(crate::shape::Shape::from_dims(&out_dims)?, out)
 }
 
 /// Parse a dfn body (tokens between `{` and `}`) into a single Expr.
@@ -2093,6 +2248,31 @@ impl Environment {
                     )?
                 };
                 index_value(&bv, &shifted)
+            }
+            Expr::IndexAxes(base, axes) => {
+                // B[i;j;...] — one selector per axis, elided = whole axis
+                let bv = self.eval(base)?;
+                let io = self.get_io()?;
+                let mut sel: Vec<Option<(Vec<i64>, bool)>> = Vec::with_capacity(axes.len());
+                for ax in axes {
+                    match ax {
+                        None => sel.push(None),
+                        Some(e) => {
+                            let v = self.eval(e)?;
+                            // Whether the axis is DROPPED depends on the
+                            // written form, not the element count: M[1;1] is a
+                            // scalar but M[1 1;] keeps a 2-long axis. A rank-0
+                            // result means a scalar was written.
+                            let drops = v.rank() == 0;
+                            let mut idx = Vec::with_capacity(v.element_count() as usize);
+                            for c in v.cells() {
+                                idx.push(c.get_int_value()? - io);
+                            }
+                            sel.push(Some((idx, drops)));
+                        }
+                    }
+                }
+                index_axes(&bv, &sel)
             }
             Expr::Dyadic(p, a, b) => {
                 let av = self.eval(a)?;
@@ -4079,5 +4259,86 @@ mod tests {
         env.eval_line("⎕IO←1").unwrap();
         // each COLUMN is an independent base-2 number
         assert_eq!(ravel_ints(&mut env, "2⊥2 3⍴1 0 1 1 1 0"), vec![3, 1, 2]);
+    }
+
+    // ── 2-D bracket indexing M[i;j] ────────────────────────────────────────
+    // All expectations reference-verified.
+
+    #[test]
+    fn test_bracket_index_two_axes() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert_eq!(ravel_ints(&mut env, "M[1;1]"), vec![1]);
+        assert_eq!(ravel_ints(&mut env, "M[2;3]"), vec![6]);
+        assert_eq!(ravel_ints(&mut env, ",M[1;]"), vec![1, 2, 3]);
+        assert_eq!(ravel_ints(&mut env, ",M[;1]"), vec![1, 4]);
+    }
+
+    #[test]
+    fn test_bracket_index_axis_dropping_follows_syntax() {
+        // a SCALAR index drops its axis; a VECTOR index keeps it even when it
+        // holds a single element — M[1;1] is a scalar but M[1 1;] is 2×3
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert_eq!(eval_one(&mut env, "M[1;1]").rank(), 0);
+        assert_eq!(ravel_ints(&mut env, "⍴M[1;]"), vec![3]);
+        assert_eq!(ravel_ints(&mut env, "⍴M[;1]"), vec![2]);
+        assert_eq!(ravel_ints(&mut env, "⍴M[1 2;1 2]"), vec![2, 2]);
+        assert_eq!(ravel_ints(&mut env, "⍴M[1 1;]"), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_bracket_index_selects_and_reorders() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M[1 2;1 2]"), vec![1, 2, 4, 5]);
+        // reversed column order comes back reversed
+        assert_eq!(ravel_ints(&mut env, ",M[;3 1]"), vec![3, 1, 6, 4]);
+    }
+
+    #[test]
+    fn test_bracket_index_on_parenthesised_value() {
+        // indexing applies to any expression, not just a named variable
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(ravel_ints(&mut env, "(2 3⍴⍳6)[2;3]"), vec![6]);
+        assert_eq!(ravel_ints(&mut env, ",(2 3⍴⍳6)[1;]"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_bracket_index_rank3() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("C←2 2 2⍴⍳8").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",C[1;;]"), vec![1, 2, 3, 4]);
+        assert_eq!(ravel_ints(&mut env, "⍴C[1;;]"), vec![2, 2]);
+        assert_eq!(ravel_ints(&mut env, "C[1;2;1]"), vec![3]);
+    }
+
+    #[test]
+    fn test_bracket_index_one_axis_still_works() {
+        // the 1-D path must be untouched by the multi-axis addition
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←10 20 30").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V[2]"), vec![20]);
+        assert_eq!(ravel_ints(&mut env, ",V[1 3]"), vec![10, 30]);
+    }
+
+    #[test]
+    fn test_bracket_index_errors() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        // out of range
+        assert!(env.eval_line("M[3;1]").is_err());
+        assert!(env.eval_line("M[1;9]").is_err());
+        // wrong number of axes for the rank
+        assert!(env.eval_line("M[1;1;1]").is_err());
+        // unclosed bracket
+        assert!(env.eval_line("M[1;1").is_err());
     }
 }
