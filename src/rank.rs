@@ -67,21 +67,33 @@ pub fn rank_monadic(
     assemble(&frame, results)
 }
 
-/// Dyadic rank: `A(f⍤k)B` pairs the cells of A and B.
+/// Dyadic rank: `A(f⍤kl kr)B` pairs the cells of A and B.
 ///
-/// The simple, common case is supported: either both arguments have the same
-/// frame, or one of them is a single cell that is reused for every pairing.
+/// `kl` is the cell rank for the LEFT argument and `kr` for the right; the
+/// single-rank spelling `f⍤k` passes the same value for both. Each argument is
+/// split independently, then the frames must either match or one side must be
+/// a single cell that is reused for every pairing (RANK ERROR otherwise, which
+/// is what the reference gives for mismatched multi-cell frames).
+///
+/// Reference-verified for vectors A←1 2 3, B←4 5 6:
+///
+/// ```text
+/// A(,⍤0 0)B → 1 4 2 5 3 6        shape 3 2   scalar cells pair up
+/// A(,⍤0 1)B → 1 4 5 6 2 4 5 6 …  shape 3 4   each scalar with the whole B
+/// A(,⍤1 0)B → 1 2 3 4 1 2 3 5 …  shape 3 4   whole A with each scalar
+/// ```
 pub fn rank_dyadic(
     a: &ValueP,
     b: &ValueP,
-    k: i64,
+    kl: i64,
+    kr: i64,
     f: impl Fn(&ValueP, &ValueP) -> AplResult<ValueP>,
 ) -> AplResult<ValueP> {
-    if k < 0 {
+    if kl < 0 || kr < 0 {
         return Err(ErrorCode::DomainError);
     }
-    let (a_frame, a_cells) = split_cells(a, k)?;
-    let (b_frame, b_cells) = split_cells(b, k)?;
+    let (a_frame, a_cells) = split_cells(a, kl)?;
+    let (b_frame, b_cells) = split_cells(b, kr)?;
 
     // choose the frame: equal frames pair up; a single cell broadcasts
     let (frame, n) = if a_frame == b_frame {
@@ -91,7 +103,7 @@ pub fn rank_dyadic(
     } else if b_cells.len() == 1 {
         (a_frame.clone(), a_cells.len())
     } else {
-        return Err(ErrorCode::LengthError);
+        return Err(ErrorCode::RankError);
     };
 
     let mut results = Vec::with_capacity(n);
@@ -280,7 +292,7 @@ mod tests {
         // rows of A catenated with rows of B, per row
         let a = mat(2, 2, &[1, 2, 3, 4]);
         let b = mat(2, 2, &[5, 6, 7, 8]);
-        let r = rank_dyadic(&a, &b, 1, crate::comma::catenate).unwrap();
+        let r = rank_dyadic(&a, &b, 1, 1, crate::comma::catenate).unwrap();
         // row 0: 1 2 , 5 6 ; row 1: 3 4 , 7 8
         assert_eq!(ints(&r), vec![1, 2, 5, 6, 3, 4, 7, 8]);
         assert_eq!(r.rank(), 2);
@@ -288,10 +300,36 @@ mod tests {
     }
 
     #[test]
+    fn test_dyadic_rank_with_separate_left_right_ranks() {
+        // A←1 2 3, B←4 5 6
+        let a = ValueP::int_vector(&[1, 2, 3]);
+        let b = ValueP::int_vector(&[4, 5, 6]);
+
+        // f⍤0 0: scalar cells pair up
+        let r = rank_dyadic(&a, &b, 0, 0, crate::comma::catenate).unwrap();
+        assert_eq!(ints(&r), vec![1, 4, 2, 5, 3, 6]);
+        assert_eq!(r.rank(), 2);
+        assert_eq!(r.get_shape_item(0), 3);
+        assert_eq!(r.get_shape_item(1), 2);
+
+        // f⍤0 1: each scalar paired with the whole B
+        let r = rank_dyadic(&a, &b, 0, 1, crate::comma::catenate).unwrap();
+        assert_eq!(ints(&r), vec![1, 4, 5, 6, 2, 4, 5, 6, 3, 4, 5, 6]);
+        assert_eq!(r.get_shape_item(0), 3);
+        assert_eq!(r.get_shape_item(1), 4);
+
+        // f⍤1 0: whole A paired with each scalar
+        let r = rank_dyadic(&a, &b, 1, 0, crate::comma::catenate).unwrap();
+        assert_eq!(ints(&r), vec![1, 2, 3, 4, 1, 2, 3, 5, 1, 2, 3, 6]);
+        assert_eq!(r.get_shape_item(0), 3);
+        assert_eq!(r.get_shape_item(1), 4);
+    }
+
+    #[test]
     fn test_dyadic_rank_broadcasts_a_single_cell() {
         let a = ValueP::int_vector(&[9, 9]);
         let b = mat(2, 2, &[1, 2, 3, 4]);
-        let r = rank_dyadic(&a, &b, 1, crate::comma::catenate).unwrap();
+        let r = rank_dyadic(&a, &b, 1, 1, crate::comma::catenate).unwrap();
         assert_eq!(ints(&r), vec![9, 9, 1, 2, 9, 9, 3, 4]);
     }
 

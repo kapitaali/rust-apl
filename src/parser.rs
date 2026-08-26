@@ -40,8 +40,9 @@ pub enum Expr {
     EachDyad(Prim, Box<Expr>, Box<Expr>),
     /// rank operator `(f⍤k)B` — apply f to each rank-k cell of B
     RankOp(Prim, i64, Box<Expr>),
-    /// dyadic rank `A(f⍤k)B`
-    RankDyad(Prim, i64, Box<Expr>, Box<Expr>),
+    /// dyadic rank `A(f⍤kl kr)B` — separate cell ranks for the two arguments
+    /// (the single-rank spelling `f⍤k` stores k in both)
+    RankDyad(Prim, i64, i64, Box<Expr>, Box<Expr>),
     /// `A ∘.f B` — outer product
     OuterProduct(Prim, Box<Expr>, Box<Expr>),
     /// `A f.g B` — inner product (f = reduction, g = pairwise function)
@@ -310,6 +311,21 @@ fn call_plugin(pb: &crate::ffi::plugin::PluginBinding, arg_v: &ValueP) -> AplRes
     crate::ffi::plugin::xvalue_to_value(&out)
 }
 
+/// Read the rank list following a `Rank(p)` token.
+///
+/// `f⍤k` is a single rank; `f⍤kl kr` splits the two arguments. Returns
+/// `(kl, kr, n)` where `n` is the number of consumed Num tokens.
+fn read_rank_list(toks: &[Tok]) -> AplResult<(i64, i64, usize)> {
+    let a = match toks.first() {
+        Some(Tok::Num(v)) => *v as i64,
+        _ => return Err(ErrorCode::SyntaxError),
+    };
+    match toks.get(1) {
+        Some(Tok::Num(v)) => Ok((a, *v as i64, 2)),
+        _ => Ok((a, a, 1)),
+    }
+}
+
 /// expr := name '←' expr | name '[' expr ']' '←' expr
 ///       | '(' A⊃name ')' '←' expr | simple
 fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
@@ -515,29 +531,32 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         return Ok((Expr::EachDyad(p, Box::new(lhs), Box::new(rhs)), used));
     }
 
-    // dyadic rank: A (F⍤k) B — the k follows the glyph, then the right arg
+    // dyadic rank: A (F⍤k) B or A F⍤kl kr B — the rank list follows the glyph
     if let Some(Tok::Rank(p)) = toks.get(used) {
         let p = *p;
-        let k = match toks.get(used + 1) {
-            Some(Tok::Num(v)) => *v as i64,
-            _ => return Err(ErrorCode::SyntaxError),
-        };
-        let (rhs, rused) = parse_simple(&toks[used + 2..])?;
-        used += 2 + rused;
-        return Ok((Expr::RankDyad(p, k, Box::new(lhs), Box::new(rhs)), used));
+        let (kl, kr, nk) = read_rank_list(&toks[used + 1..])?;
+        let (rhs, rused) = parse_simple(&toks[used + 1 + nk..])?;
+        used += 1 + nk + rused;
+        return Ok((
+            Expr::RankDyad(p, kl, kr, Box::new(lhs), Box::new(rhs)),
+            used,
+        ));
     }
 
-    // dyadic rank in PARENTHESISED form: A (F⍤k) B
-    if let (Some(Tok::LParen), Some(Tok::Rank(p)), Some(Tok::Num(k)), Some(Tok::RParen)) = (
-        toks.get(used),
-        toks.get(used + 1),
-        toks.get(used + 2),
-        toks.get(used + 3),
-    ) {
-        let (p, k) = (*p, *k as i64);
-        let (rhs, rused) = parse_simple(&toks[used + 4..])?;
-        used += 4 + rused;
-        return Ok((Expr::RankDyad(p, k, Box::new(lhs), Box::new(rhs)), used));
+    // dyadic rank in PARENTHESISED form: A (F⍤kl kr) B
+    if let (Some(Tok::LParen), Some(Tok::Rank(p))) = (toks.get(used), toks.get(used + 1)) {
+        let p = *p;
+        if let Ok((kl, kr, nk)) = read_rank_list(&toks[used + 2..]) {
+            if matches!(toks.get(used + 2 + nk), Some(Tok::RParen)) {
+                let after = used + 2 + nk + 1;
+                let (rhs, rused) = parse_simple(&toks[after..])?;
+                used = after + rused;
+                return Ok((
+                    Expr::RankDyad(p, kl, kr, Box::new(lhs), Box::new(rhs)),
+                    used,
+                ));
+            }
+        }
     }
 
     // outer product: A ∘.f B
@@ -774,17 +793,19 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
         }
         Tok::LParen => {
-            // `(F⍤k) B` — a parenthesised DERIVED FUNCTION, not a value. The
-            // rank operator's argument sits after the closing paren, so the
-            // inner parse would fail with nothing to apply f to. Detect the
-            // shape LParen Rank(p) Num(k) RParen and take the argument from
-            // outside the parens.
-            if let (Some(Tok::Rank(p)), Some(Tok::Num(k)), Some(Tok::RParen)) =
-                (toks.get(1), toks.get(2), toks.get(3))
-            {
-                let (p, k) = (*p, *k as i64);
-                let (operand, used) = parse_simple(&toks[4..])?;
-                return Ok((Expr::RankOp(p, k, Box::new(operand)), 4 + used));
+            // `(F⍤k) B` or `(F⍤kl kr) B` — a parenthesised DERIVED FUNCTION.
+            // The rank operator's argument sits after the closing paren, so
+            // the inner parse would fail. Detect LParen Rank(p) Num... RParen
+            // and take the argument from outside the parens.
+            if let Some(Tok::Rank(p)) = toks.get(1) {
+                let p = *p;
+                if let Ok((_, k, nk)) = read_rank_list(&toks[2..]) {
+                    let close = 2 + nk;
+                    if matches!(toks.get(close), Some(Tok::RParen)) {
+                        let (operand, used) = parse_simple(&toks[close + 1..])?;
+                        return Ok((Expr::RankOp(p, k, Box::new(operand)), close + 1 + used));
+                    }
+                }
             }
             let (e, used) = parse_expr(&toks[1..])?;
             if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
@@ -811,8 +832,15 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
 
             // nested strand: `(expr)(expr)...` — adjacent paren groups form
-            // a vector of enclosed values
+            // a vector of enclosed values. But a paren group that opens with
+            // an operator token is a DERIVED FUNCTION (e.g. (f⍤k)), not a
+            // strand element — return here and let parse_simple match it.
             if matches!(toks.get(total), Some(Tok::LParen)) {
+                match toks.get(total + 1) {
+                    Some(Tok::Rank(_)) | Some(Tok::Each(_)) | Some(Tok::Reduce(_))
+                    | Some(Tok::Scan(_)) | Some(Tok::Scan1(_)) => return Ok((e, total)),
+                    _ => {}
+                }
                 return parse_nested_strand_from(toks, vec![(e, total)]);
             }
             // single group followed by another atom also strands: (1) 2
@@ -846,15 +874,14 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             Ok((Expr::EachOp(p, Box::new(operand)), used + 1))
         }
         Tok::Rank(p) => {
-            // rank operator: (F⍤k) B. The k comes straight after the glyph as
-            // a numeric literal, then the argument is the rest.
+            // rank operator: (F⍤k) B or (F⍤kl kr) B. The rank list comes
+            // straight after the glyph. For MONADIC use the reference uses
+            // the RIGHT rank kr for the single argument — so with one number
+            // both are the same, but with two numbers f⍤1 0 applies rank 0.
             let p = *p;
-            let k = match toks.get(1) {
-                Some(Tok::Num(v)) => *v as i64,
-                _ => return Err(ErrorCode::SyntaxError),
-            };
-            let (operand, used) = parse_simple(&toks[2..])?;
-            Ok((Expr::RankOp(p, k, Box::new(operand)), used + 2))
+            let (_, k, nk) = read_rank_list(&toks[1..])?;
+            let (operand, used) = parse_simple(&toks[1 + nk..])?;
+            Ok((Expr::RankOp(p, k, Box::new(operand)), 1 + nk + used))
         }
         Tok::Reduce(p) => {
             // monadic operator: LO/B — the derived function LO/ applies to
@@ -2384,11 +2411,11 @@ impl Environment {
                 let io = self.get_io()?;
                 crate::rank::rank_monadic(&bv, *k, |cell| Self::eval_monadic_io(p, cell, io))
             }
-            Expr::RankDyad(p, k, a, b) => {
+            Expr::RankDyad(p, kl, kr, a, b) => {
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
                 let p = *p;
-                crate::rank::rank_dyadic(&av, &bv, *k, |x, y| {
+                crate::rank::rank_dyadic(&av, &bv, *kl, *kr, |x, y| {
                     crate::functions::eval_dyadic_public(p, x, y)
                 })
             }
@@ -4716,9 +4743,6 @@ mod tests {
         assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 10);
     }
 
-    // ── rank operator ⍤ ────────────────────────────────────────────────────
-    // All expectations reference-verified.
-
     #[test]
     fn test_rank_operator_applies_per_cell() {
         let mut env = Environment::new();
@@ -4769,5 +4793,52 @@ mod tests {
         let mut env = Environment::new();
         env.eval_line("⎕IO←1").unwrap();
         assert_eq!(ravel_ints(&mut env, ",(⌽⍤1)1 2 3"), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn test_rank_dyadic_two_ranks_uses_right_for_monadic() {
+        // monadic f⍤kl kr uses kr for the single argument
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // ,⍤1 0 on a matrix: rank 0 → ravel each scalar → shape 2 3 1
+        assert_eq!(ravel_ints(&mut env, "⍴(,⍤1 0)2 3⍴⍳6"), vec![2, 3, 1]);
+        // ,⍤0 1 on a matrix: rank 1 → ravel each row → shape 2 3
+        assert_eq!(ravel_ints(&mut env, "⍴(,⍤0 1)2 3⍴⍳6"), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_rank_dyadic_two_ranks_pair_independently() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // scalar cells pair up
+        assert_eq!(
+            ravel_ints(&mut env, ",1 2 3(,⍤0 0)4 5 6"),
+            vec![1, 4, 2, 5, 3, 6]
+        );
+        assert_eq!(ravel_ints(&mut env, "⍴1 2 3(,⍤0 0)4 5 6"), vec![3, 2]);
+        // each scalar with the whole B
+        assert_eq!(
+            ravel_ints(&mut env, ",1 2 3(,⍤0 1)4 5 6"),
+            vec![1, 4, 5, 6, 2, 4, 5, 6, 3, 4, 5, 6]
+        );
+        // whole A with each scalar
+        assert_eq!(
+            ravel_ints(&mut env, ",1 2 3(,⍤1 0)4 5 6"),
+            vec![1, 2, 3, 4, 1, 2, 3, 5, 1, 2, 3, 6]
+        );
+    }
+
+    #[test]
+    fn test_rank_dyadic_parenthesized_lhs() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(
+            ravel_ints(&mut env, ",(2 2⍴1 2 3 4)(,⍤1 1)2 2⍴5 6 7 8"),
+            vec![1, 2, 5, 6, 3, 4, 7, 8]
+        );
+        assert_eq!(
+            ravel_ints(&mut env, ",(2 2⍴1 2 3 4)(+⍤1)2 2⍴5 6 7 8"),
+            vec![6, 8, 10, 12]
+        );
     }
 }
