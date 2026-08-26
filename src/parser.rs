@@ -38,6 +38,10 @@ pub enum Expr {
     EachOp(Prim, Box<Expr>),
     /// `A F¨B` — each (dyadic)
     EachDyad(Prim, Box<Expr>, Box<Expr>),
+    /// rank operator `(f⍤k)B` — apply f to each rank-k cell of B
+    RankOp(Prim, i64, Box<Expr>),
+    /// dyadic rank `A(f⍤k)B`
+    RankDyad(Prim, i64, Box<Expr>, Box<Expr>),
     /// `A ∘.f B` — outer product
     OuterProduct(Prim, Box<Expr>, Box<Expr>),
     /// `A f.g B` — inner product (f = reduction, g = pairwise function)
@@ -511,6 +515,31 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         return Ok((Expr::EachDyad(p, Box::new(lhs), Box::new(rhs)), used));
     }
 
+    // dyadic rank: A (F⍤k) B — the k follows the glyph, then the right arg
+    if let Some(Tok::Rank(p)) = toks.get(used) {
+        let p = *p;
+        let k = match toks.get(used + 1) {
+            Some(Tok::Num(v)) => *v as i64,
+            _ => return Err(ErrorCode::SyntaxError),
+        };
+        let (rhs, rused) = parse_simple(&toks[used + 2..])?;
+        used += 2 + rused;
+        return Ok((Expr::RankDyad(p, k, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic rank in PARENTHESISED form: A (F⍤k) B
+    if let (Some(Tok::LParen), Some(Tok::Rank(p)), Some(Tok::Num(k)), Some(Tok::RParen)) = (
+        toks.get(used),
+        toks.get(used + 1),
+        toks.get(used + 2),
+        toks.get(used + 3),
+    ) {
+        let (p, k) = (*p, *k as i64);
+        let (rhs, rused) = parse_simple(&toks[used + 4..])?;
+        used += 4 + rused;
+        return Ok((Expr::RankDyad(p, k, Box::new(lhs), Box::new(rhs)), used));
+    }
+
     // outer product: A ∘.f B
     if let Some(Tok::OuterDot(p)) = toks.get(used) {
         let p = *p;
@@ -745,6 +774,18 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
         }
         Tok::LParen => {
+            // `(F⍤k) B` — a parenthesised DERIVED FUNCTION, not a value. The
+            // rank operator's argument sits after the closing paren, so the
+            // inner parse would fail with nothing to apply f to. Detect the
+            // shape LParen Rank(p) Num(k) RParen and take the argument from
+            // outside the parens.
+            if let (Some(Tok::Rank(p)), Some(Tok::Num(k)), Some(Tok::RParen)) =
+                (toks.get(1), toks.get(2), toks.get(3))
+            {
+                let (p, k) = (*p, *k as i64);
+                let (operand, used) = parse_simple(&toks[4..])?;
+                return Ok((Expr::RankOp(p, k, Box::new(operand)), 4 + used));
+            }
             let (e, used) = parse_expr(&toks[1..])?;
             if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
                 return Err(ErrorCode::SyntaxError);
@@ -803,6 +844,17 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let p = *p;
             let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::EachOp(p, Box::new(operand)), used + 1))
+        }
+        Tok::Rank(p) => {
+            // rank operator: (F⍤k) B. The k comes straight after the glyph as
+            // a numeric literal, then the argument is the rest.
+            let p = *p;
+            let k = match toks.get(1) {
+                Some(Tok::Num(v)) => *v as i64,
+                _ => return Err(ErrorCode::SyntaxError),
+            };
+            let (operand, used) = parse_simple(&toks[2..])?;
+            Ok((Expr::RankOp(p, k, Box::new(operand)), used + 2))
         }
         Tok::Reduce(p) => {
             // monadic operator: LO/B — the derived function LO/ applies to
@@ -2323,6 +2375,23 @@ impl Environment {
                 let bv = self.eval(b)?;
                 crate::operators::each_dyad(*p, &av, &bv)
             }
+            Expr::RankOp(p, k, b) => {
+                // (f⍤k)B — f applied to each rank-k cell.
+                // Route through eval_monadic_io so ⎕IO-sensitive primitives
+                // (⍳ ⍋ ⍒ ⍸) behave the same as they do outside the operator.
+                let bv = self.eval(b)?;
+                let p = *p;
+                let io = self.get_io()?;
+                crate::rank::rank_monadic(&bv, *k, |cell| Self::eval_monadic_io(p, cell, io))
+            }
+            Expr::RankDyad(p, k, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                let p = *p;
+                crate::rank::rank_dyadic(&av, &bv, *k, |x, y| {
+                    crate::functions::eval_dyadic_public(p, x, y)
+                })
+            }
             Expr::OuterProduct(p, a, b) => {
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
@@ -2573,6 +2642,21 @@ impl Environment {
         } else {
             Some(v)
         })
+    }
+
+    /// Apply a monadic primitive with ⎕IO-sensitive dispatch.
+    ///
+    /// The Monadic eval arm intercepts ⍳ ⍋ ⍒ ⍸ ⍕ before eval_monadic because
+    /// their results depend on the index origin. Operators that apply a prim
+    /// themselves (⍤ so far) must use this so `(⍳⍤0)3` matches a bare `⍳3`.
+    fn eval_monadic_io(p: Prim, b: &ValueP, io: i64) -> AplResult<ValueP> {
+        match p {
+            Prim::Iota => crate::functions::iota_monadic(b, io),
+            Prim::GradeUp => crate::sort::grade_io(b, false, io),
+            Prim::GradeDown => crate::sort::grade_io(b, true, io),
+            Prim::Where => crate::format::where_indices_io(b, io),
+            _ => p.eval_monadic(b),
+        }
     }
 
     /// Maximum nesting depth for ⍎. A self-executing expression such as
@@ -4630,5 +4714,60 @@ mod tests {
         // and when the guard succeeds, ITS value is the result
         let v = eval_one(&mut env, "⎕EA 5+5 ⋄ NOPE");
         assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 10);
+    }
+
+    // ── rank operator ⍤ ────────────────────────────────────────────────────
+    // All expectations reference-verified.
+
+    #[test]
+    fn test_rank_operator_applies_per_cell() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // reverse each ROW of a matrix
+        assert_eq!(ravel_ints(&mut env, ",(⌽⍤1)2 3⍴⍳6"), vec![3, 2, 1, 6, 5, 4]);
+        assert_eq!(ravel_ints(&mut env, "⍴(⌽⍤1)2 3⍴⍳6"), vec![2, 3]);
+        // tally per row: one scalar each
+        assert_eq!(ravel_ints(&mut env, ",(≢⍤1)2 3⍴⍳6"), vec![3, 3]);
+    }
+
+    #[test]
+    fn test_rank_at_or_above_argument_rank_is_whole_array() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // rank 2 on a matrix → one cell → ≢ of the whole matrix is 2
+        assert_eq!(ravel_ints(&mut env, "(≢⍤2)2 3⍴⍳6"), vec![2]);
+        // rank 3 exceeds the rank, so still one cell
+        assert_eq!(ravel_ints(&mut env, ",(⌽⍤3)2 3⍴⍳6"), vec![3, 2, 1, 6, 5, 4]);
+    }
+
+    #[test]
+    fn test_rank_operator_frames_a_cube() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(
+            ravel_ints(&mut env, ",(⌽⍤1)2 2 2⍴⍳8"),
+            vec![2, 1, 4, 3, 6, 5, 8, 7]
+        );
+        // one scalar per row, framed by the leading two axes
+        assert_eq!(ravel_ints(&mut env, ",(≢⍤1)2 2 2⍴⍳8"), vec![2, 2, 2, 2]);
+        assert_eq!(ravel_ints(&mut env, "⍴(≢⍤1)2 2 2⍴⍳8"), vec![2, 2]);
+    }
+
+    #[test]
+    fn test_rank_operator_honors_index_origin() {
+        // the operator applies the prim itself, so it must route ⎕IO-sensitive
+        // primitives the same way the Monadic arm does — (⍳⍤0)3 must match ⍳3
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",(⍳⍤0)3"), vec![1, 2, 3]);
+        env.eval_line("⎕IO←0").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",(⍳⍤0)3"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_rank_operator_on_vector() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",(⌽⍤1)1 2 3"), vec![3, 2, 1]);
     }
 }

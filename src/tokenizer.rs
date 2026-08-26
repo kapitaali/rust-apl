@@ -28,6 +28,8 @@ pub enum Tok {
     Scan1(Prim),
     /// the each operator: `F¨B`
     Each(Prim),
+    /// rank operator `f⍤k` — the operand prim; k follows as the next token
+    Rank(Prim),
     /// statement separator `⋄` (diamond)
     Diamond,
     /// outer product: `A ∘.f B`
@@ -400,6 +402,20 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                                 let p = *p;
                                 toks.pop();
                                 toks.push(Tok::Each(p));
+                                i += 1;
+                                continue;
+                            }
+                            _ => return Err(ErrorCode::SyntaxError),
+                        }
+                    }
+                    // rank operator: PRIM⍤k — unlike ¨ it carries a numeric
+                    // right operand, which the parser reads as the next token.
+                    if rest.starts_with('⍤') {
+                        match toks.last() {
+                            Some(Tok::Prim(p)) => {
+                                let p = *p;
+                                toks.pop();
+                                toks.push(Tok::Rank(p));
                                 i += 1;
                                 continue;
                             }

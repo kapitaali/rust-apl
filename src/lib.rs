@@ -28,6 +28,7 @@ pub mod parallel_tests;
 pub mod parser;
 pub mod partition;
 pub mod pick;
+pub mod rank;
 pub mod replicate;
 pub mod rotate;
 pub mod shape;
