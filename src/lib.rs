@@ -14,6 +14,7 @@ pub mod encode_decode;
 pub mod enlist;
 pub mod epsilon;
 pub mod ffi;
+pub mod find;
 pub mod format;
 pub mod functions;
 pub mod functions_def;

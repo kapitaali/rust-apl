@@ -71,6 +71,7 @@ pub enum Prim {
     Format,   // ⍕ — monadic: format, dyadic: width/decimals format
     Where,    // ⍸ — monadic: indices of 1s in a boolean array
     Execute,  // ⍎ — monadic: evaluate a character vector as APL
+    Find,     // ⍷ — dyadic: A⍷B locates occurrences of A within B
 }
 
 impl Prim {
@@ -108,6 +109,7 @@ impl Prim {
             "⍕" => Prim::Format,   // ⍕ = format
             "⍸" => Prim::Where,    // ⍸ = where (indices of 1s)
             "⍎" => Prim::Execute,  // ⍎ = execute (evaluate char vector)
+            "⍷" => Prim::Find,     // ⍷ = find (locate subarray)
             "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
@@ -400,6 +402,8 @@ impl Prim {
             // A⊖B — rotate first axis
             Prim::Rotate1 => crate::squad::rotate_first(a, b),
             Prim::Format => crate::format::format_dyadic(a, b),
+            // A⍷B — find occurrences of A within B
+            Prim::Find => crate::find::find(a, b),
             // A⌷B — general index
             Prim::Squad => crate::squad::squad(a, b),
             // A⍟B — logarithm base A of B

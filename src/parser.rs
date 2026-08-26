@@ -3815,4 +3815,67 @@ mod tests {
         let v = eval_one(&mut env, "⍎'1+1'");
         assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 2);
     }
+
+    #[test]
+    fn test_find_subvector_in_repl() {
+        // 1 2⍷1 2 3 1 2 → 1 0 0 1 0
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "1 2⍷1 2 3 1 2");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 0, 0, 1, 0]);
+    }
+
+    #[test]
+    fn test_find_composes_with_where() {
+        // ⍸1 2⍷1 2 3 1 2 → the origins of each match → 0 3 (0-based)
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍸1 2⍷1 2 3 1 2");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![0, 3]);
+    }
+
+    #[test]
+    fn test_find_string_in_repl() {
+        // 'ab'⍷'xabyab' → 0 1 0 0 1 0
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "'ab'⍷'xabyab'");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![0, 1, 0, 0, 1, 0]);
+    }
+
+    #[test]
+    fn test_find_counts_occurrences_via_plus_reduce() {
+        // +/'ab'⍷'xabyab' → 2 occurrences
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "+/'ab'⍷'xabyab'");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_find_in_matrix_keeps_shape() {
+        // pattern conformed to 1x2 inside a 2x3 matrix; result is 2x3
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "3 4⍷2 3⍴1 2 3 3 4 5");
+        assert_eq!(v.rank(), 2);
+        assert_eq!(v.get_shape_item(0), 2);
+        assert_eq!(v.get_shape_item(1), 3);
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![0, 0, 0, 1, 0, 0]);
+    }
 }
