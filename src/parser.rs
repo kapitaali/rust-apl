@@ -2101,6 +2101,10 @@ impl Environment {
                 if *p == crate::functions::Prim::Iota {
                     return crate::index_of::index_of_io(&av, &bv, self.get_io()?);
                 }
+                // A⍉B — dyadic transpose: the axis list is in ⎕IO origin
+                if *p == crate::functions::Prim::Transpose {
+                    return crate::transpose::transpose_dyadic_io(&av, &bv, self.get_io()?);
+                }
                 // A⌷B — general index: honor ⎕IO
                 if *p == crate::functions::Prim::Squad {
                     let io = self.get_io()?;
@@ -2331,6 +2335,20 @@ mod tests {
             crate::cell::Cell::Float(f) => *f,
             other => panic!("expected a number for {line:?}, got {other:?}"),
         }
+    }
+
+    /// all cells of a result as integers, in ravel order — the workhorse for
+    /// rank ≥ 2 assertions (pair it with `,E` / `⍴E` in the expression)
+    fn ravel_ints(env: &mut Environment, line: &str) -> Vec<i64> {
+        eval_one(env, line)
+            .cells()
+            .iter()
+            .map(|c| match c {
+                crate::cell::Cell::Int(i) => *i,
+                crate::cell::Cell::Float(f) => *f as i64,
+                other => panic!("expected numbers for {line:?}, got {other:?}"),
+            })
+            .collect()
     }
 
     #[test]
@@ -2855,10 +2873,13 @@ mod tests {
                 crate::cell::Cell::Int(5)
             ][..]
         );
-        // axis-1 take equals plain last-axis take
+        // axis-1 take keeps all rows, so it equals the per-axis form 2 2↑M.
+        // Plain `2↑M` on a matrix is a LENGTH ERROR: the left argument of
+        // take/drop needs one count PER AXIS (reference-verified).
         let a = eval_one(&mut env, "2↑[1]M");
-        let b = eval_one(&mut env, "2↑M");
+        let b = eval_one(&mut env, "2 2↑M");
         assert_eq!(a.cells(), b.cells());
+        assert!(env.eval_line("2↑M").is_err());
         // rotate along axis 0 (columns rotate vertically): 1⌽[0]M
         // rows [0 1 2],[3 4 5] → each COLUMN rotates: col0: 0,3→3,0; col1: 1,4→4,1; col2: 2,5→5,2
         let r = eval_one(&mut env, "1⌽[0]M");
@@ -3971,5 +3992,92 @@ mod tests {
         assert_eq!(eval_num_in(&mut env, "2!5"), 10.0);
         assert_eq!(eval_num_in(&mut env, "5!2"), 0.0);
         assert_eq!(eval_num_in(&mut env, "2!4"), 6.0);
+    }
+
+    // ── rank ≥ 2 semantics found by differential testing ───────────────────
+    // Every expectation below was verified against the reference C++ binary.
+
+    #[test]
+    fn test_take_drop_are_per_axis_on_matrices() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // one count per axis; a single count on a matrix is a LENGTH ERROR
+        assert!(env.eval_line("1↑2 3⍴⍳6").is_err());
+        assert!(env.eval_line("1↓2 3⍴⍳6").is_err());
+        assert_eq!(ravel_ints(&mut env, "1 2↑2 3⍴⍳6"), vec![1, 2]);
+        assert_eq!(ravel_ints(&mut env, "¯1 ¯2↑2 3⍴⍳6"), vec![5, 6]);
+        assert_eq!(ravel_ints(&mut env, "1 1↓2 3⍴⍳6"), vec![5, 6]);
+        assert_eq!(ravel_ints(&mut env, "¯1 ¯1↓2 3⍴⍳6"), vec![1, 2]);
+        // over-take pads with the prototype to the full requested shape
+        assert_eq!(
+            ravel_ints(&mut env, "3 4↑2 3⍴⍳6"),
+            vec![1, 2, 3, 0, 4, 5, 6, 0, 0, 0, 0, 0]
+        );
+        // dropping past an axis empties it
+        assert_eq!(ravel_ints(&mut env, "⍴5 5↓2 3⍴⍳6"), vec![0, 0]);
+    }
+
+    #[test]
+    fn test_monadic_transpose_reverses_all_axes() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(ravel_ints(&mut env, "⍴⍉2 3 4⍴⍳24"), vec![4, 3, 2]);
+        assert_eq!(
+            ravel_ints(&mut env, ",⍉2 2 2⍴⍳8"),
+            vec![1, 5, 3, 7, 2, 6, 4, 8]
+        );
+    }
+
+    #[test]
+    fn test_dyadic_transpose_and_diagonal() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // identity permutation
+        assert_eq!(ravel_ints(&mut env, ",1 2⍉2 3⍴⍳6"), vec![1, 2, 3, 4, 5, 6]);
+        // swap → ordinary transpose
+        assert_eq!(ravel_ints(&mut env, ",2 1⍉2 3⍴⍳6"), vec![1, 4, 2, 5, 3, 6]);
+        assert_eq!(ravel_ints(&mut env, "⍴2 1⍉2 3⍴⍳6"), vec![3, 2]);
+        // repeated axis selects the DIAGONAL and lowers the rank
+        assert_eq!(ravel_ints(&mut env, ",1 1⍉3 3⍴⍳9"), vec![1, 5, 9]);
+        assert_eq!(ravel_ints(&mut env, "⍴1 1⍉3 3⍴⍳9"), vec![3]);
+    }
+
+    #[test]
+    fn test_catenate_matrices_interleaves_rows() {
+        // joining along the last axis puts B's row AFTER A's row, per row
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(
+            ravel_ints(&mut env, ",(2 3⍴⍳6),2 3⍴⍳6"),
+            vec![1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6]
+        );
+        assert_eq!(ravel_ints(&mut env, "⍴(2 3⍴⍳6),2 3⍴⍳6"), vec![2, 6]);
+    }
+
+    #[test]
+    fn test_grade_on_matrix_orders_rows() {
+        // ⍋ over a matrix grades its ROWS lexicographically, so there is one
+        // index per row (not one per element)
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(ravel_ints(&mut env, "⍋3 2⍴1 2 0 1 2 2"), vec![2, 1, 3]);
+        assert_eq!(ravel_ints(&mut env, "⍒3 2⍴1 2 0 1 2 2"), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn test_encode_vector_builds_column_per_value() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // 2 2 2⊤5 3 → 3 rows (one per base) × 2 columns (one per value)
+        assert_eq!(ravel_ints(&mut env, "⍴2 2 2⊤5 3"), vec![3, 2]);
+        assert_eq!(ravel_ints(&mut env, ",2 2 2⊤5 3"), vec![1, 0, 0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_decode_matrix_reduces_each_column() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // each COLUMN is an independent base-2 number
+        assert_eq!(ravel_ints(&mut env, "2⊥2 3⍴1 0 1 1 1 0"), vec![3, 1, 2]);
     }
 }

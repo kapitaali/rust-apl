@@ -174,6 +174,107 @@ CASES = [
     ("io", "⍳3"),
     ("io", "⍋3 1 2"),
     ("io", "1 2 3⍳3"),
+
+    # ══ NEW: higher-rank / matrix forms ═══════════════════════════════════
+    # These primitives were previously covered for VECTORS only. Rank ≥ 2 is
+    # where axis bookkeeping goes wrong, so each case probes both the raveled
+    # values (,E) and the resulting shape (⍴E).
+    ("⌽r2", ",⌽2 3⍴⍳6"),
+    ("⌽r2", "⍴⌽2 3⍴⍳6"),
+    ("⌽r2", ",1⌽2 3⍴⍳6"),
+    ("⌽r2", ",¯1⌽2 3⍴⍳6"),
+    ("⌽r2", ",⌽3 2⍴⍳6"),
+    ("⌽r3", ",⌽2 2 2⍴⍳8"),
+    ("⌽r3", "⍴⌽2 2 2⍴⍳8"),
+
+    ("⊖r2", ",⊖2 3⍴⍳6"),
+    ("⊖r2", "⍴⊖2 3⍴⍳6"),
+    ("⊖r2", ",1⊖2 3⍴⍳6"),
+    ("⊖r2", ",¯1⊖2 3⍴⍳6"),
+    ("⊖r2", ",⊖3 2⍴⍳6"),
+    ("⊖r3", ",⊖2 2 2⍴⍳8"),
+
+    ("⍉r2", ",⍉2 3⍴⍳6"),
+    ("⍉r2", "⍴⍉2 3⍴⍳6"),
+    ("⍉r2", ",⍉3 2⍴⍳6"),
+    ("⍉r2", ",⍉⍉2 3⍴⍳6"),
+    ("⍉r3", "⍴⍉2 3 4⍴⍳24"),
+    ("⍉r3", ",⍉2 2 2⍴⍳8"),
+    # dyadic transpose (axis permutation)
+    ("⍉dy", ",1 2⍉2 3⍴⍳6"),
+    ("⍉dy", ",2 1⍉2 3⍴⍳6"),
+    ("⍉dy", "⍴2 1⍉2 3⍴⍳6"),
+    ("⍉dy", "⍴1 1⍉3 3⍴⍳9"),
+    ("⍉dy", ",1 1⍉3 3⍴⍳9"),
+
+    ("↑r2", ",1↑2 3⍴⍳6"),
+    ("↑r2", "⍴1↑2 3⍴⍳6"),
+    ("↑r2", ",1 2↑2 3⍴⍳6"),
+    ("↑r2", "⍴1 2↑2 3⍴⍳6"),
+    ("↑r2", ",¯1 ¯2↑2 3⍴⍳6"),
+    ("↑r2", "⍴3 4↑2 3⍴⍳6"),
+    ("↑r2", ",3 4↑2 3⍴⍳6"),
+
+    ("↓r2", ",1↓2 3⍴⍳6"),
+    ("↓r2", "⍴1↓2 3⍴⍳6"),
+    ("↓r2", ",1 1↓2 3⍴⍳6"),
+    ("↓r2", "⍴1 1↓2 3⍴⍳6"),
+    ("↓r2", ",¯1 ¯1↓2 3⍴⍳6"),
+    ("↓r2", "⍴5 5↓2 3⍴⍳6"),
+
+    ("⍪r2", ",2 3⍴⍳6"),
+    ("⍪r2", "⍴⍪2 3⍴⍳6"),
+    ("⍪r2", ",(2 3⍴⍳6)⍪2 3⍴⍳6"),
+    ("⍪r2", "⍴(2 3⍴⍳6)⍪2 3⍴⍳6"),
+
+    (",r2", ",(2 3⍴⍳6),2 3⍴⍳6"),
+    (",r2", "⍴(2 3⍴⍳6),2 3⍴⍳6"),
+    (",r2", "⍴(2 3⍴⍳6),2 1⍴0 0"),
+
+    ("≢r2", "≢2 3⍴⍳6"),
+    ("≢r2", "≢3 2⍴⍳6"),
+    ("≢r2", "≢2 2 2⍴⍳8"),
+    ("≡r2", "≡2 3⍴⍳6"),
+    ("≡r2", "(2 3⍴⍳6)≡2 3⍴⍳6"),
+    ("≡r2", "(2 3⍴⍳6)≡3 2⍴⍳6"),
+
+    ("⍴r2", "⍴2 3⍴⍳6"),
+    ("⍴r2", "⍴2 2 2⍴⍳8"),
+    ("⍴r2", "≢⍴2 2 2⍴⍳8"),
+    ("⍴r2", ",3 3⍴⍳4"),
+
+    # reduce / scan along both axes of a matrix
+    ("/r2", ",+/2 3⍴⍳6"),
+    ("/r2", "⍴+/2 3⍴⍳6"),
+    ("/r2", ",+⌿2 3⍴⍳6"),
+    ("/r2", "⍴+⌿2 3⍴⍳6"),
+    ("/r2", ",×/2 3⍴⍳6"),
+    ("/r2", ",⌈/2 3⍴⍳6"),
+    ("\\r2", ",+\\2 3⍴⍳6"),
+    ("\\r2", "⍴+\\2 3⍴⍳6"),
+
+    # scalar functions and grade over matrices
+    ("sf r2", ",1+2 3⍴⍳6"),
+    ("sf r2", "⍴1+2 3⍴⍳6"),
+    ("sf r2", ",(2 3⍴⍳6)×2 3⍴⍳6"),
+    ("sf r2", ",-2 3⍴⍳6"),
+    ("⍋r2", "⍋3 2⍴1 2 0 1 2 2"),
+
+    # index / squad on matrices
+    ("⌷r2", "1 1⌷2 3⍴⍳6"),
+    ("⌷r2", "2 3⌷2 3⍴⍳6"),
+    ("idx", ",(2 3⍴⍳6)[1;]"),
+    ("idx", ",(2 3⍴⍳6)[;1]"),
+    ("idx", "(2 3⍴⍳6)[1;1]"),
+
+    # enlist / ravel flatten rank ≥ 2
+    ("∊r2", "∊2 3⍴⍳6"),
+    ("∊r2", "≢∊2 2 2⍴⍳8"),
+
+    # encode/decode with vector left argument over a matrix-ish case
+    ("⊤r2", ",2 2 2⊤5 3"),
+    ("⊤r2", "⍴2 2 2⊤5 3"),
+    ("⊥r2", "2⊥2 3⍴1 0 1 1 1 0"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
@@ -202,6 +303,29 @@ def norm(s):
     return " ".join(s.split())
 
 
+def is_error(s):
+    """True if the output reports an APL error (either dialect's wording)."""
+    u = s.upper()
+    return "ERROR" in u
+
+
+def same(ref, rust):
+    """Agreement test.
+
+    Both sides erroring counts as agreement even when the surrounding text
+    differs: GNU APL echoes the offending line with a caret, while this REPL
+    prints a bare `ERROR: LENGTH ERROR`. What matters is that both rejected
+    the expression, and with the same error CLASS when we can tell.
+    """
+    if is_error(ref) and is_error(rust):
+        for kind in ("LENGTH", "RANK", "DOMAIN", "SYNTAX", "INDEX", "VALUE"):
+            in_ref, in_rust = kind in ref.upper(), kind in rust.upper()
+            if in_ref != in_rust:
+                return False
+        return True
+    return norm(ref) == norm(rust)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--list" in sys.argv:
@@ -218,9 +342,9 @@ def main():
     for prim, expr in cases:
         r = run_one(REF, expr, True)
         u = run_one(RUST, expr, False)
-        if "ERROR" in u and "ERROR" not in r:
+        if is_error(u) and not is_error(r):
             errs.append((prim, expr, r, u))
-        elif norm(r) != norm(u):
+        elif not same(r, u):
             bad.append((prim, expr, r, u))
 
     total = len(cases)

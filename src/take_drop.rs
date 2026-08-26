@@ -37,80 +37,150 @@ fn prototype(b: &ValueP) -> Cell {
     }
 }
 
-/// `X↑B` — take along the last axis.
+/// `X↑B` — take, ONE COUNT PER AXIS.
+///
+/// `X` must have exactly one element per axis of `B` (LENGTH ERROR otherwise,
+/// matching the reference: `1↑2 3⍴⍳6` is an error, not a last-axis take).
+/// Each count selects from the front when positive and from the end when
+/// negative; over-taking pads with B's prototype. The result's shape is
+/// `|X` — so `3 4↑2 3⍴⍳6` is a fully padded 3×4.
 pub fn take(x: &ValueP, b: &ValueP) -> AplResult<ValueP> {
-    let count = single_int(x)?;
-    let rank = b.rank();
-    let n = axis_len(b);
-
-    // how many from the front (>0) or back (<0); may exceed n (over-take)
-    if rank <= 1 {
-        let items = take_vec(b.cells(), count, &prototype(b));
+    let counts = axis_counts(x, b)?;
+    if counts.len() == 1 {
+        let items = take_vec(b.cells(), counts[0], &prototype(b));
         return ValueP::from_parts(Shape::vector(items.len() as ShapeItem), items);
     }
-
-    // rank ≥ 2: apply per row along the last axis
-    let outer = b.element_count() / n.max(1);
+    let dims: Vec<i64> = counts.iter().map(|c| c.abs()).collect();
+    let src_dims = shape_dims(b);
     let proto = prototype(b);
-    let mut out = Vec::with_capacity((outer * count.abs()) as usize);
     let cells = b.cells();
-    for row in 0..outer as usize {
-        out.extend(take_vec(
-            &cells[row * n as usize..(row + 1) * n as usize],
-            count,
-            &proto,
-        ));
+
+    let total: i64 = dims.iter().product();
+    let mut out = Vec::with_capacity(total as usize);
+    // walk the RESULT in row-major order; map each position back to a source
+    // subscript, emitting the prototype when it falls outside B
+    let mut subs = vec![0i64; dims.len()];
+    for _ in 0..total {
+        let mut src = Vec::with_capacity(subs.len());
+        let mut inside = true;
+        for (ax, &s) in subs.iter().enumerate() {
+            // negative count anchors the window to the END of that axis
+            let off = if counts[ax] >= 0 {
+                s
+            } else {
+                src_dims[ax] + counts[ax] + s
+            };
+            if off < 0 || off >= src_dims[ax] {
+                inside = false;
+                break;
+            }
+            src.push(off);
+        }
+        out.push(if inside {
+            cells[encode(&src, &src_dims) as usize].clone()
+        } else {
+            proto.clone()
+        });
+        bump(&mut subs, &dims);
     }
-    let mut dims: Vec<i64> = (0..rank as usize - 1)
-        .map(|a| b.get_shape_item(a as i16))
-        .collect();
-    dims.push(count.abs());
     ValueP::from_parts(Shape::from_dims(&dims)?, out)
 }
 
-/// `X↓B` — drop along the last axis.
+/// `X↓B` — drop, ONE COUNT PER AXIS.
+///
+/// Positive counts remove from the front of that axis, negative from the end.
+/// Dropping at least as much as an axis holds leaves that axis empty (so
+/// `5 5↓2 3⍴⍳6` has shape `0 0`).
 pub fn drop(x: &ValueP, b: &ValueP) -> AplResult<ValueP> {
-    let count = single_int(x)?;
-    let rank = b.rank();
-    let n = axis_len(b);
-
-    if rank <= 1 {
-        let items = drop_vec(b.cells(), count, &prototype(b));
+    let counts = axis_counts(x, b)?;
+    if counts.len() == 1 {
+        let items = drop_vec(b.cells(), counts[0], &prototype(b));
         return ValueP::from_parts(Shape::vector(items.len() as ShapeItem), items);
     }
-
-    let outer = b.element_count() / n.max(1);
-    let proto = prototype(b);
-    let cells = b.cells();
-
-    // dropped amount per row determines output width
-    let keep = (n - count.abs()).max(0);
-    let mut out = Vec::with_capacity((outer * keep) as usize);
-    for row in 0..outer as usize {
-        out.extend(drop_vec(
-            &cells[row * n as usize..(row + 1) * n as usize],
-            count,
-            &proto,
-        ));
+    let src_dims = shape_dims(b);
+    // remaining length per axis, and where the kept window starts
+    let mut dims = Vec::with_capacity(counts.len());
+    let mut starts = Vec::with_capacity(counts.len());
+    for (ax, &c) in counts.iter().enumerate() {
+        let keep = (src_dims[ax] - c.abs()).max(0);
+        dims.push(keep);
+        starts.push(if c > 0 { c } else { 0 });
     }
-    let mut dims: Vec<i64> = (0..rank as usize - 1)
-        .map(|a| b.get_shape_item(a as i16))
-        .collect();
-    dims.push(keep);
+    let cells = b.cells();
+    let total: i64 = dims.iter().product();
+    let mut out = Vec::with_capacity(total.max(0) as usize);
+    if total > 0 {
+        let mut subs = vec![0i64; dims.len()];
+        for _ in 0..total {
+            let src: Vec<i64> = subs
+                .iter()
+                .enumerate()
+                .map(|(ax, &s)| s + starts[ax])
+                .collect();
+            out.push(cells[encode(&src, &src_dims) as usize].clone());
+            bump(&mut subs, &dims);
+        }
+    }
     ValueP::from_parts(Shape::from_dims(&dims)?, out)
 }
 
 // ---------------------------------------------------------------------------
 
-fn axis_len(b: &ValueP) -> i64 {
-    let rank = b.rank();
-    if rank == 0 {
-        1
+/// Validate the left argument and return one integer count per axis of `B`.
+///
+/// A scalar B is treated as rank 1. GNU APL requires `≢X` to equal the rank
+/// of B for rank ≥ 2; a 1-element X against a vector is the common case.
+fn axis_counts(x: &ValueP, b: &ValueP) -> AplResult<Vec<i64>> {
+    if x.rank() > 1 {
+        return Err(ErrorCode::RankError);
+    }
+    let counts: Vec<i64> = x
+        .cells()
+        .iter()
+        .map(|c| c.get_int_value())
+        .collect::<Result<_, _>>()?;
+    if counts.is_empty() {
+        return Err(ErrorCode::LengthError);
+    }
+    let rank = b.rank().max(1) as usize;
+    if counts.len() != rank {
+        return Err(ErrorCode::LengthError);
+    }
+    Ok(counts)
+}
+
+/// dimensions of `b`, treating a scalar as a 1-element vector
+fn shape_dims(b: &ValueP) -> Vec<i64> {
+    if b.rank() == 0 {
+        vec![1]
     } else {
-        b.get_shape_item(rank as i16 - 1)
+        (0..b.rank()).map(|i| b.get_shape_item(i as i16)).collect()
     }
 }
 
+/// row-major subscripts → linear index
+fn encode(subs: &[i64], dims: &[i64]) -> i64 {
+    let mut lin = 0i64;
+    for (ax, &s) in subs.iter().enumerate() {
+        lin = lin * dims[ax].max(1) + s;
+    }
+    lin
+}
+
+/// increment a row-major subscript vector in place
+fn bump(subs: &mut [i64], dims: &[i64]) {
+    for ax in (0..subs.len()).rev() {
+        subs[ax] += 1;
+        if subs[ax] < dims[ax] {
+            return;
+        }
+        subs[ax] = 0;
+    }
+}
+
+/// single integer left argument — used by the AXIS forms `↑[a]` / `↓[a]`,
+/// where exactly one count applies to the named axis. (The plain forms take
+/// one count PER axis; see `axis_counts`.)
 fn single_int(x: &ValueP) -> AplResult<i64> {
     if x.element_count() != 1 {
         return Err(ErrorCode::LengthError);
@@ -281,13 +351,23 @@ mod tests {
     }
 
     #[test]
-    fn test_take_axis1_equals_last_axis() {
-        // ↑[1] on a matrix == plain last-axis take
+    fn test_take_axis1_equals_per_axis_take_of_full_rows() {
+        // ↑[1] takes along the last axis only, so it is equivalent to a
+        // per-axis take that keeps ALL rows: 2↑[1]M ≡ 2 2↑M for a 2-row M.
+        // (Plain `2↑M` on a matrix is a LENGTH ERROR — the left argument
+        // needs one count per axis. Verified against the reference.)
         let b = mat(&[0, 1, 2, 3, 4, 5], 2, 3);
-        let x = ValueP::int_vector(&[2]);
-        let z = take_axis(&x, &b, 1).unwrap();
-        let z_last = take(&x, &b).unwrap();
-        assert_eq!(ints(&z), ints(&z_last));
+        let z = take_axis(&ValueP::int_vector(&[2]), &b, 1).unwrap();
+        let z_per_axis = take(&ValueP::int_vector(&[2, 2]), &b).unwrap();
+        assert_eq!(ints(&z), ints(&z_per_axis));
+    }
+
+    #[test]
+    fn test_take_scalar_left_on_matrix_is_length_error() {
+        // one count per axis is required for rank ≥ 2
+        let b = mat(&[0, 1, 2, 3, 4, 5], 2, 3);
+        assert!(take(&ValueP::int_vector(&[2]), &b).is_err());
+        assert!(drop(&ValueP::int_vector(&[1]), &b).is_err());
     }
 
     #[test]
@@ -408,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_matrix_rows() {
+    fn test_take_matrix_per_axis() {
         let shape = Shape::matrix(2, 3);
         let b = ValueP::from_parts(
             shape,
@@ -422,7 +502,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let z = take(&ValueP::int_vector(&[2]), &b).unwrap();
+        // 2 2↑M keeps 2 rows and 2 columns → 1 2 / 4 5 (reference-verified)
+        let z = take(&ValueP::int_vector(&[2, 2]), &b).unwrap();
         assert_eq!(z.get_shape_item(0), 2);
         assert_eq!(z.get_shape_item(1), 2);
         assert_eq!(ints(&z), vec![1, 2, 4, 5]);

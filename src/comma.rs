@@ -109,17 +109,39 @@ pub fn catenate(a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
 
     let mut ravel_out: Vec<Cell> =
         Vec::with_capacity(av.element_count() as usize + bv.element_count() as usize);
-    match promo {
-        None => {
-            // keep everything as-is (uniform types and/or nested)
-            ravel_out.extend(av.cells().iter().cloned());
-            ravel_out.extend(bv.cells().iter().cloned());
+
+    // Catenation joins along the LAST axis, so for rank ≥ 2 the ravels must be
+    // INTERLEAVED row by row — appending them wholesale produces the right
+    // shape with the wrong contents (`(2 3⍴⍳6),2 3⍴⍳6` gave 1 2 3 4 5 6 1 2 3…
+    // instead of 1 2 3 1 2 3 4 5 6 …).
+    let last_a = *dims_a.last().unwrap_or(&0);
+    let last_b = *dims_b.last().unwrap_or(&0);
+    let outer: i64 = dims_a[..n_axes.saturating_sub(1)].iter().product();
+
+    let push = |out: &mut Vec<Cell>, c: &Cell| match promo {
+        Some(t) => out.push(lift(c, t)),
+        None => out.push(c.clone()),
+    };
+
+    if n_axes <= 1 {
+        for c in av.cells() {
+            push(&mut ravel_out, c);
         }
-        Some(t) => {
-            // mixed simple types: promote both sides; nested cells would
-            // have made promo None already
-            ravel_out.extend(av.cells().iter().map(|c| lift(c, t)));
-            ravel_out.extend(bv.cells().iter().map(|c| lift(c, t)));
+        for c in bv.cells() {
+            push(&mut ravel_out, c);
+        }
+    } else {
+        let ca = av.cells();
+        let cb = bv.cells();
+        for row in 0..outer.max(1) as usize {
+            let a_from = row * last_a as usize;
+            for c in &ca[a_from..a_from + last_a as usize] {
+                push(&mut ravel_out, c);
+            }
+            let b_from = row * last_b as usize;
+            for c in &cb[b_from..b_from + last_b as usize] {
+                push(&mut ravel_out, c);
+            }
         }
     }
 

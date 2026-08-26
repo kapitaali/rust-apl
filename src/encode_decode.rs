@@ -31,6 +31,31 @@ pub fn decode(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     // Scalar A extended to match B length (scalar extension):
     if a_cells.len() == 1 && b_cells.len() > 1 {
         let base = cell_to_f64(&a_cells[0])?;
+        // Rank ≥ 2: B's FIRST axis holds the digits and each COLUMN is an
+        // independent number, so the result is one value per column.
+        // (`2⊥2 3⍴1 0 1 1 1 0` is `3 1 2`, not a single 46 from the ravel.)
+        if b.rank() >= 2 {
+            let rows = b.get_shape_item(0) as usize;
+            let cols = (b.element_count() as usize) / rows.max(1);
+            let mut weights = vec![1.0_f64; rows];
+            for i in (0..rows.saturating_sub(1)).rev() {
+                weights[i] = weights[i + 1] * base;
+            }
+            let mut out = Vec::with_capacity(cols);
+            let all_int = b_cells.iter().all(|c| matches!(c, Cell::Int(_)));
+            for j in 0..cols {
+                let mut acc = 0.0_f64;
+                for i in 0..rows {
+                    acc += cell_to_f64(&b_cells[i * cols + j])? * weights[i];
+                }
+                out.push(if all_int && acc.fract() == 0.0 && acc.abs() < 1e18 {
+                    Cell::Int(acc as i64)
+                } else {
+                    Cell::Float(acc)
+                });
+            }
+            return ValueP::from_parts(crate::shape::Shape::vector(cols as i64), out);
+        }
         let n = b_cells.len();
         let mut weights = vec![1.0_f64; n];
         for i in (0..n - 1).rev() {
@@ -160,23 +185,31 @@ pub fn encode(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         });
     }
 
-    // General case: each element of B encoded with the full A bases
+    // General case: each element of B is encoded with the full A bases, and
+    // the result is a (n_bases × n_values) matrix — one COLUMN per value.
+    //
+    // Build it column-by-column into the right row-major slots: digit i of
+    // value j belongs at row i, column j, i.e. linear index i*n_values + j.
+    // (The old code pushed digits sequentially in reverse per value while
+    // claiming this shape, so the layout was transposed AND reversed:
+    // `2 2 2⊤5 3` gave 1 0 1 1 1 0 instead of 1 0 0 1 1 1.)
     let n_bases = a_cells.len();
-    let mut result_cells = Vec::new();
-    for bc in b_cells.iter() {
+    let n_values = b_cells.len();
+    let mut result_cells = vec![Cell::Int(0); n_bases * n_values];
+    for (j, bc) in b_cells.iter().enumerate() {
         let val = cell_to_f64(bc)? as i64;
         let mut d = val.abs();
+        // least significant digit first, so walk rows bottom-up
         for i in (0..n_bases).rev() {
             let base = cell_to_f64(&a_cells[i])? as i64;
             if base <= 0 {
                 return Err(ErrorCode::DomainError);
             }
-            result_cells.push(Cell::Int(d % base));
+            result_cells[i * n_values + j] = Cell::Int(d % base);
             d /= base;
         }
     }
-    // Result shape: (n_bases, n_values) — column-major (APL convention)
-    let shape = crate::shape::Shape::from_dims(&[n_bases as i64, b_cells.len() as i64])
+    let shape = crate::shape::Shape::from_dims(&[n_bases as i64, n_values as i64])
         .map_err(|_| ErrorCode::DomainError)?;
     Ok(ValueP {
         inner: std::sync::Arc::new(crate::value::ValueInner::new(shape, result_cells)),

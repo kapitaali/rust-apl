@@ -25,10 +25,43 @@ pub fn grade_down(b: &ValueP) -> AplResult<ValueP> {
 }
 
 /// ⎕IO-aware grade: results are io..io+n-1 instead of 0..n-1.
+///
+/// For rank ≥ 2 the grade is over the MAJOR CELLS (rows), compared
+/// lexicographically, so the result has one index per row rather than one per
+/// element: `⍋3 2⍴1 2 0 1 2 2` is `2 1 3` (⎕IO=1), not six element indices.
 pub fn grade_io(b: &ValueP, descending: bool, io: i64) -> AplResult<ValueP> {
     let cells = b.cells();
-    let n = cells.len();
 
+    if b.rank() >= 2 {
+        let rows = b.get_shape_item(0) as usize;
+        let width = cells.len().checked_div(rows).unwrap_or(0);
+        let mut idx: Vec<usize> = (0..rows).collect();
+        idx.sort_by(|&i, &j| {
+            // compare row i against row j element by element
+            let (ra, rb) = (i * width, j * width);
+            let mut ord = std::cmp::Ordering::Equal;
+            for k in 0..width {
+                ord = match cells[ra + k].compare(&cells[rb + k]) {
+                    crate::cell::CompResult::Lt => std::cmp::Ordering::Less,
+                    crate::cell::CompResult::Eq => std::cmp::Ordering::Equal,
+                    crate::cell::CompResult::Gt => std::cmp::Ordering::Greater,
+                };
+                if ord != std::cmp::Ordering::Equal {
+                    break;
+                }
+            }
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+        return Ok(ValueP::int_vector(
+            &idx.into_iter().map(|i| i as i64 + io).collect::<Vec<_>>(),
+        ));
+    }
+
+    let n = cells.len();
     let mut idx: Vec<usize> = (0..n).collect();
     // stable sort keeps ties in original (left-to-right) order
     idx.sort_by(|&i, &j| {

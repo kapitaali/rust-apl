@@ -1,166 +1,142 @@
 //! Transpose `⍉` (mirrors `Bif_F12_TRANSPOSE` in `src/PrimitiveFunction.cc`).
 //!
-//! - `⍉B` reverses the first two axes of a matrix (rank ≥ 2); for vectors
-//!   and scalars it is the identity.
-//! - `A⍉B` permutes axes: A[k] says which axis of B becomes axis k of Z.
-//!   Every axis of B must appear exactly once in A (no repeated or missing
-//!   axes — the "merged axes" case is not supported yet).
+//! - `⍉B` REVERSES ALL AXES (so `⍴⍉2 3 4⍴⍳24` is `4 3 2`). For rank ≤ 1 it
+//!   is the identity, and for rank 2 reversing all axes IS the familiar
+//!   matrix transpose.
+//! - `A⍉B` permutes axes: A[k] names the axis of B that supplies axis k of
+//!   the result. A is in ⎕IO origin, so callers pass `io` from the
+//!   environment. REPEATED axes are legal and select a DIAGONAL:
+//!   `1 1⍉3 3⍴⍳9` is `1 5 9`.
 
 use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
-/// `⍉B` — monadic transpose (reverse first two axes).
+/// `⍉B` — monadic transpose: reverse the order of all axes.
 pub fn transpose(b: &ValueP) -> AplResult<ValueP> {
-    let rank = b.rank();
-
-    // scalars and vectors are unchanged
+    let rank = b.rank() as usize;
     if rank < 2 {
         return Ok(b.clone());
     }
-
-    let rows = b.get_shape_item(0);
-    let cols = b.get_shape_item(1);
-
-    let cells = b.cells();
-    let mut out = Vec::with_capacity(b.element_count() as usize);
-
-    // For a matrix (r × c): Z[c][r] = B[r][c].
-    // For rank > 2 we treat the trailing dims as "inner blocks": each block
-    // (of `inner` cells) is transposed independently... actually for rank>2
-    // GNU APL reverses ALL axes pairwise from the outside; we implement the
-    // common 2-D case properly and reverse first/last for higher ranks
-    // conservatively. Keep it simple: full ravel reversal equals reversing
-    // all axes; for rank 2 that IS the matrix transpose.
-    match rank {
-        2 => {
-            for c in 0..cols as usize {
-                for r in 0..rows as usize {
-                    out.push(cells[r * cols as usize + c].clone());
-                }
-            }
-            let shape = Shape::matrix(cols, rows);
-            ValueP::from_parts(shape, out)
-        }
-        _ => {
-            // general case: compute destination index by swapping axes 0 and 1
-            let dims: Vec<i64> = (0..rank as i16).map(|a| b.get_shape_item(a)).collect();
-            let out_shape = {
-                let mut d = dims.clone();
-                d.swap(0, 1);
-                Shape::from_dims(&d)?
-            };
-
-            // precompute strides of B (row-major)
-            let mut strides = vec![1i64; rank as usize];
-            for a in (0..rank as usize - 1).rev() {
-                strides[a] = strides[a + 1] * dims[a + 1];
-            }
-
-            // iterate over every output cell coordinate
-            let total = b.element_count();
-            let mut coord = vec![0i64; rank as usize];
-            let out_dims = {
-                let mut d = dims.clone();
-                d.swap(0, 1);
-                d
-            };
-            for _ in 0..total {
-                // source offset: swap coords of axes 0 and 1
-                let mut src = 0i64;
-                for (a, stride_a) in strides.iter().enumerate() {
-                    let ca = match a {
-                        0 => coord[1],
-                        1 => coord[0],
-                        x => coord[x],
-                    };
-                    src += ca * stride_a;
-                }
-                out.push(cells[src as usize].clone());
-
-                // increment multi-dimensional counter (row-major, over OUT dims)
-                for a in (0..rank as usize).rev() {
-                    coord[a] += 1;
-                    if coord[a] < out_dims[a] {
-                        break;
-                    }
-                    coord[a] = 0;
-                }
-            }
-            ValueP::from_parts(out_shape, out)
-        }
-    }
+    let dims: Vec<i64> = (0..rank).map(|a| b.get_shape_item(a as i16)).collect();
+    // reversing all axes is the permutation [rank-1, rank-2, ..., 0]
+    let perm: Vec<usize> = (0..rank).rev().collect();
+    permute(b, &dims, &perm)
 }
 
-/// `A⍉B` — dyadic transpose (axis permutation).
+/// `A⍉B` — dyadic transpose (axis permutation, ⎕IO-relative).
 ///
-/// A[k] = which axis of B becomes axis k of the result (0-based, matching
-/// our `⍳`). Every axis of B must appear exactly once in A.
-pub fn transpose_dyadic(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+/// `A[k]` says which axis of the RESULT the k-th axis of B maps onto. When a
+/// value repeats, those axes of B are traversed together, which extracts a
+/// diagonal and lowers the rank.
+pub fn transpose_dyadic_io(a: &ValueP, b: &ValueP, io: i64) -> AplResult<ValueP> {
     let rank_b = b.rank() as usize;
-
-    // read and validate the permutation
-    let perm: Vec<usize> = a
+    if a.rank() > 1 {
+        return Err(ErrorCode::RankError);
+    }
+    let raw: Vec<i64> = a
         .cells()
         .iter()
         .map(|c| c.get_int_value())
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|v| {
-            if v < 0 || v as usize >= rank_b {
-                Err(ErrorCode::RankError)
+        .collect::<Result<_, _>>()?;
+    if raw.len() != rank_b {
+        return Err(ErrorCode::LengthError);
+    }
+    // shift out of ⎕IO origin into 0-based target axis numbers
+    let target: Vec<usize> = raw
+        .iter()
+        .map(|&v| {
+            let z = v - io;
+            if z < 0 || z as usize >= rank_b {
+                Err(ErrorCode::DomainError)
             } else {
-                Ok(v as usize)
+                Ok(z as usize)
             }
         })
         .collect::<AplResult<Vec<_>>>()?;
 
-    if perm.len() != rank_b {
-        return Err(ErrorCode::RankError);
-    }
-    let mut seen = vec![false; rank_b];
-    for &p in &perm {
-        if seen[p] {
-            // repeated axis — merged-axes transpose not supported
-            return Err(ErrorCode::DomainError);
-        }
-        seen[p] = true;
-    }
+    let dims: Vec<i64> = (0..rank_b).map(|a| b.get_shape_item(a as i16)).collect();
 
-    let dims: Vec<i64> = (0..rank_b as i16).map(|ax| b.get_shape_item(ax)).collect();
-    let out_dims: Vec<i64> = perm.iter().map(|&p| dims[p]).collect();
-    let out_shape = Shape::from_dims(&out_dims)?;
-
-    // strides of B (row-major)
-    let mut strides = vec![1i64; rank_b];
-    for i in (0..rank_b - 1).rev() {
-        strides[i] = strides[i + 1] * dims[i + 1];
+    // The result rank is the number of DISTINCT target axes, and they must be
+    // exactly 0..out_rank with no gaps (GNU APL: DOMAIN ERROR otherwise).
+    let out_rank = target.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+    let mut used = vec![false; out_rank];
+    for &t in &target {
+        used[t] = true;
+    }
+    if used.iter().any(|&u| !u) {
+        return Err(ErrorCode::DomainError);
     }
 
+    // each result axis is as long as the SHORTEST B axis mapped onto it
+    // (matters only for the diagonal case, where several axes share a target)
+    let mut out_dims = vec![i64::MAX; out_rank];
+    for (b_ax, &t) in target.iter().enumerate() {
+        out_dims[t] = out_dims[t].min(dims[b_ax]);
+    }
+
+    let strides = row_major_strides(&dims);
     let cells = b.cells();
-    let total = b.element_count();
-    let mut out = Vec::with_capacity(total as usize);
-    let mut coord = vec![0i64; rank_b];
-
+    let total: i64 = out_dims.iter().product();
+    let mut out = Vec::with_capacity(total.max(0) as usize);
+    let mut coord = vec![0i64; out_rank];
     for _ in 0..total {
-        // source offset: B axis perm[k] gets output coordinate coord[k]
+        // every axis of B reads the coordinate of the result axis it maps to,
+        // so repeated targets walk in lockstep down a diagonal
+        let mut src = 0i64;
+        for (b_ax, &t) in target.iter().enumerate() {
+            src += coord[t] * strides[b_ax];
+        }
+        out.push(cells[src as usize].clone());
+        bump(&mut coord, &out_dims);
+    }
+    ValueP::from_parts(Shape::from_dims(&out_dims)?, out)
+}
+
+/// Backwards-compatible entry: assumes ⎕IO=0.
+pub fn transpose_dyadic(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+    transpose_dyadic_io(a, b, 0)
+}
+
+// ---------------------------------------------------------------------------
+
+/// reorder `b`'s axes so result axis k comes from B axis `perm[k]`
+fn permute(b: &ValueP, dims: &[i64], perm: &[usize]) -> AplResult<ValueP> {
+    let out_dims: Vec<i64> = perm.iter().map(|&p| dims[p]).collect();
+    let strides = row_major_strides(dims);
+    let cells = b.cells();
+    let total: i64 = out_dims.iter().product();
+    let mut out = Vec::with_capacity(total.max(0) as usize);
+    let mut coord = vec![0i64; out_dims.len()];
+    for _ in 0..total {
         let mut src = 0i64;
         for (k, &p) in perm.iter().enumerate() {
             src += coord[k] * strides[p];
         }
         out.push(cells[src as usize].clone());
-
-        // increment output counter (row-major over out_dims)
-        for k in (0..rank_b).rev() {
-            coord[k] += 1;
-            if coord[k] < out_dims[k] {
-                break;
-            }
-            coord[k] = 0;
-        }
+        bump(&mut coord, &out_dims);
     }
+    ValueP::from_parts(Shape::from_dims(&out_dims)?, out)
+}
 
-    ValueP::from_parts(out_shape, out)
+fn row_major_strides(dims: &[i64]) -> Vec<i64> {
+    let n = dims.len();
+    let mut strides = vec![1i64; n];
+    for i in (0..n.saturating_sub(1)).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+    strides
+}
+
+/// increment a row-major coordinate vector in place
+fn bump(coord: &mut [i64], dims: &[i64]) {
+    for k in (0..coord.len()).rev() {
+        coord[k] += 1;
+        if coord[k] < dims[k] {
+            return;
+        }
+        coord[k] = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -261,26 +237,24 @@ mod tests {
 
     #[test]
     fn test_dyadic_transpose_cube_rotation() {
-        // For a 2×3×2 cube: (1 2 0)⍉B moves axis 1→0, axis 2→1, axis 0→2
+        // (1 2 0)⍉B with ⎕IO=0: B axis 0 → result axis 1, B axis 1 → result
+        // axis 2, B axis 2 → result axis 0. For dims (2,3,2) the result is
+        // (2,2,3). Verified against the reference: ⍴1 2 0⍉2 3 2⍴⍳12 → 2 2 3.
         let shape = Shape::cube(2, 3, 2);
         let b = ValueP::from_parts(shape, (0..12).map(|i| Cell::Int(i as i64)).collect()).unwrap();
         let a = ValueP::int_vector(&[1, 2, 0]);
         let z = transpose_dyadic(&a, &b).unwrap();
-        assert_eq!(z.get_shape_item(0), 3); // old dim 1
-        assert_eq!(z.get_shape_item(1), 2); // old dim 2
-        assert_eq!(z.get_shape_item(2), 2); // old dim 0
-
-        // Z[0;0;1] should be B[1;0;0] = ravel[6] = 6
-        // Z strides: dims (3,2,2) → (4,2,1); offset of [0;0;1] = 1
-        match z.cells()[1] {
-            Cell::Int(v) => assert_eq!(v, 6),
-            ref o => panic!("expected int, got {:?}", o),
-        }
+        assert_eq!(z.get_shape_item(0), 2);
+        assert_eq!(z.get_shape_item(1), 2);
+        assert_eq!(z.get_shape_item(2), 3);
+        assert_eq!(z.element_count(), 12);
     }
 
     #[test]
-    fn test_dyadic_transpose_repeated_axis_error() {
-        // (0 0)⍉B — merged axes not supported → DOMAIN ERROR
+    fn test_dyadic_transpose_repeated_axis_is_a_diagonal() {
+        // (0 0)⍉B maps BOTH axes of B onto result axis 0, which walks them in
+        // lockstep and extracts the DIAGONAL — it is not an error.
+        // Reference: ,0 0⍉2 3⍴1 2 3 4 5 6 → 1 5 (⎕IO=0).
         let shape = Shape::matrix(2, 3);
         let b = ValueP::from_parts(
             shape,
@@ -288,7 +262,24 @@ mod tests {
         )
         .unwrap();
         let a = ValueP::int_vector(&[0, 0]);
-        assert!(transpose_dyadic(&a, &b).is_err());
+        let z = transpose_dyadic(&a, &b).unwrap();
+        assert_eq!(z.rank(), 1);
+        // the diagonal length is the SHORTER of the two axes (2)
+        assert_eq!(ints(&z), [1, 5]);
+    }
+
+    #[test]
+    fn test_dyadic_transpose_square_diagonal() {
+        // 1 1⍉3 3⍴⍳9 → 1 5 9 in ⎕IO=1; here 0 0⍉ with 0-based values
+        let shape = Shape::cube(1, 3, 3);
+        let _ = shape; // (cube unused; build the 3x3 directly)
+        let b = ValueP::from_parts(
+            Shape::matrix(3, 3),
+            (1..=9).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let z = transpose_dyadic(&ValueP::int_vector(&[0, 0]), &b).unwrap();
+        assert_eq!(ints(&z), [1, 5, 9]);
     }
 
     #[test]
@@ -318,23 +309,56 @@ mod tests {
     }
 
     #[test]
-    fn test_transpose_cube_swaps_first_two_axes() {
-        // 2×3×2 cube: verify shape after swap
+    fn test_transpose_cube_reverses_all_axes() {
+        // Monadic ⍉ REVERSES ALL AXES, it does not swap the first two.
+        // Reference: ⍴⍉2 3 2⍴⍳12 → 2 3 2, and ⍴⍉2 3 4⍴⍳24 → 4 3 2.
         let shape = Shape::cube(2, 3, 2);
         let n = shape.get_volume();
         let b = ValueP::from_parts(shape, (0..n).map(Cell::Int).collect()).unwrap();
         let z = transpose(&b).unwrap();
-        assert_eq!(z.get_shape_item(0), 3); // was dim 1
-        assert_eq!(z.get_shape_item(1), 2); // was dim 0
-        assert_eq!(z.get_shape_item(2), 2); // unchanged
+        assert_eq!(z.get_shape_item(0), 2); // was dim 2
+        assert_eq!(z.get_shape_item(1), 3); // was dim 1
+        assert_eq!(z.get_shape_item(2), 2); // was dim 0
         assert_eq!(z.element_count(), n);
+    }
 
-        // spot-check one element: Z[1;0;0] should be B[0;1;0].
-        // B strides for dims (2,3,2) are (6,2,1), so B[0;1;0] = ravel[2] = 2.
-        // Z strides: (2*2, 2, 1) → offset 1*(2*2)+0+0 = 4
-        match z.cells()[4] {
-            Cell::Int(v) => assert_eq!(v, 2),
-            ref o => panic!("expected int, got {:?}", o),
-        }
+    #[test]
+    fn test_transpose_rank3_shape_matches_reference() {
+        // ⍴⍉2 3 4⍴⍳24 → 4 3 2
+        let shape = Shape::cube(2, 3, 4);
+        let n = shape.get_volume();
+        let b = ValueP::from_parts(shape, (0..n).map(Cell::Int).collect()).unwrap();
+        let z = transpose(&b).unwrap();
+        assert_eq!(z.get_shape_item(0), 4);
+        assert_eq!(z.get_shape_item(1), 3);
+        assert_eq!(z.get_shape_item(2), 2);
+    }
+
+    #[test]
+    fn test_transpose_cube_ravel_matches_reference() {
+        // ,⍉2 2 2⍴⍳8 → 1 5 3 7 2 6 4 8 (with ⍳ starting at 1)
+        let b = ValueP::from_parts(
+            Shape::cube(2, 2, 2),
+            (1..=8).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let z = transpose(&b).unwrap();
+        assert_eq!(ints(&z), [1, 5, 3, 7, 2, 6, 4, 8]);
+    }
+
+    #[test]
+    fn test_transpose_matrix_element_mapping() {
+        // Z[c;r] = B[r;c] — spot-check the 2×3 case where all-axis reversal
+        // and the classic matrix transpose coincide.
+        let b = ValueP::from_parts(
+            Shape::matrix(2, 3),
+            (1..=6).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let z = transpose(&b).unwrap();
+        assert_eq!(z.get_shape_item(0), 3);
+        assert_eq!(z.get_shape_item(1), 2);
+        // B = 1 2 3 / 4 5 6  →  Z = 1 4 / 2 5 / 3 6
+        assert_eq!(ints(&z), [1, 4, 2, 5, 3, 6]);
     }
 }
