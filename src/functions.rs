@@ -55,23 +55,24 @@ pub enum Prim {
     And,
     Or,
     Comma,
-    Encode,   // ⊤ — dyadic: A⊤B (representation)
-    Decode,   // ⊥ — dyadic: A⊥B (base value)
-    Without,  // ∼ — dyadic: A∼B (set difference)
-    Union,    // ∪ — monadic: unique, dyadic: A∪B (union)
-    Inter,    // ∩ — dyadic: A∩B (intersection)
-    Comma1,   // ⍪ — monadic: table, dyadic: catenate first axis
-    NotMatch, // ≢ — monadic: tally, dyadic: not match
-    Left,     // ⊣ — monadic: identity, dyadic: A
-    Right,    // ⊢ — monadic: identity, dyadic: B
-    Nand,     // ⍲ — dyadic: not and
-    Nor,      // ⍱ — dyadic: not or
-    Squad,    // ⌷ — dyadic: general index
-    Rotate1,  // ⊖ — monadic: reverse first axis, dyadic: rotate first axis
-    Format,   // ⍕ — monadic: format, dyadic: width/decimals format
-    Where,    // ⍸ — monadic: indices of 1s in a boolean array
-    Execute,  // ⍎ — monadic: evaluate a character vector as APL
-    Find,     // ⍷ — dyadic: A⍷B locates occurrences of A within B
+    Encode,    // ⊤ — dyadic: A⊤B (representation)
+    Decode,    // ⊥ — dyadic: A⊥B (base value)
+    Without,   // ∼ — dyadic: A∼B (set difference)
+    Union,     // ∪ — monadic: unique, dyadic: A∪B (union)
+    Inter,     // ∩ — dyadic: A∩B (intersection)
+    Comma1,    // ⍪ — monadic: table, dyadic: catenate first axis
+    NotMatch,  // ≢ — monadic: tally, dyadic: not match
+    Left,      // ⊣ — monadic: identity, dyadic: A
+    Right,     // ⊢ — monadic: identity, dyadic: B
+    Nand,      // ⍲ — dyadic: not and
+    Nor,       // ⍱ — dyadic: not or
+    Squad,     // ⌷ — dyadic: general index
+    Rotate1,   // ⊖ — monadic: reverse first axis, dyadic: rotate first axis
+    Format,    // ⍕ — monadic: format, dyadic: width/decimals format
+    Where,     // ⍸ — monadic: indices of 1s in a boolean array
+    Execute,   // ⍎ — monadic: evaluate a character vector as APL
+    Find,      // ⍷ — dyadic: A⍷B locates occurrences of A within B
+    Partition, // ⊆ — dyadic: A⊆B groups items of B into partitions
 }
 
 impl Prim {
@@ -94,23 +95,24 @@ impl Prim {
             "○" => Prim::PiTimes,
             "⍟" => Prim::NatLog,
             "∣" => Prim::Magnitude,
-            "?" => Prim::Roll,     // ? = roll
-            "∼" => Prim::Without,  // ∼ = without (set difference)
-            "∪" => Prim::Union,    // ∪ = union (unique / set union)
-            "∩" => Prim::Inter,    // ∩ = intersection
-            "⍪" => Prim::Comma1,   // ⍪ = table / catenate first axis
-            "≢" => Prim::NotMatch, // ≢ = tally / not match
-            "⊣" => Prim::Left,     // ⊣ = left (identity / A)
-            "⊢" => Prim::Right,    // ⊢ = right (identity / B)
-            "⍲" => Prim::Nand,     // ⍲ = not and
-            "⍱" => Prim::Nor,      // ⍱ = not or
-            "⌷" => Prim::Squad,    // ⌷ = general index
-            "⊖" => Prim::Rotate1,  // ⊖ = reverse/rotate first axis
-            "⍕" => Prim::Format,   // ⍕ = format
-            "⍸" => Prim::Where,    // ⍸ = where (indices of 1s)
-            "⍎" => Prim::Execute,  // ⍎ = execute (evaluate char vector)
-            "⍷" => Prim::Find,     // ⍷ = find (locate subarray)
-            "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
+            "?" => Prim::Roll,      // ? = roll
+            "∼" => Prim::Without,   // ∼ = without (set difference)
+            "∪" => Prim::Union,     // ∪ = union (unique / set union)
+            "∩" => Prim::Inter,     // ∩ = intersection
+            "⍪" => Prim::Comma1,    // ⍪ = table / catenate first axis
+            "≢" => Prim::NotMatch,  // ≢ = tally / not match
+            "⊣" => Prim::Left,      // ⊣ = left (identity / A)
+            "⊢" => Prim::Right,     // ⊢ = right (identity / B)
+            "⍲" => Prim::Nand,      // ⍲ = not and
+            "⍱" => Prim::Nor,       // ⍱ = not or
+            "⌷" => Prim::Squad,     // ⌷ = general index
+            "⊖" => Prim::Rotate1,   // ⊖ = reverse/rotate first axis
+            "⍕" => Prim::Format,    // ⍕ = format
+            "⍸" => Prim::Where,     // ⍸ = where (indices of 1s)
+            "⍎" => Prim::Execute,   // ⍎ = execute (evaluate char vector)
+            "⍷" => Prim::Find,      // ⍷ = find (locate subarray)
+            "⊆" => Prim::Partition, // ⊆ = partition (group items)
+            "~" => Prim::Not,       // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
             "⌽" => Prim::Reverse,
@@ -404,6 +406,8 @@ impl Prim {
             Prim::Format => crate::format::format_dyadic(a, b),
             // A⍷B — find occurrences of A within B
             Prim::Find => crate::find::find(a, b),
+            // A⊆B — partition B into groups
+            Prim::Partition => crate::partition::partition(a, b),
             // A⌷B — general index
             Prim::Squad => crate::squad::squad(a, b),
             // A⍟B — logarithm base A of B

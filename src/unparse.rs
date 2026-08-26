@@ -70,6 +70,7 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Where => "⍸",
         Prim::Execute => "⍎",
         Prim::Find => "⍷",
+        Prim::Partition => "⊆",
         _ => "?",
     }
 }
