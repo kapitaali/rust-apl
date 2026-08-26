@@ -1200,6 +1200,13 @@ pub struct Environment {
     pub(crate) lib_cache: crate::ffi::loader::LibraryCache,
     /// plugin .so specs loaded via ⎕LOADSO (for workspace PLG records)
     pub(crate) loaded_plugins: Vec<String>,
+    /// nesting depth of ⍎ (execute) — guards against runaway self-execution
+    /// such as `F←'⍎F' ⋄ ⍎F`
+    pub(crate) execute_depth: usize,
+    /// set by execute_value when the executed text produced no value (a pure
+    /// assignment). eval_line reads it so `⍎'X←5'` displays nothing, matching
+    /// a bare `X←5`.
+    pub(crate) execute_was_shy: bool,
 }
 
 impl Environment {
@@ -1213,6 +1220,8 @@ impl Environment {
             current_fn_name: None,
             lib_cache: crate::ffi::loader::LibraryCache::new(),
             loaded_plugins: Vec::new(),
+            execute_depth: 0,
+            execute_was_shy: false,
         }
     }
 
@@ -2034,6 +2043,11 @@ impl Environment {
                     let pp = crate::sysvars::get_pp(self).unwrap_or(10);
                     return crate::format::format_with_pp(&bv, pp);
                 }
+                // ⍎B — execute: evaluate a character vector as an APL line.
+                // Needs &mut self, so it cannot live in eval_monadic.
+                if *p == crate::functions::Prim::Execute {
+                    return self.execute_value(&bv);
+                }
                 p.eval_monadic(&bv)
             }
             Expr::ReduceOp(p, b) => {
@@ -2228,8 +2242,68 @@ impl Environment {
                 | Expr::AssignPick(_, _, _)
                 | Expr::AssignDfn(_, _)
         );
+        // ⍎ of a pure assignment is shy too: clear the flag, then let eval
+        // set it if an execute inside this line produced no value.
+        let outer_shy = std::mem::replace(&mut self.execute_was_shy, false);
         let v = self.eval(&expr)?;
-        Ok(if is_assign { None } else { Some(v) })
+        let executed_shy = self.execute_was_shy;
+        self.execute_was_shy = outer_shy;
+        Ok(if is_assign || executed_shy {
+            None
+        } else {
+            Some(v)
+        })
+    }
+
+    /// Maximum nesting depth for ⍎. A self-executing expression such as
+    /// `F←'⍎F' ⋄ ⍎F` would otherwise recurse until the native stack blows;
+    /// this turns it into a catchable APL error instead.
+    const MAX_EXECUTE_DEPTH: usize = 64;
+
+    /// `⍎B` — execute: evaluate the character vector B as an APL expression.
+    ///
+    /// B must be a simple character array (its ravel is read in order, so a
+    /// character matrix is executed as one concatenated line). An empty
+    /// argument yields a shy 0, matching GNU APL's behavior for `⍎''`.
+    /// Expressions that produce no value (a pure assignment) also yield 0,
+    /// so `⍎'X←5'` assigns and returns quietly.
+    pub fn execute_value(&mut self, b: &ValueP) -> AplResult<ValueP> {
+        // extract the source text; anything non-character is a DOMAIN ERROR
+        let mut src = String::with_capacity(b.element_count() as usize);
+        for c in b.cells() {
+            match c {
+                Cell::Char(u) => src.push(char::from_u32(*u).ok_or(ErrorCode::DomainError)?),
+                _ => return Err(ErrorCode::DomainError),
+            }
+        }
+        if src.trim().is_empty() {
+            self.execute_was_shy = true;
+            return Ok(ValueP::scalar_from(Cell::Int(0)));
+        }
+
+        if self.execute_depth >= Self::MAX_EXECUTE_DEPTH {
+            return Err(ErrorCode::LimitError);
+        }
+        self.execute_depth += 1;
+        let result = self.eval_line(&src);
+        // restore the depth even when the inner line errored, so a caught
+        // error (⎕EA) does not leak depth into later executes
+        self.execute_depth -= 1;
+
+        match result? {
+            // a real value: clear any shy flag an inner execute may have set,
+            // so `(⍎'W←4')+⍎'2+3'` still displays its result
+            Some(v) => {
+                self.execute_was_shy = false;
+                Ok(v)
+            }
+            // assignment or empty statement — shy result, flagged so the
+            // caller can suppress display the way a bare assignment is
+            None => {
+                self.execute_was_shy = true;
+                Ok(ValueP::scalar_from(Cell::Int(0)))
+            }
+        }
     }
 }
 
@@ -3638,5 +3712,107 @@ mod tests {
             .map(|c| c.get_int_value().unwrap())
             .collect();
         assert_eq!(ints, vec![1, 3]);
+    }
+
+    #[test]
+    fn test_execute_arithmetic() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍎'2+3'");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_execute_vector_result() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍎'1 2 3'");
+        let ints: Vec<i64> = v
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_execute_assignment_persists() {
+        let mut env = Environment::new();
+        // the assignment happens in the caller's environment, and displays
+        // nothing (shy) exactly like a bare Q←7
+        assert!(env.eval_line("⍎'Q←7'").unwrap().is_none());
+        let v = eval_one(&mut env, "Q+1");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 8);
+    }
+
+    #[test]
+    fn test_execute_sees_existing_variables() {
+        let mut env = Environment::new();
+        env.eval_line("R←10").unwrap();
+        let v = eval_one(&mut env, "⍎'R×2'");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 20);
+    }
+
+    #[test]
+    fn test_execute_empty_is_shy() {
+        // ⍎'' produces no displayed value
+        let mut env = Environment::new();
+        assert!(env.eval_line("⍎''").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_execute_round_trips_format() {
+        // ⍎⍕N recovers a numeric value through its character form
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "⍎⍕42");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 42);
+    }
+
+    #[test]
+    fn test_execute_rejects_numeric_argument() {
+        let mut env = Environment::new();
+        assert!(env.eval_line("⍎42").is_err());
+    }
+
+    #[test]
+    fn test_execute_propagates_inner_error() {
+        let mut env = Environment::new();
+        // undefined name inside the executed text
+        assert!(env.eval_line("⍎'NOSUCHVAR+1'").is_err());
+    }
+
+    #[test]
+    fn test_execute_shy_does_not_leak_to_next_line() {
+        // a shy execute must not suppress the FOLLOWING line's display
+        let mut env = Environment::new();
+        assert!(env.eval_line("⍎'Z←3'").unwrap().is_none());
+        let v = eval_one(&mut env, "Z+1");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 4);
+    }
+
+    #[test]
+    fn test_execute_assign_then_value_in_same_line_displays() {
+        // an assigning execute followed by a value-producing one: the line
+        // yields the value, so it must NOT be suppressed
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "(⍎'W←4')+⍎'2+3'");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_execute_runaway_recursion_is_an_error() {
+        // F←'⍎F' ⋄ ⍎F must hit the depth guard, not blow the native stack
+        let mut env = Environment::new();
+        env.eval_line("F←'⍎F'").unwrap();
+        assert!(env.eval_line("⍎F").is_err());
+    }
+
+    #[test]
+    fn test_execute_depth_resets_after_error() {
+        // a caught runaway must not leave depth consumed for later executes
+        let mut env = Environment::new();
+        env.eval_line("F←'⍎F'").unwrap();
+        assert!(env.eval_line("⍎F").is_err());
+        // a plain execute still works afterwards
+        let v = eval_one(&mut env, "⍎'1+1'");
+        assert_eq!(v.first_cell().unwrap().get_int_value().unwrap(), 2);
     }
 }

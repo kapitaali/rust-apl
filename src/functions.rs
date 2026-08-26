@@ -70,6 +70,7 @@ pub enum Prim {
     Rotate1,  // ⊖ — monadic: reverse first axis, dyadic: rotate first axis
     Format,   // ⍕ — monadic: format, dyadic: width/decimals format
     Where,    // ⍸ — monadic: indices of 1s in a boolean array
+    Execute,  // ⍎ — monadic: evaluate a character vector as APL
 }
 
 impl Prim {
@@ -106,6 +107,7 @@ impl Prim {
             "⊖" => Prim::Rotate1,  // ⊖ = reverse/rotate first axis
             "⍕" => Prim::Format,   // ⍕ = format
             "⍸" => Prim::Where,    // ⍸ = where (indices of 1s)
+            "⍎" => Prim::Execute,  // ⍎ = execute (evaluate char vector)
             "~" => Prim::Not,      // ~ (ASCII tilde) = logical not
             "↑" => Prim::Take,
             "↓" => Prim::Drop,
@@ -216,6 +218,11 @@ impl Prim {
             Prim::Rotate1 => crate::squad::reverse_first(b),
             Prim::Format => crate::format::format(b),
             Prim::Where => crate::format::where_indices(b),
+            // ⍎B needs &mut Environment to evaluate, so the parser's Monadic
+            // arm intercepts it before reaching here. Hitting this arm means
+            // ⍎ was used somewhere with no environment (e.g. inside an
+            // operator's cell-level fold), which we cannot support.
+            Prim::Execute => Err(ErrorCode::NonceError),
 
             // ⌷B — general index (monadic: identity-like, but rarely used alone)
             Prim::Squad => Ok(b.clone()),
