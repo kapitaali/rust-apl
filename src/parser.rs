@@ -2024,19 +2024,11 @@ impl Environment {
                         self.get_io()?,
                     );
                 }
-                // ⍸B yields positions, so it is ⎕IO-shifted too
+                // ⍸B yields positions, so it is ⎕IO-shifted too. The shift is
+                // applied INSIDE where_indices because a rank≥2 result holds
+                // nested index vectors, which scalar arithmetic cannot reach.
                 if *p == crate::functions::Prim::Where {
-                    let zero_based = crate::format::where_indices(&bv)?;
-                    let io = self.get_io()?;
-                    if io == 0 {
-                        return Ok(zero_based);
-                    }
-                    let plus_io = ValueP::scalar_from(crate::cell::Cell::Int(io));
-                    return crate::functions::eval_dyadic_public(
-                        crate::functions::Prim::Add,
-                        &zero_based,
-                        &plus_io,
-                    );
+                    return crate::format::where_indices_io(&bv, self.get_io()?);
                 }
                 // ⍕B honors ⎕PP for float rendering
                 if *p == crate::functions::Prim::Format {
@@ -3877,5 +3869,63 @@ mod tests {
             .map(|c| c.get_int_value().unwrap())
             .collect();
         assert_eq!(ints, vec![0, 0, 0, 1, 0, 0]);
+    }
+
+    // ── empty-array scalar extension ───────────────────────────────────────
+    // Verified against the reference C++ GNU APL binary: scalar extension
+    // over an EMPTY array yields an empty array, it is not a LENGTH ERROR.
+
+    #[test]
+    fn test_scalar_extension_over_empty_is_empty() {
+        let mut env = Environment::new();
+        let v = eval_one(&mut env, "(0⍴0)+1");
+        assert_eq!(v.element_count(), 0);
+    }
+
+    #[test]
+    fn test_scalar_extension_over_empty_either_side() {
+        let mut env = Environment::new();
+        assert_eq!(eval_one(&mut env, "1+0⍴0").element_count(), 0);
+        assert_eq!(eval_one(&mut env, "(0⍴0)×2").element_count(), 0);
+    }
+
+    #[test]
+    fn test_where_of_all_zeros_survives_index_origin_shift() {
+        // ⍸0 0 0 is empty; with ⎕IO=1 the result is shifted by adding 1, which
+        // used to raise LENGTH ERROR because the empty operand was rejected
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = eval_one(&mut env, "⍸0 0 0");
+        assert_eq!(v.element_count(), 0);
+    }
+
+    #[test]
+    fn test_conflicting_lengths_still_error() {
+        // the empty-array fix must not weaken real length checking
+        let mut env = Environment::new();
+        assert!(env.eval_line("1 2 3+1 2").is_err());
+    }
+
+    // ── monadic ravel , ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ravel_of_matrix_is_rank1_in_repl() {
+        let mut env = Environment::new();
+        assert_eq!(
+            eval_one(&mut env, "≢⍴,2 3⍴⍳6")
+                .first_cell()
+                .unwrap()
+                .get_int_value()
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            eval_one(&mut env, "≢,2 3⍴⍳6")
+                .first_cell()
+                .unwrap()
+                .get_int_value()
+                .unwrap(),
+            6
+        );
     }
 }

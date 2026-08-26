@@ -29,11 +29,23 @@ fn format_value(v: &apl::value::ValueP, pp: usize) -> String {
     }
 }
 
+/// replace a leading ASCII '-' with APL's high minus `¯`
+///
+/// Must match boxdisplay::high_minus — this file keeps its own copy of the
+/// display logic (see the routing note in main()), so a fix in one place has
+/// to be mirrored here.
+fn high_minus(s: &str) -> String {
+    match s.strip_prefix('-') {
+        Some(rest) => format!("¯{rest}"),
+        None => s.to_string(),
+    }
+}
+
 fn format_cell(c: &apl::cell::Cell, pp: usize) -> String {
     match c {
-        apl::cell::Cell::Int(v) => v.to_string(),
+        apl::cell::Cell::Int(v) => high_minus(&v.to_string()),
         apl::cell::Cell::Float(v) => {
-            if v.fract() == 0.0 && v.abs() < 1e15 {
+            let s = if v.fract() == 0.0 && v.abs() < 1e15 {
                 format!("{}", *v as i64)
             } else if v.abs() >= 1e-10 {
                 // ⎕PP precision: up to `pp` decimals, trailing zeros trimmed
@@ -41,11 +53,16 @@ fn format_cell(c: &apl::cell::Cell, pp: usize) -> String {
                 s.trim_end_matches('0').trim_end_matches('.').to_string()
             } else {
                 format!("{}", v)
-            }
+            };
+            high_minus(&s)
         }
         apl::cell::Cell::Char(u) => char::from_u32(*u).unwrap_or('?').to_string(),
         apl::cell::Cell::Complex(c) => {
-            format!("{}J{}", c.re, c.im)
+            format!(
+                "{}J{}",
+                high_minus(&c.re.to_string()),
+                high_minus(&c.im.to_string())
+            )
         }
         apl::cell::Cell::Pointer(p) => format_nested(p.value.cells(), pp),
         _ => "<lval>".to_string(),

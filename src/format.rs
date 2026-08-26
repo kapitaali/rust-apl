@@ -132,6 +132,17 @@ pub fn format_dyadic(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
 /// positions. For higher rank the result is a nested vector of index
 /// vectors, one per set element.
 pub fn where_indices(b: &ValueP) -> AplResult<ValueP> {
+    where_indices_io(b, 0)
+}
+
+/// ⍸B with the index origin applied during construction.
+///
+/// The origin must be added HERE rather than by a later scalar addition: a
+/// rank ≥ 2 result holds nested index vectors, and scalar arithmetic cannot
+/// reach inside pointer cells (it raised DOMAIN ERROR). Adding at build time
+/// also keeps an empty result empty instead of routing it through
+/// scalar-extension.
+pub fn where_indices_io(b: &ValueP, io: i64) -> AplResult<ValueP> {
     let rank = b.rank();
     let cells = b.cells();
 
@@ -147,7 +158,7 @@ pub fn where_indices(b: &ValueP) -> AplResult<ValueP> {
         let mut out = Vec::new();
         for (i, c) in cells.iter().enumerate() {
             if c.get_int_value()? == 1 {
-                out.push(Cell::Int(i as i64));
+                out.push(Cell::Int(i as i64 + io));
             }
         }
         let n = out.len() as i64;
@@ -166,7 +177,7 @@ pub fn where_indices(b: &ValueP) -> AplResult<ValueP> {
         let mut subs = vec![0i64; dims.len()];
         for ax in (0..dims.len()).rev() {
             let d = dims[ax].max(1);
-            subs[ax] = rem % d;
+            subs[ax] = rem % d + io;
             rem /= d;
         }
         let idx = ValueP::int_vector(&subs);

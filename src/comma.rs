@@ -11,9 +11,15 @@ use crate::shape::Shape;
 use crate::types::ErrorCode;
 use crate::value::ValueP;
 
-/// monadic `,B` — ravel to a vector of the same cells
+/// monadic `,B` — ravel to a VECTOR of the same cells.
+///
+/// The result is always rank 1, whatever B's rank: `≢⍴,2 3⍴⍳6` is 1 and
+/// `≢,2 3⍴⍳6` is 6. Using `from_ravel_like` here was a bug — it copies B's
+/// shape, so a matrix stayed a matrix and ravel silently did nothing.
 pub fn ravel(b: &ValueP) -> Result<ValueP, ErrorCode> {
-    Ok(ValueP::from_ravel_like(b, b.cells().to_vec()))
+    let cells = b.cells().to_vec();
+    let n = cells.len() as i64;
+    ValueP::from_parts(Shape::vector(n), cells)
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -142,3 +148,75 @@ impl ValueP {
 // when this module is the only user in some feature combos
 #[allow(unused_imports)]
 use PointerCellData as _PointerCellData;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Expectations verified against the reference C++ GNU APL binary
+    // (~/Apps/apl-2.0/src/apl --script).
+
+    #[test]
+    fn test_ravel_matrix_becomes_vector() {
+        // ,2 3⍴⍳6 must be RANK 1 with 6 elements. The old implementation used
+        // from_ravel_like, which copies B's shape, so a matrix stayed a
+        // matrix and ravel silently did nothing (≢⍴,M reported 2, not 1).
+        let m = ValueP::from_parts(
+            Shape::matrix(2, 3),
+            (0..6).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let r = ravel(&m).unwrap();
+        assert_eq!(r.rank(), 1);
+        assert_eq!(r.element_count(), 6);
+        assert_eq!(r.get_shape_item(0), 6);
+    }
+
+    #[test]
+    fn test_ravel_preserves_row_major_order() {
+        let m = ValueP::from_parts(
+            Shape::matrix(2, 3),
+            (0..6).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let r = ravel(&m).unwrap();
+        let ints: Vec<i64> = r
+            .cells()
+            .iter()
+            .map(|c| c.get_int_value().unwrap())
+            .collect();
+        assert_eq!(ints, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_ravel_rank3_becomes_vector() {
+        let c = ValueP::from_parts(
+            Shape::cube(2, 2, 2),
+            (0..8).map(Cell::Int).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let r = ravel(&c).unwrap();
+        assert_eq!(r.rank(), 1);
+        assert_eq!(r.element_count(), 8);
+    }
+
+    #[test]
+    fn test_ravel_scalar_becomes_one_element_vector() {
+        let s = ValueP::scalar_from(Cell::Int(7));
+        let r = ravel(&s).unwrap();
+        assert_eq!(r.rank(), 1);
+        assert_eq!(r.element_count(), 1);
+    }
+
+    #[test]
+    fn test_ravel_vector_is_unchanged() {
+        let v = ValueP::int_vector(&[1, 2, 3]);
+        let r = ravel(&v).unwrap();
+        assert_eq!(r.rank(), 1);
+        assert_eq!(r.element_count(), 3);
+    }
+}

@@ -494,8 +494,24 @@ pub fn elementwise(
     if ac != bc && ac != 1 && bc != 1 {
         return Err(ErrorCode::LengthError);
     }
+    // Empty operands: scalar extension over an empty array yields an EMPTY
+    // array, not an error — `(0⍴0)+1` is empty in GNU APL, and that path is
+    // reached by any ⎕IO shift applied to an empty index result (⍸0 0 0).
+    // Only a length CONFLICT between two non-unit lengths is an error, and
+    // that was already caught above.
     if ac == 0 || bc == 0 {
-        return Err(ErrorCode::LengthError);
+        // the empty operand dictates the result shape; if both are empty
+        // they already agree in length (checked above)
+        let empty = if ac == 0 { a } else { b };
+        let dims: Vec<i64> = (0..empty.rank())
+            .map(|i| empty.get_shape_item(i as i16))
+            .collect();
+        let shape = if dims.is_empty() {
+            crate::shape::Shape::vector(0)
+        } else {
+            crate::shape::Shape::from_dims(&dims)?
+        };
+        return ValueP::from_parts(shape, Vec::new());
     }
 
     let mut out = Vec::with_capacity(len as usize);

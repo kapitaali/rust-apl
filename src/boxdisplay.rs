@@ -123,7 +123,25 @@ fn all_chars(cells: &[Cell]) -> bool {
     !cells.is_empty() && cells.iter().all(|c| matches!(c, Cell::Char(_)))
 }
 
+/// Render one cell as APL text.
+///
+/// Negative numbers use APL's HIGH MINUS `¯`, not the ASCII hyphen: the
+/// hyphen is the dyadic subtract glyph, so `-5` would read back as an
+/// incomplete expression rather than a negative literal. This matters for
+/// display AND for ⍕, which must produce text that ⍎ can re-read.
 fn plain_cell(c: &Cell, pp: usize) -> String {
+    high_minus(&plain_cell_ascii(c, pp))
+}
+
+/// replace a leading ASCII '-' with APL's high minus
+fn high_minus(s: &str) -> String {
+    match s.strip_prefix('-') {
+        Some(rest) => format!("¯{rest}"),
+        None => s.to_string(),
+    }
+}
+
+fn plain_cell_ascii(c: &Cell, pp: usize) -> String {
     match c {
         Cell::Int(i) => i.to_string(),
         Cell::Float(f) => {
@@ -140,7 +158,12 @@ fn plain_cell(c: &Cell, pp: usize) -> String {
             }
         }
         Cell::Char(u) => char::from_u32(*u).unwrap_or('?').to_string(),
-        Cell::Complex(z) => format!("{}J{}", z.re, z.im),
+        // complex: both parts need the high minus, e.g. ¯1J¯2
+        Cell::Complex(z) => format!(
+            "{}J{}",
+            high_minus(&z.re.to_string()),
+            high_minus(&z.im.to_string())
+        ),
         _ => "<lval>".to_string(),
     }
 }
@@ -243,6 +266,33 @@ mod tests {
         let v = ValueP::from_parts(Shape::matrix(2, 2), cps).unwrap();
         let lines = render(&v);
         assert_eq!(lines, vec!["ab", "cd"]);
+    }
+
+    // APL writes negatives with the HIGH MINUS ¯, never the ASCII hyphen
+    // (which is the subtract glyph). Verified against the reference binary.
+
+    #[test]
+    fn test_negative_int_uses_high_minus() {
+        let v = ValueP::scalar_from(Cell::Int(-5));
+        assert_eq!(render(&v), vec!["¯5"]);
+    }
+
+    #[test]
+    fn test_negative_float_uses_high_minus() {
+        let v = ValueP::from_parts(Shape::vector(1), vec![Cell::Float(-2.5)]).unwrap();
+        assert_eq!(render(&v), vec!["¯2.5"]);
+    }
+
+    #[test]
+    fn test_mixed_sign_vector_uses_high_minus() {
+        let v = ValueP::int_vector(&[-5, 3, -2]);
+        assert_eq!(render(&v), vec!["¯5 3 ¯2"]);
+    }
+
+    #[test]
+    fn test_positive_numbers_unaffected() {
+        let v = ValueP::int_vector(&[1, 2, 3]);
+        assert_eq!(render(&v), vec!["1 2 3"]);
     }
 
     #[test]
