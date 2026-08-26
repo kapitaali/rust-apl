@@ -69,6 +69,12 @@ pub enum Expr {
     /// Multi-axis selective assignment: `NAME[i;j;...] ← expr`. One entry per
     /// axis; `None` is an elided index (that whole axis).
     AssignIndexAxes(String, Vec<Option<Expr>>, Box<Expr>),
+    /// Selective assignment through a selector: `(selector)←value`
+    /// The selector is a monadic function call (e.g. `2↑V`, `⌽V`, `3⍴V`).
+    /// Uses the marker-array technique: apply the selector to an array of
+    /// ravel indices to discover which positions are selected, then write
+    /// the RHS values into those positions.
+    AssignSelector(Box<Expr>, Box<Expr>, String),
     /// selective pick assignment: `(A⊃NAME) ← expr`
     AssignPick(String, Box<Expr>, Box<Expr>),
     /// defined-function call: monadic `FN B` or ambivalent `FN`
@@ -400,6 +406,20 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             // not followed by ←: fall through to normal parse; the
             // paren group is just a pick expression.
         }
+        // selective assignment through a selector: (selector)←value
+        // The pattern is LParen ... Name RParen Assign — the last token
+        // inside the parens is the variable name, the rest is a monadic
+        // selector (e.g. 2↑V, ⌽V, 3⍴V). We scan to find the matching
+        // closing paren and check that a Name precedes it.
+        if let Some((selector, name, close)) = scan_selector_target(toks) {
+            if matches!(toks.get(close + 1), Some(Tok::Assign)) {
+                let (rhs, rused) = parse_expr(&toks[close + 2..])?;
+                return Ok((
+                    Expr::AssignSelector(Box::new(selector), Box::new(rhs), name),
+                    close + 2 + rused,
+                ));
+            }
+        }
     }
     // assignment: NAME ← expr
     if let Some(Tok::Name(name)) = toks.first() {
@@ -446,8 +466,105 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     parse_simple(toks)
 }
 
-/// Try to parse `(A⊃NAME)` starting at toks[0] == LParen.
-/// Returns Ok(None) if the pattern doesn't match (caller falls through).
+/// Try to scan `( selector NAME )` starting at toks[0] == LParen.
+///
+/// Returns `Some((selector_expr, name, close_offset))` where the selector is
+/// a monadic function call on NAME (e.g. `2↑V`, `⌽V`, `3⍴V`, `1 2⌷M`).
+fn scan_selector_target(toks: &[Tok]) -> Option<(Expr, String, usize)> {
+    // find the matching closing paren, tracking depth
+    let mut depth = 0;
+    let mut close = None;
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    if close < 3 {
+        return None;
+    }
+    // the last token inside the parens must be a Name
+    let name = match toks.get(close - 1) {
+        Some(Tok::Name(n)) => n.clone(),
+        _ => return None,
+    };
+    // build the selector expression from toks[1..close]
+    let inner = &toks[1..close];
+    if inner.is_empty() {
+        return None;
+    }
+    let selector = build_selector_expr(inner)?;
+    Some((selector, name, close))
+}
+
+/// Build a selector expression from tokens.
+///
+/// The selector is `[left_args...] func NAME` where left_args is zero or
+/// more numeric literals (forming a strand if multiple), func is a Prim,
+/// and NAME is the variable. We build the expression directly because
+/// parse_expr would treat NAME as a function call rather than a variable.
+fn build_selector_expr(toks: &[Tok]) -> Option<Expr> {
+    // find the last Prim token (the function)
+    let mut func_pos = None;
+    for (i, t) in toks.iter().enumerate() {
+        if let Tok::Prim(_) = t {
+            func_pos = Some(i);
+        }
+    }
+    let func_pos = func_pos?;
+    // the token after func must be a Name
+    let name = match toks.get(func_pos + 1) {
+        Some(Tok::Name(n)) => n.clone(),
+        _ => return None,
+    };
+    // func must be the second-to-last token
+    if func_pos + 2 != toks.len() {
+        return None;
+    }
+    let func = match toks.get(func_pos) {
+        Some(Tok::Prim(p)) => *p,
+        _ => return None,
+    };
+    let arg = Expr::Var(name);
+    if func_pos == 0 {
+        // monadic: func NAME
+        Some(Expr::Monadic(func, Box::new(arg)))
+    } else {
+        // dyadic: [left_args...] func NAME
+        let left_toks = &toks[..func_pos];
+        let left = build_selector_left(strand_value(left_toks)?)?;
+        Some(Expr::Dyadic(func, Box::new(left), Box::new(arg)))
+    }
+}
+
+/// Convert a slice of numeric tokens into a strand value (scalar or vector).
+fn strand_value(toks: &[Tok]) -> Option<Vec<f64>> {
+    let mut vals = Vec::with_capacity(toks.len());
+    for t in toks {
+        match t {
+            Tok::Num(v) => vals.push(*v),
+            _ => return None,
+        }
+    }
+    Some(vals)
+}
+
+/// Convert a numeric vector into an Expr (Num for scalar, NumVec for vector).
+fn build_selector_left(vals: Vec<f64>) -> Option<Expr> {
+    if vals.len() == 1 {
+        Some(Expr::Num(vals[0]))
+    } else {
+        Some(Expr::NumVec(vals))
+    }
+}
 fn try_parse_pick_target(toks: &[Tok]) -> AplResult<Option<(Expr, String, usize)>> {
     // inside the parens we expect: <index-expr> ⊃ NAME
     // toks[0] IS the opening paren of the target group; track inner depth.
@@ -1415,6 +1532,7 @@ fn collect_assigned_names(body: &[Expr], out: &mut Vec<String>) {
             | Expr::AssignIndexed(n, _, _)
             | Expr::AssignIndexAxes(n, _, _)
             | Expr::AssignPick(n, _, _)
+            | Expr::AssignSelector(_, _, n)
                 if !out.contains(n) =>
             {
                 out.push(n.clone());
@@ -2330,6 +2448,68 @@ impl Environment {
                 self.vars.insert(name.clone(), writable.clone());
                 Ok(writable)
             }
+            Expr::AssignSelector(selector, rhs, name) => {
+                // selective assignment through a selector: (selector)←value
+                // Uses the marker-array technique: apply the selector to an
+                // array of ravel indices to discover which positions are
+                // selected, then write the RHS values into those positions.
+                let rv = self.eval(rhs)?;
+                let target = self.vars.get(name).ok_or(ErrorCode::ValueError)?.clone();
+                let mut writable = target;
+                writable.isolate();
+
+                // create marker array: same shape as target, each element
+                // is its ravel index + 1. The +1 ensures that prototype
+                // positions (value 0) are distinguishable from real indices.
+                let n = writable.element_count();
+                let marker_vals: Vec<Cell> = (1..=n).map(Cell::Int).collect();
+                let marker = ValueP::from_ravel_like(&writable, marker_vals);
+
+                // apply the selector to the marker
+                let selected = self.eval_selector(selector, &marker)?;
+
+                // flatten the selected values to get positions.
+                // The marker values are ravel_index + 1, so values >= 1
+                // correspond to real positions (subtract 1) and values == 0
+                // are prototype positions from padding — the reference
+                // ignores those, so we filter them out.
+                let n = writable.element_count();
+                let all_positions: Vec<i64> = selected
+                    .cells()
+                    .iter()
+                    .map(|c| c.get_int_value())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let positions: Vec<i64> = all_positions
+                    .into_iter()
+                    .filter(|p| *p >= 1 && *p <= n)
+                    .map(|p| p - 1)
+                    .collect();
+
+                let rc = rv.cells();
+                // RHS must broadcast (len 1) or have at least as many
+                // elements as positions; extra elements are silently
+                // ignored (matching the reference).
+                if rc.len() != 1 && rc.len() < positions.len() {
+                    return Err(ErrorCode::LengthError);
+                }
+
+                {
+                    let cells = writable.make_mut().ravel_mut();
+                    for (k, &pos) in positions.iter().enumerate() {
+                        if pos < 0 || pos as usize >= cells.len() {
+                            return Err(ErrorCode::IndexError);
+                        }
+                        let src = if rc.len() == 1 {
+                            rc[0].clone()
+                        } else {
+                            rc[k].clone()
+                        };
+                        cells[pos as usize] = src;
+                    }
+                }
+                self.vars.insert(name.clone(), writable.clone());
+                Ok(writable)
+            }
             Expr::Monadic(p, b) => {
                 // branch arrow: →expr — evaluate the target; push it for
                 // call_function's body loop. An EMPTY target = no jump
@@ -2671,7 +2851,40 @@ impl Environment {
         })
     }
 
-    /// Apply a monadic primitive with ⎕IO-sensitive dispatch.
+    /// Apply a selector expression to a marker array.
+    ///
+    /// The selector contains a reference to a variable by name. We temporarily
+    /// bind that variable to the marker array, evaluate the selector, then
+    /// restore the original binding. This implements the marker-array
+    /// technique for selective assignment through selectors.
+    fn eval_selector(&mut self, selector: &Expr, marker: &ValueP) -> AplResult<ValueP> {
+        // find the variable name in the selector
+        let name = Self::find_selector_var(selector)?;
+        // save the original binding
+        let original = self.vars.get(name).cloned();
+        // bind the variable to the marker
+        self.vars.insert(name.to_string(), marker.clone());
+        // evaluate the selector
+        let result = self.eval(selector);
+        // restore the original binding
+        match original {
+            Some(v) => self.vars.insert(name.to_string(), v),
+            None => self.vars.remove(name),
+        };
+        result
+    }
+
+    /// Find the variable name referenced in a selector expression.
+    fn find_selector_var(e: &Expr) -> AplResult<&str> {
+        match e {
+            Expr::Monadic(_, b) => Self::find_selector_var(b),
+            Expr::Dyadic(_, a, b) => {
+                Self::find_selector_var(b).or_else(|_| Self::find_selector_var(a))
+            }
+            Expr::Var(n) => Ok(n),
+            _ => Err(ErrorCode::SyntaxError),
+        }
+    }
     ///
     /// The Monadic eval arm intercepts ⍳ ⍋ ⍒ ⍸ ⍕ before eval_monadic because
     /// their results depend on the index origin. Operators that apply a prim
@@ -4840,5 +5053,71 @@ mod tests {
             ravel_ints(&mut env, ",(2 2⍴1 2 3 4)(+⍤1)2 2⍴5 6 7 8"),
             vec![6, 8, 10, 12]
         );
+    }
+
+    // ── selective assignment through selectors ─────────────────────────
+
+    #[test]
+    fn test_selective_assignment_take() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(2↑V)←9 8").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![9, 8, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_selective_assignment_drop() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(2↓V)←9 9 9").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![1, 2, 9, 9, 9]);
+    }
+
+    #[test]
+    fn test_selective_assignment_rotate() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(3⌽V)←10 20 30 40 50").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![30, 40, 50, 10, 20]);
+    }
+
+    #[test]
+    fn test_selective_assignment_reshape() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(3⍴V)←99 99 99").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![99, 99, 99, 4, 5]);
+    }
+
+    #[test]
+    fn test_selective_assignment_broadcast_scalar() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(2↑V)←99").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![99, 99, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_selective_assignment_matrix() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("(2 3↑M)←99").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![99, 99, 99, 99, 99, 99]);
+    }
+
+    #[test]
+    fn test_selective_assignment_extra_rhs_ignored() {
+        // RHS has more elements than positions; extras are silently ignored
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←1 2 3 4 5").unwrap();
+        env.eval_line("(4↑V)←10 20 30 40 50 60").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![10, 20, 30, 40, 5]);
     }
 }
