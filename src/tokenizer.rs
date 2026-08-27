@@ -143,7 +143,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⌹", Prim::Domino),
     ("∧", Prim::And),
     ("∨", Prim::Or),
-    ("*", Prim::Power),  // APL power (dyadic) / exponential (monadic)
+    ("*", Prim::Power),   // APL power (dyadic) / exponential (monadic)
     ("⋆", Prim::Power), // STAR OPERATOR — alias for power (GNU APL accepts both)
 ];
 
@@ -439,12 +439,20 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                         }
                     }
                     // power operator: PRIM⍣N — apply function N times
+                    // Also handles named functions: NAME⍣N
                     if rest.starts_with('⍣') {
                         match toks.last() {
                             Some(Tok::Prim(p)) => {
                                 let p = *p;
                                 toks.pop();
                                 toks.push(Tok::PowerOp(PowerFn::Prim(p)));
+                                i += 1;
+                                continue;
+                            }
+                            Some(Tok::Name(n)) => {
+                                let n = n.clone();
+                                toks.pop();
+                                toks.push(Tok::PowerOp(PowerFn::Name(n)));
                                 i += 1;
                                 continue;
                             }

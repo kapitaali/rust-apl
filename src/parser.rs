@@ -1023,20 +1023,14 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         Tok::PowerOp(p) => {
             // power operator: (F⍣N) B — apply F N times to B
             // N is a scalar integer, B is the operand
-            let p = match p {
-                PowerFn::Prim(prim) => *prim,
-                PowerFn::Name(_) => return Err(ErrorCode::SyntaxError), // named function power not yet supported
-            };
+            let p = p.clone();
             let n_tok = toks.get(1);
             let n = match n_tok {
                 Some(Tok::Num(v)) => *v as i64,
                 _ => return Err(ErrorCode::SyntaxError),
             };
             let (operand, used) = parse_simple(&toks[2..])?;
-            Ok((
-                Expr::PowerOp(PowerFn::Prim(p), n, Box::new(operand)),
-                2 + used,
-            ))
+            Ok((Expr::PowerOp(p, n, Box::new(operand)), 2 + used))
         }
         Tok::Zilde => {
             // ⍬ — the empty numeric vector (0⍴0)
@@ -2723,17 +2717,23 @@ impl Environment {
                 // (F⍣N) B — apply F monadically N times: F(F(F(...F(B)...)))
                 // N=0 returns B unchanged (identity)
                 let bv = self.eval(b)?;
-                let p = match p {
-                    PowerFn::Prim(prim) => *prim,
-                    PowerFn::Name(_) => return Err(ErrorCode::SyntaxError), // named function power not yet supported
-                };
                 let n = *n;
                 if n <= 0 {
                     return Ok(bv);
                 }
                 let mut result = bv;
-                for _ in 0..n {
-                    result = p.eval_monadic(&result)?;
+                let p = p.clone();
+                match p {
+                    PowerFn::Prim(prim) => {
+                        for _ in 0..n {
+                            result = prim.eval_monadic(&result)?;
+                        }
+                    }
+                    PowerFn::Name(name) => {
+                        for _ in 0..n {
+                            result = self.call_function(&name, None, Some(result))?;
+                        }
+                    }
                 }
                 Ok(result)
             }
@@ -5465,6 +5465,24 @@ mod tests {
             .collect();
         assert!(text.contains("(1 2)"));
         assert!(text.contains("(3 4 5)"));
+    }
+
+    #[test]
+    fn test_power_op_named_function() {
+        // f⍣N — apply named function N times
+        let mut env = Environment::new();
+        env.eval_line("double←{2×⍵}").unwrap();
+        let v = env.eval_line("double⍣3 5").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::Int(40)); // 5→10→20→40
+    }
+
+    #[test]
+    fn test_power_op_named_function_square() {
+        // square⍣2 3 → 3²=9, 9²=81
+        let mut env = Environment::new();
+        env.eval_line("square←{⍵×⍵}").unwrap();
+        let v = env.eval_line("square⍣2 3").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::Int(81));
     }
 
     // ── squad ⌷ selector for selective assignment ──────────────────────────
