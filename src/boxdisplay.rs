@@ -113,6 +113,108 @@ pub fn render_with_pp(v: &ValueP, pp: usize) -> Vec<String> {
     vec![format!("⍴{}", shape_str(v))]
 }
 
+/// Render a value as plain text (no boxes), matching GNU APL's default display.
+/// Nested arrays are printed with spaces between elements, each element
+/// rendered recursively. This is the default display mode in the REPL.
+pub fn render_plain(v: &ValueP) -> Vec<String> {
+    render_plain_with_pp(v, 10)
+}
+
+/// render_plain honoring print precision (⎕PP)
+pub fn render_plain_with_pp(v: &ValueP, pp: usize) -> Vec<String> {
+    let is_simple = v.cells().iter().all(|c| c.is_simple_cell());
+    if v.rank() == 0 {
+        // scalar: simple → bare text; pointer → recurse into inner
+        return match v.first_cell() {
+            Some(Cell::Pointer(p)) => {
+                let inner = ValueP {
+                    inner: p.value.clone(),
+                };
+                render_plain_with_pp(&inner, pp)
+            }
+            _ => vec![plain_cell(v.first_cell().unwrap(), pp)],
+        };
+    }
+    if is_simple && v.rank() == 1 {
+        // simple vector → single line, no box
+        let sep = if all_chars(v.cells()) { "" } else { " " };
+        return vec![v
+            .cells()
+            .iter()
+            .map(|c| plain_cell(c, pp))
+            .collect::<Vec<_>>()
+            .join(sep)];
+    }
+    if is_simple && v.rank() >= 2 {
+        // simple matrix → plain rows
+        let cols = v.get_shape_item(1) as usize;
+        let cells = v.cells();
+        let sep = if all_chars(cells) { "" } else { " " };
+        let mut rows = Vec::new();
+        for r in 0..(cells.len() / cols.max(1)) {
+            let line: Vec<String> = cells[r * cols..(r + 1) * cols]
+                .iter()
+                .map(|c| plain_cell(c, pp))
+                .collect();
+            rows.push(line.join(sep));
+        }
+        return rows;
+    }
+    if !is_simple && v.rank() == 1 {
+        // nested vector → space-separated elements, each rendered recursively
+        let parts: Vec<String> = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Pointer(p) => {
+                    let inner = ValueP {
+                        inner: p.value.clone(),
+                    };
+                    let lines = render_plain_with_pp(&inner, pp);
+                    if lines.len() == 1 {
+                        lines[0].clone()
+                    } else {
+                        // multi-line element: join with spaces for inline display
+                        lines.join(" ")
+                    }
+                }
+                other => plain_cell(other, pp),
+            })
+            .collect();
+        return vec![parts.join("  ")];
+    }
+    if v.rank() == 2 {
+        // nested matrix → rows of space-separated elements
+        let cols = v.get_shape_item(1) as usize;
+        let cells = v.cells();
+        let mut rows: Vec<String> = Vec::new();
+        for r in 0..(cells.len() / cols.max(1)) {
+            let row_cells = &cells[r * cols..(r + 1) * cols];
+            let parts: Vec<String> = row_cells
+                .iter()
+                .map(|c| match c {
+                    Cell::Pointer(p) => {
+                        let inner = ValueP {
+                            inner: p.value.clone(),
+                        };
+                        let lines = render_plain_with_pp(&inner, pp);
+                        if lines.len() == 1 {
+                            lines[0].clone()
+                        } else {
+                            lines.join(" ")
+                        }
+                    }
+                    other => plain_cell(other, pp),
+                })
+                .collect();
+            rows.push(parts.join("  "));
+        }
+        return rows;
+    }
+    // rank ≥ 3 fallback
+    vec![format!("⍴{}", shape_str(v))]
+}
+
 fn is_nested(v: &ValueP) -> bool {
     !v.cells().iter().all(|c| c.is_simple_cell())
 }

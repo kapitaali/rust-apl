@@ -348,6 +348,16 @@ CASES = [
     ("sel", "M←2 3⍴⍳6 ⋄ (1 2⌷M)←99 ⋄ M"),
     ("sel", "M←2 3⍴⍳6 ⋄ (2 3⌷M)←88 ⋄ M"),
     ("sel", "M←2 3⍴⍳6 ⋄ (1 2⌷M)←99 ⋄ (2 3⌷M)←88 ⋄ M"),
+
+    # ══ NEW: display parity (nested arrays print plain by default) ════════
+    ("disp", "N←(1 2)(3 4 5) ⋄ ,N"),
+    ("disp", "N←(1 2)(3 4 5) ≢⍴N"),
+    ("disp", "N←⊂(1 2)(3 4 5) ⋄ ,N"),
+    ("disp", "M←2 2⍴(1 2)(3 4 5)(6 7)(8 9 10) ⋄ ,M"),
+    # 4⎕CR boxed display
+    ("cr", "⍴4⎕CR(1 2)(3 4 5)"),
+    ("cr", ",4⎕CR 1 2 3"),
+    ("cr", "⍴4⎕CR⊂(1 2)(3 4 5)"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")

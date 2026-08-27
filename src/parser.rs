@@ -57,6 +57,8 @@ pub enum Expr {
     /// `⎕LOADSO 'path'` — load a Rust plugin cdylib; registers all its
     /// bindings into the function table.
     QuadLoadSo(Box<Expr>),
+    /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
+    QuadCr(Box<Expr>),
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
     /// Multi-axis bracket index `B[i;j;...]`. One entry per axis; `None` is an
@@ -859,6 +861,13 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 
 /// term := '(' expr ')' | PRIM term | OP1 term | strand | atom | '{' dfn
 fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    // 4 ⎕CR B — boxed display (can appear anywhere a term can)
+    if matches!(toks.first(), Some(Tok::Num(v)) if *v == 4.0)
+        && matches!(toks.get(1), Some(Tok::Name(n)) if n == "⎕CR")
+    {
+        let (arg, used) = parse(&toks[2..])?;
+        return Ok((Expr::QuadCr(Box::new(arg)), 2 + used));
+    }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
             // dfn: `{ BODY }` — body is one or more expressions separated by
@@ -2450,9 +2459,85 @@ impl Environment {
             }
             Expr::AssignSelector(selector, rhs, name) => {
                 // selective assignment through a selector: (selector)←value
-                // Uses the marker-array technique: apply the selector to an
-                // array of ravel indices to discover which positions are
-                // selected, then write the RHS values into those positions.
+                //
+                // Special cases:
+                // - ⌷ (squad): extract indices, write directly to position
+                // - ⍪ (table/comma1): replace entire variable with RHS
+                //
+                // General case uses the marker-array technique.
+
+                // Check for ⍪ (replace entire variable)
+                if let Expr::Monadic(p, _) = &**selector {
+                    if *p == crate::functions::Prim::Comma1 {
+                        let rv = self.eval(rhs)?;
+                        self.vars.insert(name.clone(), rv);
+                        return Ok(self.vars.get(name).unwrap().clone());
+                    }
+                }
+
+                // Check for ⌷ (squad indexing)
+                if let Expr::Dyadic(p, a, _) = &**selector {
+                    if *p == crate::functions::Prim::Squad {
+                        let rv = self.eval(rhs)?;
+                        let target = self.vars.get(name).ok_or(ErrorCode::ValueError)?.clone();
+                        let mut writable = target;
+                        writable.isolate();
+
+                        // Evaluate the indices (left arg of ⌷)
+                        let indices_v = self.eval(a)?;
+                        // Get the target variable value (right arg of ⌷)
+                        let var_v = self.vars.get(name).ok_or(ErrorCode::ValueError)?;
+
+                        // Compute linear offset from indices
+                        let indices: Vec<i64> = indices_v
+                            .cells()
+                            .iter()
+                            .map(|c| c.get_int_value())
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                        let rank = var_v.rank() as usize;
+                        if indices.len() != rank {
+                            return Err(ErrorCode::RankError);
+                        }
+
+                        // Honor ⎕IO: shift indices to 0-based
+                        let io = self.get_io()?;
+                        let shifted: Vec<i64> = indices.iter().map(|&idx| idx - io).collect();
+
+                        // Bounds check
+                        for (i, &idx) in shifted.iter().enumerate() {
+                            let axis_len = var_v.get_shape_item(i as i16);
+                            if idx < 0 || idx >= axis_len {
+                                return Err(ErrorCode::IndexError);
+                            }
+                        }
+
+                        // Compute linear offset
+                        let mut offset: i64 = 0;
+                        let mut stride: i64 = 1;
+                        for (i, &idx) in shifted.iter().enumerate().rev() {
+                            offset += idx * stride;
+                            if i > 0 {
+                                stride *= var_v.get_shape_item(i as i16);
+                            }
+                        }
+
+                        let rc = rv.cells();
+                        if rc.is_empty() {
+                            return Err(ErrorCode::LengthError);
+                        }
+
+                        {
+                            let cells = writable.make_mut().ravel_mut();
+                            let src = rc[0].clone();
+                            cells[offset as usize] = src;
+                        }
+                        self.vars.insert(name.clone(), writable.clone());
+                        return Ok(writable);
+                    }
+                }
+
+                // General case: marker-array technique
                 let rv = self.eval(rhs)?;
                 let target = self.vars.get(name).ok_or(ErrorCode::ValueError)?.clone();
                 let mut writable = target;
@@ -2755,6 +2840,52 @@ impl Environment {
                 // result: vector of registered APL names
                 let flat: Vec<u32> = names.join(" ").chars().map(|ch| ch as u32).collect();
                 Ok(ValueP::char_vector(&flat))
+            }
+            Expr::QuadCr(arg) => {
+                // 4 ⎕CR B — boxed display (4⎕CR-style). Returns a char matrix/vector.
+                let bv = self.eval(arg)?;
+                let pp = crate::sysvars::get_pp(self).unwrap_or(10);
+                let inner = crate::boxdisplay::render_with_pp(&bv, pp);
+                // Wrap in an outer box: → on top, ϵ on bottom (GNU APL convention)
+                let width = inner.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                let mut out = Vec::with_capacity(inner.len() + 2);
+                let fills = width.saturating_sub(1);
+                out.push(format!("┏→{}┓", "━".repeat(fills)));
+                for l in &inner {
+                    let pad = width - l.chars().count();
+                    out.push(format!("┃{}{}┃", l, " ".repeat(pad)));
+                }
+                // bottom: ┗ + ∼ + (width-1) fills + ┛
+                // ∼ marks this as a boxed representation (always nested)
+                let mut bottom = String::from("┗∼");
+                for _ in 1..width {
+                    bottom.push('━');
+                }
+                bottom.push('┛');
+                out.push(bottom);
+                // convert to char matrix/vector
+                if out.len() == 1 {
+                    let cps: Vec<u32> = out[0].chars().map(|ch| ch as u32).collect();
+                    Ok(ValueP::char_vector(&cps))
+                } else {
+                    let max_w = out.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                    let rows: Vec<Vec<Cell>> = out
+                        .iter()
+                        .map(|l| {
+                            let mut cps: Vec<Cell> =
+                                l.chars().map(|ch| Cell::Char(ch as u32)).collect();
+                            while cps.len() < max_w {
+                                cps.push(Cell::Char(' ' as u32));
+                            }
+                            cps
+                        })
+                        .collect();
+                    let flat: Vec<Cell> = rows.iter().flatten().cloned().collect();
+                    Ok(ValueP::from_parts(
+                        crate::shape::Shape::matrix(rows.len() as i64, max_w as i64),
+                        flat,
+                    )?)
+                }
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
@@ -5119,5 +5250,133 @@ mod tests {
         env.eval_line("V←1 2 3 4 5").unwrap();
         env.eval_line("(4↑V)←10 20 30 40 50 60").unwrap();
         assert_eq!(ravel_ints(&mut env, "V"), vec![10, 20, 30, 40, 5]);
+    }
+
+    // ── display parity: nested arrays print plain by default ────────────────
+
+    #[test]
+    fn test_nested_vector_prints_plain() {
+        // GNU APL prints nested arrays plain by default, not boxed
+        let mut env = Environment::new();
+        env.eval_line("N←(1 2)(3 4 5)").unwrap();
+        let v = env.eval_line("N").unwrap().unwrap();
+        let lines = crate::boxdisplay::render_plain(&v);
+        assert_eq!(lines, vec!["1 2  3 4 5"]);
+    }
+
+    #[test]
+    fn test_nested_matrix_prints_plain() {
+        let mut env = Environment::new();
+        env.eval_line("M←2 2⍴(1 2)(3 4 5)(6 7)(8 9 10)").unwrap();
+        let v = env.eval_line("M").unwrap().unwrap();
+        let lines = crate::boxdisplay::render_plain(&v);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("1 2"));
+        assert!(lines[0].contains("3 4 5"));
+        assert!(lines[1].contains("6 7"));
+        assert!(lines[1].contains("8 9 10"));
+    }
+
+    #[test]
+    fn test_enclosed_vector_prints_plain() {
+        let mut env = Environment::new();
+        env.eval_line("N←⊂(1 2)(3 4 5)").unwrap();
+        let v = env.eval_line("N").unwrap().unwrap();
+        let lines = crate::boxdisplay::render_plain(&v);
+        assert_eq!(lines, vec!["1 2  3 4 5"]);
+    }
+
+    // ── 4⎕CR boxed display ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_quadcr_simple_vector() {
+        let mut env = Environment::new();
+        let v = env.eval_line("4⎕CR 1 2 3").unwrap().unwrap();
+        // Simple vector → char vector (no outer box needed for single line)
+        // Simple vector → char matrix with outer box (3 rows: top, content, bottom)
+        assert_eq!(v.rank(), 2);
+        let text: String = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
+        assert!(text.contains("1 2 3"));
+    }
+
+    #[test]
+    fn test_quadcr_nested_vector() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = env.eval_line("4⎕CR(1 2)(3 4 5)").unwrap().unwrap();
+        // Nested vector → char matrix with outer box
+        assert_eq!(v.rank(), 2);
+        let shape = v.shape();
+        assert_eq!(shape.get_shape_item(0), 5); // 5 rows (box top, 2 content, box bottom, padding)
+        assert!(shape.get_shape_item(1) >= 10); // at least 10 cols
+    }
+
+    #[test]
+    fn test_quadcr_in_expression() {
+        // 4⎕CR should work when nested in another expression
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = env.eval_line(",4⎕CR 1 2 3").unwrap().unwrap();
+        // Ravel of a char matrix → char vector
+        // Simple vector → char matrix with outer box (3 rows: top, content, bottom)
+        assert_eq!(v.rank(), 1);
+    }
+
+    // ── squad ⌷ selector for selective assignment ──────────────────────────
+
+    #[test]
+    fn test_selective_assignment_squad() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("(1 2⌷M)←99").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![1, 99, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_selective_assignment_squad_multiple() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        env.eval_line("(1 2⌷M)←99").unwrap();
+        env.eval_line("(2 3⌷M)←88").unwrap();
+        assert_eq!(ravel_ints(&mut env, ",M"), vec![1, 99, 3, 4, 5, 88]);
+    }
+
+    #[test]
+    fn test_selective_assignment_squad_out_of_bounds() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        assert!(env.eval_line("(3 1⌷M)←99").is_err()); // row 3 out of bounds
+        assert!(env.eval_line("(1 4⌷M)←99").is_err()); // col 4 out of bounds
+    }
+
+    // ── table ⍪ selector for selective assignment ──────────────────────────
+
+    #[test]
+    fn test_selective_assignment_table() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←10 20 30").unwrap();
+        env.eval_line("(⍪V)←99 88 77").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![99, 88, 77]);
+    }
+
+    #[test]
+    fn test_selective_assignment_table_reshape() {
+        // ⍪ on a vector makes it a column vector; assignment replaces entirely
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        env.eval_line("V←10 20 30").unwrap();
+        env.eval_line("(⍪V)←99 88 77").unwrap();
+        assert_eq!(ravel_ints(&mut env, "V"), vec![99, 88, 77]);
     }
 }
