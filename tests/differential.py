@@ -375,6 +375,8 @@ CASES = [
     ("J", "1J2×2J3"),
     ("J", "9○1J2"),
     ("J", "11○1J2"),
+    ("⍸dy", "1 2 3⍸0.5 1.5 2.5 3.5"),
+    ("⍸dy", "1 2 3⍸1 2 3"),
 ]
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
 

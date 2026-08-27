@@ -25,6 +25,7 @@ pub mod operators;
 pub mod outer;
 #[cfg(test)]
 pub mod parallel_tests;
+pub mod interval_index;
 pub mod parser;
 pub mod partition;
 pub mod pick;

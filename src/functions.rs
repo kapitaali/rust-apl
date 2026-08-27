@@ -108,7 +108,7 @@ impl Prim {
             "⌷" => Prim::Squad,     // ⌷ = general index
             "⊖" => Prim::Rotate1,   // ⊖ = reverse/rotate first axis
             "⍕" => Prim::Format,    // ⍕ = format
-            "⍸" => Prim::Where,     // ⍸ = where (indices of 1s)
+            "⍸" => Prim::Where,     // ⍸ = where (indices of 1s) / interval index (dyadic)
             "⍎" => Prim::Execute,   // ⍎ = execute (evaluate char vector)
             "⍷" => Prim::Find,      // ⍷ = find (locate subarray)
             "⊆" => Prim::Partition, // ⊆ = partition (group items)
@@ -356,6 +356,9 @@ impl Prim {
 
             // A∈B — membership
             Prim::Epsilon => crate::epsilon::epsilon(a, b),
+
+            // A⍸B — interval index (classify B into intervals of A)
+            Prim::Where => crate::interval_index::interval_index(a, b),
 
             // A/B — replicate (compress): the guarded-branch idiom
             // →cond/line jumps only when cond=1; empty target = fall through.
