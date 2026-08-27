@@ -22,6 +22,7 @@ use crate::value::ValueP;
 pub const IO_VAR: &str = "⎕IO";
 pub const CT_VAR: &str = "⎕CT";
 pub const PP_VAR: &str = "⎕PP";
+pub const BOXING_VAR: &str = "⎕BOXING";
 
 /// Initialize default system variables in a fresh Environment.
 pub fn init_sysvars(env: &mut crate::parser::Environment) {
@@ -32,6 +33,18 @@ pub fn init_sysvars(env: &mut crate::parser::Environment) {
     ));
     env.set(CT_VAR, ValueP { inner: ct });
     env.set(PP_VAR, ValueP::scalar_from(crate::cell::Cell::Int(10)));
+    env.set(BOXING_VAR, ValueP::scalar_from(crate::cell::Cell::Int(1)));
+}
+
+/// read ⎕BOXING (1 = nested arrays print boxed, 0 = plain)
+pub fn get_boxing(env: &crate::parser::Environment) -> bool {
+    match env.get(BOXING_VAR) {
+        Some(v) => match v.first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => *i != 0,
+            _ => true, // default: boxing on
+        },
+        None => true, // default: boxing on
+    }
 }
 
 /// read ⎕IO (0-based port: only 0 is legal; anything else → DOMAIN ERROR on use)
@@ -247,6 +260,20 @@ mod tests {
         // default render keeps 10
         let lines = crate::boxdisplay::render(&v);
         assert_eq!(lines[0], "0.3333333333");
+    }
+
+    #[test]
+    fn test_boxing_writable() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        // default: boxing on
+        assert!(get_boxing(&env));
+        // turn off
+        env.set(BOXING_VAR, ValueP::scalar_from(Cell::Int(0)));
+        assert!(!get_boxing(&env));
+        // turn on
+        env.set(BOXING_VAR, ValueP::scalar_from(Cell::Int(1)));
+        assert!(get_boxing(&env));
     }
 
     #[test]

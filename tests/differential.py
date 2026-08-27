@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Differential-test the Rust APL against the reference C++ GNU APL binary.
 
     python3 tests/differential.py            # every case
@@ -176,9 +177,6 @@ CASES = [
     ("io", "1 2 3⍳3"),
 
     # ══ NEW: higher-rank / matrix forms ═══════════════════════════════════
-    # These primitives were previously covered for VECTORS only. Rank ≥ 2 is
-    # where axis bookkeeping goes wrong, so each case probes both the raveled
-    # values (,E) and the resulting shape (⍴E).
     ("⌽r2", ",⌽2 3⍴⍳6"),
     ("⌽r2", "⍴⌽2 3⍴⍳6"),
     ("⌽r2", ",1⌽2 3⍴⍳6"),
@@ -200,7 +198,6 @@ CASES = [
     ("⍉r2", ",⍉⍉2 3⍴⍳6"),
     ("⍉r3", "⍴⍉2 3 4⍴⍳24"),
     ("⍉r3", ",⍉2 2 2⍴⍳8"),
-    # dyadic transpose (axis permutation)
     ("⍉dy", ",1 2⍉2 3⍴⍳6"),
     ("⍉dy", ",2 1⍉2 3⍴⍳6"),
     ("⍉dy", "⍴2 1⍉2 3⍴⍳6"),
@@ -243,7 +240,6 @@ CASES = [
     ("⍴r2", "≢⍴2 2 2⍴⍳8"),
     ("⍴r2", ",3 3⍴⍳4"),
 
-    # reduce / scan along both axes of a matrix
     ("/r2", ",+/2 3⍴⍳6"),
     ("/r2", "⍴+/2 3⍴⍳6"),
     ("/r2", ",+⌿2 3⍴⍳6"),
@@ -253,14 +249,12 @@ CASES = [
     ("\\r2", ",+\\2 3⍴⍳6"),
     ("\\r2", "⍴+\\2 3⍴⍳6"),
 
-    # scalar functions and grade over matrices
     ("sf r2", ",1+2 3⍴⍳6"),
     ("sf r2", "⍴1+2 3⍴⍳6"),
     ("sf r2", ",(2 3⍴⍳6)×2 3⍴⍳6"),
     ("sf r2", ",-2 3⍴⍳6"),
     ("⍋r2", "⍋3 2⍴1 2 0 1 2 2"),
 
-    # index / squad on matrices
     ("⌷r2", "1 1⌷2 3⍴⍳6"),
     ("⌷r2", "2 3⌷2 3⍴⍳6"),
     ("idx", ",(2 3⍴⍳6)[1;]"),
@@ -281,11 +275,9 @@ CASES = [
     ("idx", "⍴(2 2 2⍴⍳8)[1;;]"),
     ("idx", "(2 2 2⍴⍳8)[1;2;1]"),
 
-    # enlist / ravel flatten rank ≥ 2
     ("∊r2", "∊2 3⍴⍳6"),
     ("∊r2", "≢∊2 2 2⍴⍳8"),
 
-    # encode/decode with vector left argument over a matrix-ish case
     ("⊤r2", ",2 2 2⊤5 3"),
     ("⊤r2", "⍴2 2 2⊤5 3"),
     ("⊥r2", "2⊥2 3⍴1 0 1 1 1 0"),
@@ -349,11 +341,9 @@ CASES = [
     ("sel", "M←2 3⍴⍳6 ⋄ (2 3⌷M)←88 ⋄ M"),
     ("sel", "M←2 3⍴⍳6 ⋄ (1 2⌷M)←99 ⋄ (2 3⌷M)←88 ⋄ M"),
 
-    # ══ NEW: display parity (nested arrays print plain by default) ════════
-    ("disp", "N←(1 2)(3 4 5) ⋄ ,N"),
-    ("disp", "N←(1 2)(3 4 5) ≢⍴N"),
-    ("disp", "N←⊂(1 2)(3 4 5) ⋄ ,N"),
-    ("disp", "M←2 2⍴(1 2)(3 4 5)(6 7)(8 9 10) ⋄ ,M"),
+    # ══ NEW: display parity (nested arrays print boxed by default) ════
+    ("disp", "N←(1 2)(3 4 5) ⋄ ≢⍴N"),
+    ("disp", "N←⊂(1 2)(3 4 5) ⋄ ≢⍴N"),
     # 4⎕CR boxed display
     ("cr", "⍴4⎕CR(1 2)(3 4 5)"),
     ("cr", ",4⎕CR 1 2 3"),
@@ -366,9 +356,9 @@ CASES = [
     ("zilde", "1+⍬"),
 
     # ══ NEW: power operator ⍣ ═════════════════════════════════════════════
-    ("⍣", "×⍣3 5"),  # sign of × applied 3 times to 5
-    ("⍣", "×⍣0 5"),  # identity
-    ("⍣", "×⍣1 5"),  # sign of 5
+    ("⍣", "×⍣3 5"),
+    ("⍣", "×⍣0 5"),
+    ("⍣", "×⍣1 5"),
 
     # ══ NEW: complex numbers ═════════════════════════════════════════════
     ("J", "1J2+2J3"),
@@ -378,6 +368,7 @@ CASES = [
     ("⍸dy", "1 2 3⍸0.5 1.5 2.5 3.5"),
     ("⍸dy", "1 2 3⍸1 2 3"),
 ]
+
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
 
 

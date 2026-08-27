@@ -177,14 +177,20 @@ fn main() {
             Ok(Some(v)) => {
                 // ⎕PP print precision (default 10)
                 let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
-                // Default display uses plain rendering (no boxes) to match
-                // GNU APL's default output. Boxed display is available via
-                // 4⎕CR (the standard APL boxed-representation function).
+                // ⎕BOXING: 1 = boxed display, 0 = plain (GNU APL default: 1)
+                let boxing = apl::sysvars::get_boxing(&env);
                 let all_chars =
                     !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
-                if v.rank() >= 2 || all_chars {
-                    for l in apl::boxdisplay::render_plain_with_pp(&v, pp) {
-                        println!("{}", l);
+                let has_pointer = v.cells().iter().any(|c| c.is_pointer_cell());
+                if v.rank() >= 2 || all_chars || (has_pointer && boxing) {
+                    if boxing && has_pointer {
+                        for l in apl::boxdisplay::render_with_pp(&v, pp) {
+                            println!("{}", l);
+                        }
+                    } else {
+                        for l in apl::boxdisplay::render_plain_with_pp(&v, pp) {
+                            println!("{}", l);
+                        }
                     }
                 } else {
                     println!("{}", format_value(&v, pp));

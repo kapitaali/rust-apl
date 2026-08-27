@@ -141,6 +141,7 @@ impl Prim {
             // ── arithmetic ────────────────────────────────────────────────
             Prim::Add => map_cells(b, cell::bif_conjugate),
             Prim::Subtract => map_cells(b, cell::bif_negative),
+            Prim::Neg => map_cells(b, cell::bif_negative),
             Prim::Divide => map_cells(b, cell::bif_reciprocal),
             // ⋆B / *B — exponential (e to the B)
             Prim::Exponential => map_cells(b, cell::bif_exponential),

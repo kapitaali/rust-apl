@@ -2515,8 +2515,12 @@ impl Environment {
 
                         // Evaluate the indices (left arg of ⌷)
                         let indices_v = self.eval(a)?;
-                        // Get the target variable value (right arg of ⌷)
-                        let var_v = self.vars.get(name).ok_or(ErrorCode::ValueError)?;
+
+                        // Copy shape info before mutable borrow
+                        let var_shape: Vec<i64> = (0..self.vars.get(name).unwrap().rank())
+                            .map(|i| self.vars.get(name).unwrap().get_shape_item(i as i16))
+                            .collect();
+                        let var_rank = var_shape.len();
 
                         // Compute linear offset from indices
                         let indices: Vec<i64> = indices_v
@@ -2525,8 +2529,7 @@ impl Environment {
                             .map(|c| c.get_int_value())
                             .collect::<Result<Vec<_>, _>>()?;
 
-                        let rank = var_v.rank() as usize;
-                        if indices.len() != rank {
+                        if indices.len() != var_rank {
                             return Err(ErrorCode::RankError);
                         }
 
@@ -2536,7 +2539,7 @@ impl Environment {
 
                         // Bounds check
                         for (i, &idx) in shifted.iter().enumerate() {
-                            let axis_len = var_v.get_shape_item(i as i16);
+                            let axis_len = var_shape[i];
                             if idx < 0 || idx >= axis_len {
                                 return Err(ErrorCode::IndexError);
                             }
@@ -2548,7 +2551,7 @@ impl Environment {
                         for (i, &idx) in shifted.iter().enumerate().rev() {
                             offset += idx * stride;
                             if i > 0 {
-                                stride *= var_v.get_shape_item(i as i16);
+                                stride *= var_shape[i];
                             }
                         }
 
