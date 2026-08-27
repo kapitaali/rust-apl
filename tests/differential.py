@@ -358,6 +358,17 @@ CASES = [
     ("cr", "⍴4⎕CR(1 2)(3 4 5)"),
     ("cr", ",4⎕CR 1 2 3"),
     ("cr", "⍴4⎕CR⊂(1 2)(3 4 5)"),
+
+    # ══ NEW: zilde ⍬ ═══════════════════════════════════════════════════════
+    ("zilde", "⍴⍬"),
+    ("zilde", "≢⍬"),
+    ("zilde", "⍬≡0⍴0"),
+    ("zilde", "1+⍬"),
+
+    # ══ NEW: power operator ⍣ ═════════════════════════════════════════════
+    ("⍣", "×⍣3 5"),  # sign of × applied 3 times to 5
+    ("⍣", "×⍣0 5"),  # identity
+    ("⍣", "×⍣1 5"),  # sign of 5
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")

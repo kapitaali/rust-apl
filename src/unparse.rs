@@ -12,6 +12,7 @@
 
 use crate::functions::Prim;
 use crate::parser::Expr;
+use crate::tokenizer::PowerFn;
 
 /// symbol table for Prim → glyph
 fn prim_symbol(p: Prim) -> &'static str {
@@ -260,6 +261,19 @@ pub fn unparse(e: &Expr) -> String {
         Expr::SelfCallDyad(larg, rarg) => {
             format!("{} ∇ {}", unparse(larg), unparse(rarg))
         }
+        Expr::Zilde => "⍬".to_string(),
+        Expr::PowerOp(p, n, b) => {
+            match p {
+                PowerFn::Prim(prim) => format!("{}⍣{} {}", prim_symbol(*prim), n, unparse(b)),
+                PowerFn::Name(name) => format!("({}⍣{} {})", name, n, unparse(b)),
+            }
+        }
+        Expr::QuadCr(arg) => format!("4⎕CR {}", unparse(arg)),
+        Expr::QuadNa(name_expr, decl) => match name_expr {
+            Some(name) => format!("{} ⎕NA '{}'", unparse(name), unparse(decl)),
+            None => format!("⎕NA '{}'", unparse(decl)),
+        },
+        Expr::QuadLoadSo(spec) => format!("⎕LOADSO '{}'", unparse(spec)),
         Expr::AssignDfn(name, rhs) => {
             format!("{}←{}", name, unparse(rhs))
         }

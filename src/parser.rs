@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::cell::Cell;
 use crate::functions::Prim;
-use crate::tokenizer::{tokenize, Tok};
+use crate::tokenizer::{tokenize, Tok, PowerFn};
 use crate::types::AplResult;
 use crate::types::ErrorCode;
 use crate::value::ValueP;
@@ -59,6 +59,10 @@ pub enum Expr {
     QuadLoadSo(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
     QuadCr(Box<Expr>),
+    /// `(F⍣N) B` — power operator: apply F N times to B
+    PowerOp(PowerFn, i64, Box<Expr>),
+    /// `⍬` — zilde: the empty numeric vector
+    Zilde,
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
     /// Multi-axis bracket index `B[i;j;...]`. One entry per axis; `None` is an
@@ -1008,6 +1012,25 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (_, k, nk) = read_rank_list(&toks[1..])?;
             let (operand, used) = parse_simple(&toks[1 + nk..])?;
             Ok((Expr::RankOp(p, k, Box::new(operand)), 1 + nk + used))
+        }
+        Tok::PowerOp(p) => {
+            // power operator: (F⍣N) B — apply F N times to B
+            // N is a scalar integer, B is the operand
+            let p = match p {
+                PowerFn::Prim(prim) => *prim,
+                PowerFn::Name(_) => return Err(ErrorCode::SyntaxError), // named function power not yet supported
+            };
+            let n_tok = toks.get(1);
+            let n = match n_tok {
+                Some(Tok::Num(v)) => *v as i64,
+                _ => return Err(ErrorCode::SyntaxError),
+            };
+            let (operand, used) = parse_simple(&toks[2..])?;
+            Ok((Expr::PowerOp(PowerFn::Prim(p), n, Box::new(operand)), 2 + used))
+        }
+        Tok::Zilde => {
+            // ⍬ — the empty numeric vector (0⍴0)
+            Ok((Expr::Zilde, 1))
         }
         Tok::Reduce(p) => {
             // monadic operator: LO/B — the derived function LO/ applies to
@@ -2675,6 +2698,28 @@ impl Environment {
                 let p = *p;
                 let io = self.get_io()?;
                 crate::rank::rank_monadic(&bv, *k, |cell| Self::eval_monadic_io(p, cell, io))
+            }
+            Expr::PowerOp(p, n, b) => {
+                // (F⍣N) B — apply F monadically N times: F(F(F(...F(B)...)))
+                // N=0 returns B unchanged (identity)
+                let bv = self.eval(b)?;
+                let p = match p {
+                    PowerFn::Prim(prim) => *prim,
+                    PowerFn::Name(_) => return Err(ErrorCode::SyntaxError), // named function power not yet supported
+                };
+                let n = *n;
+                if n <= 0 {
+                    return Ok(bv);
+                }
+                let mut result = bv;
+                for _ in 0..n {
+                    result = p.eval_monadic(&result)?;
+                }
+                Ok(result)
+            }
+            Expr::Zilde => {
+                // ⍬ — the empty numeric vector (0⍴0)
+                Ok(ValueP::int_vector(&[]))
             }
             Expr::RankDyad(p, kl, kr, a, b) => {
                 let av = self.eval(a)?;
@@ -5378,5 +5423,71 @@ mod tests {
         env.eval_line("V←10 20 30").unwrap();
         env.eval_line("(⍪V)←99 88 77").unwrap();
         assert_eq!(ravel_ints(&mut env, "V"), vec![99, 88, 77]);
+    }
+
+    // ── zilde ⍬ ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_zilde_is_empty_numeric_vector() {
+        let mut env = Environment::new();
+        let v = env.eval_line("⍬").unwrap().unwrap();
+        assert_eq!(v.rank(), 1);
+        assert_eq!(v.element_count(), 0);
+    }
+
+    #[test]
+    fn test_zilde_rho() {
+        let mut env = Environment::new();
+        assert_eq!(eval_int("⍴⍬"), 0);
+    }
+
+    #[test]
+    fn test_zilde_tally() {
+        let mut env = Environment::new();
+        assert_eq!(eval_int("≢⍬"), 0);
+    }
+
+    #[test]
+    fn test_zilde_equals_empty_numeric() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_int("⍬≡0⍴0"), 1);
+    }
+
+    // ── power operator ⍣ ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_power_op_monic_identity() {
+        // F⍣0 B = B (identity)
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_int("×⍣0 5"), 5);
+    }
+
+    #[test]
+    fn test_power_op_monic_once() {
+        // F⍣1 B = F B
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        // sign of 5 is 1
+        assert_eq!(eval_int("×⍣1 5"), 1);
+    }
+
+    #[test]
+    fn test_power_op_monic_thrice() {
+        // ×⍣3 5 = ×(×(×5)) = ×(×1) = ×1 = 1
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_int("×⍣3 5"), 1);
+    }
+
+    #[test]
+    fn test_power_op_negation() {
+        // Test with a monadic primitive: ⌽ reverses a vector
+        // ⌽⍣3 1 2 3 = ⌽(⌽(⌽1 2 3)) = ⌽(⌽3 2 1) = ⌽1 2 3 = 3 2 1
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = env.eval_line("⌽⍣3 1 2 3").unwrap().unwrap();
+        assert_eq!(ravel_ints(&mut env, ",⌽⍣3 1 2 3"), vec![3, 2, 1]);
     }
 }

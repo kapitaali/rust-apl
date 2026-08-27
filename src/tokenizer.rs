@@ -38,6 +38,11 @@ pub enum Tok {
     InnerDot(Prim, Prim),
     /// commute operator `⍨`
     Commute,
+    /// zilde `⍬` — the empty numeric vector
+    Zilde,
+    /// power operator `f⍣N` — apply f N times; the operand is either a
+    /// primitive or a named function (resolved at parse time)
+    PowerOp(PowerFn),
     /// assignment arrow ←
     Assign,
     /// left parenthesis
@@ -48,9 +53,9 @@ pub enum Tok {
     LBracket,
     /// right square bracket
     RBracket,
-    /// dfn left brace `{`
+    /// left brace `{`
     LBrace,
-    /// dfn right brace `}`
+    /// right brace `}`
     RBrace,
     /// dfn guard separator `:`
     Colon,
@@ -68,6 +73,13 @@ pub enum Tok {
     OmegaOmega,
     /// end of input
     End,
+}
+
+/// The function operand of a power operator: either a primitive or a name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PowerFn {
+    Prim(Prim),
+    Name(String),
 }
 
 /// Primitive symbol table: single-char APL glyphs → Prim.
@@ -270,7 +282,7 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 match tok {
                     Some(t) => toks.push(t),
                     None => return Err(ErrorCode::SyntaxError),
-                }
+                };
                 i += len;
             }
             '⎕' => {
@@ -422,6 +434,25 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                             _ => return Err(ErrorCode::SyntaxError),
                         }
                     }
+                    // power operator: PRIM⍣N — apply function N times
+                    if rest.starts_with('⍣') {
+                        match toks.last() {
+                            Some(Tok::Prim(p)) => {
+                                let p = *p;
+                                toks.pop();
+                                toks.push(Tok::PowerOp(PowerFn::Prim(p)));
+                                i += 1;
+                                continue;
+                            }
+                            _ => return Err(ErrorCode::SyntaxError),
+                        }
+                    }
+                    // zilde: ⍬ — the empty numeric vector
+                    if rest.starts_with('⍬') {
+                        toks.push(Tok::Zilde);
+                        i += 1;
+                        continue;
+                    }
                     return Err(ErrorCode::SyntaxError);
                 }
             }
@@ -454,95 +485,489 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
             num.push(c);
             i += 1;
         } else if (c == 'e' || c == 'E')
-            && !num.contains('e')
-            && !num.contains('E')
             && i + 1 < chars.len()
+            && (chars[i + 1].is_ascii_digit() || chars[i + 1] == '¯' || chars[i + 1] == '-')
         {
-            let next = chars[i + 1];
-            if next.is_ascii_digit() || next == '¯' {
-                num.push('e');
+            num.push('e');
+            i += 1;
+            if chars[i] == '¯' || chars[i] == '-' {
+                num.push('-');
                 i += 1;
-                if next == '¯' {
-                    num.push('-');
-                    i += 1;
-                }
-            } else {
-                break;
             }
         } else {
             break;
         }
     }
 
-    let v: f64 = num.parse().map_err(|_| ErrorCode::SyntaxError)?;
-    Ok((Some(Tok::Num(v)), i))
+    if num.is_empty() {
+        return Ok((None, 0));
+    }
+
+    match num.parse::<f64>() {
+        Ok(v) => Ok((Some(Tok::Num(v)), i)),
+        Err(_) => Err(ErrorCode::SyntaxError),
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn dbg_reduce_paren() {
-        let toks = tokenize("+/(1 2 3)").unwrap();
-        println!("toks: {:?}", toks);
-        let (e, u) = crate::parser::parse(&toks).unwrap();
-        println!("expr: {:?} used={}", e, u);
-        let toks2 = tokenize("+(1 2 3)").unwrap();
-        let (e2, u2) = crate::parser::parse(&toks2).unwrap();
-        println!("expr2: {:?} used={}", e2, u2);
+    fn test_numbers() {
+        let toks = tokenize("1 2 3").unwrap();
+        assert!(toks.contains(&Tok::Num(1.0)));
+        assert!(toks.contains(&Tok::Num(2.0)));
+        assert!(toks.contains(&Tok::Num(3.0)));
     }
 
     #[test]
-    fn test_inner_dot_tokenize() {
-        let toks = tokenize("1 0 1∧.=1 1 1").unwrap();
-        println!("{:?}", toks);
-        assert!(toks.contains(&Tok::InnerDot(
-            crate::functions::Prim::And,
-            crate::functions::Prim::Equal
-        )));
+    fn test_negative_numbers() {
+        let toks = tokenize("¯1 ¯2").unwrap();
+        assert!(toks.contains(&Tok::Num(-1.0)));
+        assert!(toks.contains(&Tok::Num(-2.0)));
     }
 
     #[test]
-    fn test_logarithm_tokenize() {
-        // ⍟ should tokenize as NatLog
-        let toks = tokenize("⍟2").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NatLog)));
-        // dyadic: 2⍟8
-        let toks = tokenize("2⍟8").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NatLog)));
+    fn test_float_exponent() {
+        let toks = tokenize("1e3 1e¯3").unwrap();
+        assert!(toks.contains(&Tok::Num(1000.0)));
+        assert!(toks.contains(&Tok::Num(0.001)));
     }
 
     #[test]
-    fn test_without_tokenize() {
-        // ∼ should tokenize as Without
-        let toks = tokenize("1 2 3∼2 3 4").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Without)));
+    fn test_names() {
+        let toks = tokenize("X Y Z").unwrap();
+        assert!(toks.contains(&Tok::Name("X".to_string())));
+        assert!(toks.contains(&Tok::Name("Y".to_string())));
+        assert!(toks.contains(&Tok::Name("Z".to_string())));
     }
 
     #[test]
-    fn test_union_inter_tokenize() {
-        // ∪ should tokenize as Union
-        let toks = tokenize("∪1 2 1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Union)));
-        // ∩ should tokenize as Inter
-        let toks = tokenize("1 2∩2 3").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Inter)));
+    fn test_delta_names() {
+        let toks = tokenize("∆x ⍙y").unwrap();
+        assert!(toks.contains(&Tok::Name("∆x".to_string())));
+        assert!(toks.contains(&Tok::Name("⍙y".to_string())));
     }
 
     #[test]
-    fn test_new_primitives_tokenize() {
-        let toks = tokenize("⍪1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Comma1)));
-        let toks = tokenize("≢1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::NotMatch)));
-        let toks = tokenize("⊣1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Left)));
-        let toks = tokenize("⊢1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Right)));
-        let toks = tokenize("1⍲1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Nand)));
-        let toks = tokenize("1⍱1").unwrap();
-        assert!(toks.contains(&Tok::Prim(crate::functions::Prim::Nor)));
+    fn test_strings() {
+        let toks = tokenize("'hello' 'world'").unwrap();
+        assert!(toks.contains(&Tok::Str(vec![
+            'h' as u32, 'e' as u32, 'l' as u32, 'l' as u32, 'o' as u32
+        ])));
+    }
+
+    #[test]
+    fn test_escaped_quote() {
+        let toks = tokenize("'it''s'").unwrap();
+        assert!(toks.contains(&Tok::Str(vec![
+            'i' as u32,
+            't' as u32,
+            '\'' as u32,
+            's' as u32
+        ])));
+    }
+
+    #[test]
+    fn test_primitives() {
+        let toks = tokenize("+ - × ÷").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Add)));
+        assert!(toks.contains(&Tok::Prim(Prim::Subtract)));
+        assert!(toks.contains(&Tok::Prim(Prim::Multiply)));
+        assert!(toks.contains(&Tok::Prim(Prim::Divide)));
+    }
+
+    #[test]
+    fn test_zilde() {
+        let toks = tokenize("⍬").unwrap();
+        assert!(toks.contains(&Tok::Zilde));
+    }
+
+    #[test]
+    fn test_power_op() {
+        // The power operator needs a function (primitive) before it
+        let toks = tokenize("×⍣3").unwrap();
+        assert!(toks.contains(&Tok::PowerOp(PowerFn::Prim(Prim::Multiply))));
+    }
+
+    #[test]
+    fn test_comments() {
+        let toks = tokenize("1 2 ⍝ this is a comment").unwrap();
+        assert_eq!(toks.len(), 3); // Num(1), Num(2), End
+    }
+
+    #[test]
+    fn test_quad_names() {
+        let toks = tokenize("⎕IO ⎕CT ⎕PP").unwrap();
+        assert!(toks.contains(&Tok::Name("⎕IO".to_string())));
+        assert!(toks.contains(&Tok::Name("⎕CT".to_string())));
+        assert!(toks.contains(&Tok::Name("⎕PP".to_string())));
+    }
+
+    #[test]
+    fn test_rank_op() {
+        let toks = tokenize("⌽⍤1").unwrap();
+        assert!(toks.contains(&Tok::Rank(Prim::Reverse)));
+    }
+
+    #[test]
+    fn test_each_op() {
+        // Each needs a preceding prim
+        let toks = tokenize("×¨").unwrap();
+        assert!(toks.contains(&Tok::Each(Prim::Multiply)));
+    }
+
+    #[test]
+    fn test_scan_op() {
+        let toks = tokenize("+\\").unwrap();
+        assert!(toks.contains(&Tok::Scan(Prim::Add)));
+    }
+
+    #[test]
+    fn test_reduce_op() {
+        let toks = tokenize("+/").unwrap();
+        assert!(toks.contains(&Tok::Reduce(Prim::Add)));
+    }
+
+    #[test]
+    fn test_inner_product() {
+        let toks = tokenize("+.×").unwrap();
+        assert!(toks.contains(&Tok::InnerDot(Prim::Add, Prim::Multiply)));
+    }
+
+    #[test]
+    fn test_outer_product() {
+        let toks = tokenize("∘.×").unwrap();
+        assert!(toks.contains(&Tok::OuterDot(Prim::Multiply)));
+    }
+
+    #[test]
+    fn test_diamond() {
+        let toks = tokenize("⋄").unwrap();
+        assert!(toks.contains(&Tok::Diamond));
+    }
+
+    #[test]
+    fn test_commute() {
+        let toks = tokenize("⍨").unwrap();
+        assert!(toks.contains(&Tok::Commute));
+    }
+
+    #[test]
+    fn test_assign() {
+        let toks = tokenize("X←5").unwrap();
+        assert!(toks.contains(&Tok::Name("X".to_string())));
+        assert!(toks.contains(&Tok::Assign));
+        assert!(toks.contains(&Tok::Num(5.0)));
+    }
+
+    #[test]
+    fn test_parens() {
+        let toks = tokenize("(1+2)").unwrap();
+        assert!(toks.contains(&Tok::LParen));
+        assert!(toks.contains(&Tok::RParen));
+    }
+
+    #[test]
+    fn test_brackets() {
+        let toks = tokenize("M[1]").unwrap();
+        assert!(toks.contains(&Tok::LBracket));
+        assert!(toks.contains(&Tok::RBracket));
+    }
+
+    #[test]
+    fn test_semicolon() {
+        let toks = tokenize("M[1;2]").unwrap();
+        assert!(toks.contains(&Tok::Semicolon));
+    }
+
+    #[test]
+    fn test_alpha_omega() {
+        let toks = tokenize("⍺ ⍵").unwrap();
+        assert!(toks.contains(&Tok::Alpha));
+        assert!(toks.contains(&Tok::Omega));
+    }
+
+    #[test]
+    fn test_alphaalpha_omegaomega() {
+        let toks = tokenize("⍺⍺ ⍵⍵").unwrap();
+        assert!(toks.contains(&Tok::AlphaAlpha));
+        assert!(toks.contains(&Tok::OmegaOmega));
+    }
+
+    #[test]
+    fn test_selfref() {
+        let toks = tokenize("∇").unwrap();
+        assert!(toks.contains(&Tok::SelfRef));
+    }
+
+    #[test]
+    fn test_natlog() {
+        let toks = tokenize("⍟").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::NatLog)));
+    }
+
+    #[test]
+    fn test_without() {
+        let toks = tokenize("∼").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Without)));
+    }
+
+    #[test]
+    fn test_union() {
+        let toks = tokenize("∪").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Union)));
+    }
+
+    #[test]
+    fn test_inter() {
+        let toks = tokenize("∩").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Inter)));
+    }
+
+    #[test]
+    fn test_comma1() {
+        let toks = tokenize("⍪").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Comma1)));
+    }
+
+    #[test]
+    fn test_notmatch() {
+        let toks = tokenize("≢").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::NotMatch)));
+    }
+
+    #[test]
+    fn test_left_right() {
+        let toks = tokenize("⊣ ⊢").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Left)));
+        assert!(toks.contains(&Tok::Prim(Prim::Right)));
+    }
+
+    #[test]
+    fn test_nand_nor() {
+        let toks = tokenize("⍲ ⍱").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Nand)));
+        assert!(toks.contains(&Tok::Prim(Prim::Nor)));
+    }
+
+    #[test]
+    fn test_squad() {
+        let toks = tokenize("⌷").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Squad)));
+    }
+
+    #[test]
+    fn test_rotate1() {
+        let toks = tokenize("⊖").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Rotate1)));
+    }
+
+    #[test]
+    fn test_format() {
+        let toks = tokenize("⍕").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Format)));
+    }
+
+    #[test]
+    fn test_where() {
+        let toks = tokenize("⍸").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Where)));
+    }
+
+    #[test]
+    fn test_execute() {
+        let toks = tokenize("⍎").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Execute)));
+    }
+
+    #[test]
+    fn test_find() {
+        let toks = tokenize("⍷").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Find)));
+    }
+
+    #[test]
+    fn test_partition() {
+        let toks = tokenize("⊆").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Partition)));
+    }
+
+    #[test]
+    fn test_take_drop() {
+        let toks = tokenize("↑ ↓").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Take)));
+        assert!(toks.contains(&Tok::Prim(Prim::Drop)));
+    }
+
+    #[test]
+    fn test_reverse() {
+        let toks = tokenize("⌽").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Reverse)));
+    }
+
+    #[test]
+    fn test_grade() {
+        let toks = tokenize("⍋ ⍒").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::GradeUp)));
+        assert!(toks.contains(&Tok::Prim(Prim::GradeDown)));
+    }
+
+    #[test]
+    fn test_epsilon() {
+        let toks = tokenize("∈ ∊").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Epsilon)));
+    }
+
+    #[test]
+    fn test_enclose_disclose() {
+        let toks = tokenize("⊂ ⊃").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Enclose)));
+        assert!(toks.contains(&Tok::Prim(Prim::Disclose)));
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let toks = tokenize("⊤ ⊥").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Encode)));
+        assert!(toks.contains(&Tok::Prim(Prim::Decode)));
+    }
+
+    #[test]
+    fn test_depth() {
+        let toks = tokenize("≡").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Depth)));
+    }
+
+    #[test]
+    fn test_comparison() {
+        let toks = tokenize("< ≤ = ≥ > ≠").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Less)));
+        assert!(toks.contains(&Tok::Prim(Prim::LessEq)));
+        assert!(toks.contains(&Tok::Prim(Prim::Equal)));
+        assert!(toks.contains(&Tok::Prim(Prim::GreaterEq)));
+        assert!(toks.contains(&Tok::Prim(Prim::Greater)));
+        assert!(toks.contains(&Tok::Prim(Prim::NotEqual)));
+    }
+
+    #[test]
+    fn test_not() {
+        let toks = tokenize("~").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Not)));
+    }
+
+    #[test]
+    fn test_branch() {
+        let toks = tokenize("→").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Branch)));
+    }
+
+    #[test]
+    fn test_transpose() {
+        let toks = tokenize("⍉").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Transpose)));
+    }
+
+    #[test]
+    fn test_domino() {
+        let toks = tokenize("⌹").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Domino)));
+    }
+
+    #[test]
+    fn test_and_or() {
+        let toks = tokenize("∧ ∨").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::And)));
+        assert!(toks.contains(&Tok::Prim(Prim::Or)));
+    }
+
+    #[test]
+    fn test_power() {
+        let toks = tokenize("*").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Power)));
+    }
+
+    #[test]
+    fn test_exponential() {
+        let toks = tokenize("⋆").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Exponential)));
+    }
+
+    #[test]
+    fn test_pitimes() {
+        let toks = tokenize("○").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::PiTimes)));
+    }
+
+    #[test]
+    fn test_magnitude() {
+        let toks = tokenize("∣").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Magnitude)));
+    }
+
+    #[test]
+    fn test_roll() {
+        let toks = tokenize("?").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Roll)));
+    }
+
+    #[test]
+    fn test_factorial() {
+        let toks = tokenize("!").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Factorial)));
+    }
+
+    #[test]
+    fn test_ceiling_floor() {
+        let toks = tokenize("⌈ ⌊").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Ceiling)));
+        assert!(toks.contains(&Tok::Prim(Prim::Floor)));
+    }
+
+    #[test]
+    fn test_iota() {
+        let toks = tokenize("⍳").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Iota)));
+    }
+
+    #[test]
+    fn test_rho() {
+        let toks = tokenize("⍴").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Rho)));
+    }
+
+    #[test]
+    fn test_comma() {
+        let toks = tokenize(",").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Comma)));
+    }
+
+    #[test]
+    fn test_add() {
+        let toks = tokenize("+").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Add)));
+    }
+
+    #[test]
+    fn test_subtract() {
+        let toks = tokenize("-").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Subtract)));
+    }
+
+    #[test]
+    fn test_multiply() {
+        let toks = tokenize("×").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Multiply)));
+    }
+
+    #[test]
+    fn test_divide() {
+        let toks = tokenize("÷").unwrap();
+        assert!(toks.contains(&Tok::Prim(Prim::Divide)));
     }
 }
