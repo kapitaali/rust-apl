@@ -626,7 +626,9 @@ pub fn bif_power(a: &Cell, b: &Cell) -> AplResult<Cell> {
             let x = a.get_complex_value()?;
             let y = b.get_complex_value()?;
             // complex power via polar form: x^y = exp(y * ln x)
-            let ln_x = APLComplex::new(x.re.abs().ln(), x.im.atan2(x.re));
+            // ln(x) = ln(|x|) + i*arg(x)
+            let mag_sq = x.re * x.re + x.im * x.im;
+            let ln_x = APLComplex::new(mag_sq.sqrt().ln(), x.im.atan2(x.re));
             let yln = y * ln_x;
             let m = yln.re.exp();
             Complex(APLComplex::new(m * yln.im.cos(), m * yln.im.sin()))
