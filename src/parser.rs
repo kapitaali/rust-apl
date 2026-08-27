@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::cell::Cell;
 use crate::functions::Prim;
-use crate::tokenizer::{tokenize, Tok, PowerFn};
+use crate::tokenizer::{tokenize, PowerFn, Tok};
 use crate::types::AplResult;
 use crate::types::ErrorCode;
 use crate::value::ValueP;
@@ -63,6 +63,8 @@ pub enum Expr {
     PowerOp(PowerFn, i64, Box<Expr>),
     /// `⍬` — zilde: the empty numeric vector
     Zilde,
+    /// `reJ im` — complex number literal (e.g. `1J2`)
+    Complex(f64, f64),
     /// `NAME[expr]` — bracket indexing
     Index(Box<Expr>, Box<Expr>),
     /// Multi-axis bracket index `B[i;j;...]`. One entry per axis; `None` is an
@@ -1026,7 +1028,10 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 _ => return Err(ErrorCode::SyntaxError),
             };
             let (operand, used) = parse_simple(&toks[2..])?;
-            Ok((Expr::PowerOp(PowerFn::Prim(p), n, Box::new(operand)), 2 + used))
+            Ok((
+                Expr::PowerOp(PowerFn::Prim(p), n, Box::new(operand)),
+                2 + used,
+            ))
         }
         Tok::Zilde => {
             // ⍬ — the empty numeric vector (0⍴0)
@@ -1212,6 +1217,7 @@ fn parse_index_axes(parts: &[&[Tok]]) -> AplResult<Vec<Option<Expr>>> {
 fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::Num(v) => Ok((Expr::Num(*v), 1)),
+        Tok::Complex(re, im) => Ok((Expr::Complex(*re, *im), 1)),
         Tok::Str(s) => Ok((Expr::Str(s.clone()), 1)),
         Tok::Name(n) => {
             let n = n.clone();
@@ -2084,6 +2090,7 @@ impl Environment {
     pub fn eval(&mut self, e: &Expr) -> AplResult<ValueP> {
         match e {
             Expr::Num(v) => Ok(ValueP::scalar_from(crate::cell::Cell::from_f64(*v))),
+            Expr::Complex(re, im) => Ok(ValueP::scalar_from(crate::cell::Cell::complex(*re, *im))),
             Expr::NumVec(vs) => Ok(ValueP::from_ravel_like(
                 &ValueP::vector(vs.len() as i64),
                 vs.iter().map(|&v| crate::cell::Cell::from_f64(v)).collect(),
@@ -5437,13 +5444,13 @@ mod tests {
 
     #[test]
     fn test_zilde_rho() {
-        let mut env = Environment::new();
+        let _env = Environment::new();
         assert_eq!(eval_int("⍴⍬"), 0);
     }
 
     #[test]
     fn test_zilde_tally() {
-        let mut env = Environment::new();
+        let _env = Environment::new();
         assert_eq!(eval_int("≢⍬"), 0);
     }
 
@@ -5487,7 +5494,74 @@ mod tests {
         // ⌽⍣3 1 2 3 = ⌽(⌽(⌽1 2 3)) = ⌽(⌽3 2 1) = ⌽1 2 3 = 3 2 1
         let mut env = Environment::new();
         env.eval_line("⎕IO←1").unwrap();
-        let v = env.eval_line("⌽⍣3 1 2 3").unwrap().unwrap();
+        let _v = env.eval_line("⌽⍣3 1 2 3").unwrap().unwrap();
         assert_eq!(ravel_ints(&mut env, ",⌽⍣3 1 2 3"), vec![3, 2, 1]);
+    }
+
+    // ── complex numbers ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_complex_literal() {
+        let mut env = Environment::new();
+        let v = env.eval_line("1J2").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::complex(1.0, 2.0));
+    }
+
+    #[test]
+    fn test_complex_add() {
+        let mut env = Environment::new();
+        let v = env.eval_line("1J2+2J3").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::complex(3.0, 5.0));
+    }
+
+    #[test]
+    fn test_complex_multiply() {
+        let mut env = Environment::new();
+        // (1+2i)(2+3i) = 2+3i+4i+6i² = 2+7i-6 = -4+7i
+        let v = env.eval_line("1J2×2J3").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::complex(-4.0, 7.0));
+    }
+
+    #[test]
+    fn test_complex_divide() {
+        let mut env = Environment::new();
+        let v = env.eval_line("1J2÷2J3").unwrap().unwrap();
+        // (1+2i)/(2+3i) = (1+2i)(2-3i)/13 = (2-3i+4i+6)/13 = (8+i)/13
+        match v.first_cell().unwrap() {
+            Cell::Complex(c) => {
+                assert!((c.re - 8.0 / 13.0).abs() < 1e-10);
+                assert!((c.im - 1.0 / 13.0).abs() < 1e-10);
+            }
+            other => panic!("expected complex, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_complex_real_part() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_num_in(&mut env, "9○1J2"), 1.0);
+    }
+
+    #[test]
+    fn test_complex_imag_part() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        assert_eq!(eval_num_in(&mut env, "11○1J2"), 2.0);
+    }
+
+    #[test]
+    fn test_complex_magnitude() {
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let mag = eval_num_in(&mut env, "10○1J2");
+        assert!((mag - (5.0_f64).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_complex_conjugate() {
+        let mut env = Environment::new();
+        let v = env.eval_line("¯12○1J2").unwrap().unwrap();
+        assert_eq!(v.first_cell().unwrap(), &Cell::complex(1.0, -2.0));
     }
 }

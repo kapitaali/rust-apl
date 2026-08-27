@@ -281,14 +281,32 @@ impl Prim {
             Prim::Ceiling => elementwise(a, b, cell::bif_maximum),
             Prim::Floor => elementwise(a, b, cell::bif_minimum),
             Prim::Magnitude => elementwise(a, b, cell::bif_residue),
+            // ○B = trigonometric circle function; only sin/cos basics for real
+            // For complex: 9○ real, 11○ imag, 10○ magnitude, 12○ phase, ¯12○ conjugate
             Prim::PiTimes => elementwise(a, b, |a, b| {
-                // A ○ B = trigonometric circle function; only sin/cos basics
                 let f = a.get_int_value()?;
+                // Check if b is complex
+                if let Cell::Complex(c) = b {
+                    return Ok(match f {
+                        9 => Cell::Float(c.real()),  // real part
+                        11 => Cell::Float(c.imag()), // imaginary part
+                        10 => Cell::Float((c.real() * c.real() + c.imag() * c.imag()).sqrt()), // magnitude
+                        12 => Cell::Float(c.imag().atan2(c.real())), // phase
+                        -12 => Cell::Complex(crate::types::APLComplex::new(c.real(), -c.imag())), // conjugate
+                        _ => return Err(ErrorCode::DomainError),
+                    });
+                }
+                // Real case
                 let x = b.get_real_value()?;
                 Ok(match f {
                     1 => Cell::Float(x.sin()),
                     2 => Cell::Float(x.cos()),
                     3 => Cell::Float(x.tan()),
+                    9 => Cell::Float(x),        // real part
+                    11 => Cell::Float(0.0),     // imaginary part
+                    10 => Cell::Float(x.abs()), // magnitude
+                    12 => Cell::Float(if x >= 0.0 { 0.0 } else { std::f64::consts::PI }), // phase
+                    -12 => Cell::from_f64(x),   // conjugate (identity for real)
                     _ => return Err(ErrorCode::DomainError),
                 })
             }),

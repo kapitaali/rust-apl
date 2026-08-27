@@ -12,6 +12,8 @@ use crate::types::{AplResult, Unicode};
 pub enum Tok {
     /// numeric literal
     Num(f64),
+    /// complex number literal reJim (e.g. 1J2)
+    Complex(f64, f64),
     /// name (variable or function reference)
     Name(String),
     /// character string literal 'abc'
@@ -497,6 +499,32 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
         } else {
             break;
         }
+    }
+
+    // Complex number: reJim (e.g. 1J2, ¯3J¯4)
+    if i < chars.len() && chars[i] == 'J' {
+        let re_str = num.clone();
+        let mut im_str = String::new();
+        i += 1; // skip 'J'
+        if i < chars.len() && chars[i] == '¯' {
+            im_str.push('-');
+            i += 1;
+        }
+        while i < chars.len() {
+            let c = chars[i];
+            if c.is_ascii_digit() || c == '.' {
+                im_str.push(c);
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if im_str.is_empty() || im_str == "-" {
+            return Err(ErrorCode::SyntaxError);
+        }
+        let re = re_str.parse::<f64>().map_err(|_| ErrorCode::SyntaxError)?;
+        let im = im_str.parse::<f64>().map_err(|_| ErrorCode::SyntaxError)?;
+        return Ok((Some(Tok::Complex(re, im)), i));
     }
 
     if num.is_empty() {

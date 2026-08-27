@@ -369,8 +369,13 @@ CASES = [
     ("⍣", "×⍣3 5"),  # sign of × applied 3 times to 5
     ("⍣", "×⍣0 5"),  # identity
     ("⍣", "×⍣1 5"),  # sign of 5
-]
 
+    # ══ NEW: complex numbers ═════════════════════════════════════════════
+    ("J", "1J2+2J3"),
+    ("J", "1J2×2J3"),
+    ("J", "9○1J2"),
+    ("J", "11○1J2"),
+]
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
 
 
