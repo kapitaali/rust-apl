@@ -36,6 +36,8 @@ pub enum Tok {
     Diamond,
     /// outer product: `A ∘.f B`
     OuterDot(Prim),
+    /// matrix product: `A ∘ B` — equivalent to `A +.× B`
+    MatrixProduct,
     /// inner product: `A f.g B`
     InnerDot(Prim, Prim),
     /// commute operator `⍨`
@@ -240,7 +242,9 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                         continue;
                     }
                 }
-                return Err(ErrorCode::SyntaxError);
+                // matrix product: A∘B — equivalent to A+.×B
+                toks.push(Tok::MatrixProduct);
+                i += 1;
             }
             '⋄' => {
                 toks.push(Tok::Diamond);

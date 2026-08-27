@@ -45,6 +45,8 @@ pub enum Expr {
     RankDyad(Prim, i64, i64, Box<Expr>, Box<Expr>),
     /// `A ∘.f B` — outer product
     OuterProduct(Prim, Box<Expr>, Box<Expr>),
+    /// `A ∘ B` — matrix product (equivalent to A +.× B)
+    MatrixProduct(Box<Expr>, Box<Expr>),
     /// `A f.g B` — inner product (f = reduction, g = pairwise function)
     InnerProduct(Prim, Prim, Box<Expr>, Box<Expr>),
     /// `A F[axis] B` — dyadic with explicit axis (take/drop/rotate)
@@ -690,6 +692,13 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::OuterProduct(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // matrix product: A ∘ B
+    if let Some(Tok::MatrixProduct) = toks.get(used) {
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::MatrixProduct(Box::new(lhs), Box::new(rhs)), used));
     }
 
     // inner product: A f.g B
@@ -2749,6 +2758,12 @@ impl Environment {
                     crate::functions::eval_dyadic_public(p, x, y)
                 })
             }
+            Expr::MatrixProduct(a, b) => {
+                // matrix product A∘B ≡ A +.× B
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::inner::inner_product(&av, Prim::Add, Prim::Multiply, &bv)
+            }
             Expr::OuterProduct(p, a, b) => {
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
@@ -3927,6 +3942,21 @@ mod tests {
         .unwrap();
         // no :Until — only :Leave terminates. N passes → R counts N iterations
         assert_eq!(eval_int_env(&mut env, "LEAVECOUNT 5"), 5);
+    }
+
+    #[test]
+    fn test_matrix_product() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        // 2x2 matrix product: A∘B ≡ A+.×B
+        let r = eval_one(&mut env, "(2 2⍴1 2 3 4)∘(2 2⍴5 6 7 8)");
+        assert_eq!(r.rank(), 2);
+        assert_eq!(r.get_shape_item(0), 2);
+        assert_eq!(r.get_shape_item(1), 2);
+        let expect = [19, 22, 43, 50];
+        for (i, e) in expect.iter().enumerate() {
+            assert_eq!(r.cells()[i], crate::cell::Cell::Int(*e));
+        }
     }
 
     #[test]

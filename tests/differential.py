@@ -312,6 +312,7 @@ CASES = [
     ("⍤", ",(-⍤1)2 3⍴⍳6"),
     ("⍣", "double←{2×⍵} ⋄ double⍣3 5"),
     ("⍣", "square←{⍵×⍵} ⋄ square⍣2 3"),
+    ("∘", "(2 2⍴1 2 3 4)∘(2 2⍴5 6 7 8)"),
     ("⍤", ",(⍳⍤0)3"),
 
     # ══ NEW: dyadic rank with separate left/right ranks ═════════════════
