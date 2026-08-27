@@ -58,7 +58,7 @@ pub enum Expr {
     /// bindings into the function table.
     QuadLoadSo(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
-    QuadCr(Box<Expr>),
+    QuadCr(i64, Box<Expr>),
     /// `(F⍣N) B` — power operator: apply F N times to B
     PowerOp(PowerFn, i64, Box<Expr>),
     /// `⍬` — zilde: the empty numeric vector
@@ -867,12 +867,17 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 
 /// term := '(' expr ')' | PRIM term | OP1 term | strand | atom | '{' dfn
 fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
-    // 4 ⎕CR B — boxed display (can appear anywhere a term can)
-    if matches!(toks.first(), Some(Tok::Num(v)) if *v == 4.0)
+    // N ⎕CR B — character representation (N=1: ravel, N=4: boxed)
+    if matches!(toks.first(), Some(Tok::Num(v)) if *v == 1.0 || *v == 4.0)
         && matches!(toks.get(1), Some(Tok::Name(n)) if n == "⎕CR")
     {
+        let n = toks.first().unwrap().clone();
+        let n = match n {
+            Tok::Num(v) => v as i64,
+            _ => 4,
+        };
         let (arg, used) = parse(&toks[2..])?;
-        return Ok((Expr::QuadCr(Box::new(arg)), 2 + used));
+        return Ok((Expr::QuadCr(n, Box::new(arg)), 2 + used));
     }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
@@ -2896,50 +2901,56 @@ impl Environment {
                 let flat: Vec<u32> = names.join(" ").chars().map(|ch| ch as u32).collect();
                 Ok(ValueP::char_vector(&flat))
             }
-            Expr::QuadCr(arg) => {
-                // 4 ⎕CR B — boxed display (4⎕CR-style). Returns a char matrix/vector.
+            Expr::QuadCr(n, arg) => {
+                // N ⎕CR B — character representation
+                // N=1: ravel (flat character vector/matrix)
+                // N=4: boxed display with outer wrapper
                 let bv = self.eval(arg)?;
                 let pp = crate::sysvars::get_pp(self).unwrap_or(10);
                 let inner = crate::boxdisplay::render_with_pp(&bv, pp);
-                // Wrap in an outer box: → on top, ϵ on bottom (GNU APL convention)
-                let width = inner.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-                let mut out = Vec::with_capacity(inner.len() + 2);
-                let fills = width.saturating_sub(1);
-                out.push(format!("┏→{}┓", "━".repeat(fills)));
-                for l in &inner {
-                    let pad = width - l.chars().count();
-                    out.push(format!("┃{}{}┃", l, " ".repeat(pad)));
-                }
-                // bottom: ┗ + ∼ + (width-1) fills + ┛
-                // ∼ marks this as a boxed representation (always nested)
-                let mut bottom = String::from("┗∼");
-                for _ in 1..width {
-                    bottom.push('━');
-                }
-                bottom.push('┛');
-                out.push(bottom);
-                // convert to char matrix/vector
-                if out.len() == 1 {
-                    let cps: Vec<u32> = out[0].chars().map(|ch| ch as u32).collect();
+                if *n == 1 {
+                    // Simple ravel: flatten with parens for nested arrays
+                    let mut s = String::new();
+                    Self::enlist(&bv, &mut s);
+                    let cps: Vec<u32> = s.chars().map(|ch| ch as u32).collect();
                     Ok(ValueP::char_vector(&cps))
                 } else {
-                    let max_w = out.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-                    let rows: Vec<Vec<Cell>> = out
-                        .iter()
-                        .map(|l| {
-                            let mut cps: Vec<Cell> =
-                                l.chars().map(|ch| Cell::Char(ch as u32)).collect();
-                            while cps.len() < max_w {
-                                cps.push(Cell::Char(' ' as u32));
-                            }
-                            cps
-                        })
-                        .collect();
-                    let flat: Vec<Cell> = rows.iter().flatten().cloned().collect();
-                    Ok(ValueP::from_parts(
-                        crate::shape::Shape::matrix(rows.len() as i64, max_w as i64),
-                        flat,
-                    )?)
+                    // 4⎕CR: boxed display with outer wrapper
+                    let width = inner.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                    let mut out = Vec::with_capacity(inner.len() + 2);
+                    let fills = width.saturating_sub(1);
+                    out.push(format!("┏→{}┓", "━".repeat(fills)));
+                    for l in &inner {
+                        let pad = width - l.chars().count();
+                        out.push(format!("┃{}{}┃", l, " ".repeat(pad)));
+                    }
+                    let mut bottom = String::from("┗∼");
+                    for _ in 1..width {
+                        bottom.push('━');
+                    }
+                    bottom.push('┛');
+                    out.push(bottom);
+                    if out.len() == 1 {
+                        let cps: Vec<u32> = out[0].chars().map(|ch| ch as u32).collect();
+                        Ok(ValueP::char_vector(&cps))
+                    } else {
+                        let max_w = out.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                        let rows: Vec<Vec<Cell>> = out
+                            .iter()
+                            .map(|l| {
+                                let mut cps: Vec<Cell> = l.chars().map(|ch| Cell::Char(ch as u32)).collect();
+                                while cps.len() < max_w {
+                                    cps.push(Cell::Char(' ' as u32));
+                                }
+                                cps
+                            })
+                            .collect();
+                        let flat: Vec<Cell> = rows.iter().flatten().cloned().collect();
+                        Ok(ValueP::from_parts(
+                            crate::shape::Shape::matrix(rows.len() as i64, max_w as i64),
+                            flat,
+                        )?)
+                    }
                 }
             }
             Expr::DyadicAxis(p, a, axis, b) => {
@@ -2958,6 +2969,34 @@ impl Environment {
                     }
                     _ => Err(ErrorCode::SyntaxError),
                 }
+            }
+        }
+    }
+
+    /// Render a value as APL ravel text (with parens for nested arrays).
+    fn enlist(v: &ValueP, s: &mut String) {
+        if v.rank() == 0 {
+            if let Some(c) = v.first_cell() {
+                s.push_str(&crate::boxdisplay::plain_cell(c, 10));
+            }
+            return;
+        }
+        for (i, c) in v.cells().iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            match c {
+                Cell::Pointer(p) => {
+                    let inner = ValueP { inner: p.value.clone() };
+                    if inner.rank() > 0 && inner.element_count() > 1 {
+                        s.push('(');
+                        Self::enlist(&inner, s);
+                        s.push(')');
+                    } else {
+                        Self::enlist(&inner, s);
+                    }
+                }
+                other => s.push_str(&crate::boxdisplay::plain_cell(other, 10)),
             }
         }
     }
@@ -5382,6 +5421,32 @@ mod tests {
         // Ravel of a char matrix → char vector
         // Simple vector → char matrix with outer box (3 rows: top, content, bottom)
         assert_eq!(v.rank(), 1);
+    }
+
+    #[test]
+    fn test_quadcr_1_ravel() {
+        // 1⎕CR B — simple ravel into a char vector
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = env.eval_line("1⎕CR 1 2 3").unwrap().unwrap();
+        assert_eq!(v.rank(), 1);
+        let text: String = v.cells().iter().map(|c| {
+            match c { Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'), _ => '?' }
+        }).collect();
+        assert!(text.contains("1 2 3"));
+    }
+
+    #[test]
+    fn test_quadcr_1_nested() {
+        // 1⎕CR on nested array adds parens
+        let mut env = Environment::new();
+        env.eval_line("⎕IO←1").unwrap();
+        let v = env.eval_line("1⎕CR(1 2)(3 4 5)").unwrap().unwrap();
+        let text: String = v.cells().iter().map(|c| {
+            match c { Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'), _ => '?' }
+        }).collect();
+        assert!(text.contains("(1 2)"));
+        assert!(text.contains("(3 4 5)"));
     }
 
     // ── squad ⌷ selector for selective assignment ──────────────────────────

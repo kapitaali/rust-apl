@@ -266,7 +266,7 @@ pub fn unparse(e: &Expr) -> String {
             PowerFn::Prim(prim) => format!("{}⍣{} {}", prim_symbol(*prim), n, unparse(b)),
             PowerFn::Name(name) => format!("({}⍣{} {})", name, n, unparse(b)),
         },
-        Expr::QuadCr(arg) => format!("4⎕CR {}", unparse(arg)),
+        Expr::QuadCr(n, arg) => format!("{}⎕CR {}", n, unparse(arg)),
         Expr::QuadNa(name_expr, decl) => match name_expr {
             Some(name) => format!("{} ⎕NA '{}'", unparse(name), unparse(decl)),
             None => format!("⎕NA '{}'", unparse(decl)),

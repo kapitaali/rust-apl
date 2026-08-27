@@ -231,12 +231,12 @@ fn all_chars(cells: &[Cell]) -> bool {
 /// hyphen is the dyadic subtract glyph, so `-5` would read back as an
 /// incomplete expression rather than a negative literal. This matters for
 /// display AND for ⍕, which must produce text that ⍎ can re-read.
-fn plain_cell(c: &Cell, pp: usize) -> String {
+pub fn plain_cell(c: &Cell, pp: usize) -> String {
     high_minus(&plain_cell_ascii(c, pp))
 }
 
 /// replace a leading ASCII '-' with APL's high minus
-fn high_minus(s: &str) -> String {
+pub fn high_minus(s: &str) -> String {
     match s.strip_prefix('-') {
         Some(rest) => format!("¯{rest}"),
         None => s.to_string(),
