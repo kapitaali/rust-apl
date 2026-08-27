@@ -88,6 +88,7 @@ pub enum PowerFn {
 const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("+", Prim::Add),
     ("-", Prim::Subtract),
+    ("−", Prim::Subtract), // HIGH MINUS (U+2212) — alias for subtract/negate
     ("×", Prim::Multiply),
     ("÷", Prim::Divide),
     ("!", Prim::Factorial),
