@@ -100,7 +100,11 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         "VARS" => {
             let mut names = env.var_names();
             names.sort();
-            Some(vec![names.join("  ")])
+            // Filter out ⎕-vars from )VARS (they have their own commands)
+            let user_names: Vec<String> = names.into_iter()
+                .filter(|n| !n.starts_with('⎕'))
+                .collect();
+            Some(vec![user_names.join("  ")])
         }
         "FNS" => {
             let names = env.funcs.names();
@@ -198,6 +202,14 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 Err(e) => Some(vec![format!("ERROR: {}", e)]),
             }
         }
+        "SI" => {
+            // )SI — state indicator (call stack). No active functions in v1.
+            Some(vec!["(no active functions)".to_string()])
+        }
+        "SYMBOLS" => {
+            // )SYMBOLS — display ⎕AV (APL character vector) info
+            Some(vec![format!("⎕AV = 256 characters (0-255)")])
+        }
         "OFF" => None, // caller exits
         "" => Some(vec!["(empty system command)".to_string()]),
         "COPY" | "IN" => {
@@ -231,6 +243,23 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 }
             }
             Some(vec![format!("COPIED {}", name)])
+        }
+        "UCS" => {
+            // )UCS — report Unicode support
+            Some(vec!["UCS-2/UTF-8 character support enabled".to_string()])
+        }
+        "DROP" => {
+            // )DROP name — delete a saved workspace file
+            let name = parts.next().unwrap_or("");
+            if name.is_empty() {
+                Some(vec!["USAGE: )DROP name".to_string()])
+            } else {
+                let path = format!("{}.aplws", name);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => Some(vec![format!("DROPPED {}", name.to_uppercase())]),
+                    Err(e) => Some(vec![format!("ERROR: cannot drop {}: {}", name, e)]),
+                }
+            }
         }
         other => Some(vec![format!("UNKNOWN SYSTEM COMMAND: {})", other)]),
     }
@@ -283,10 +312,10 @@ mod tests {
         crate::functions_def::define_function(&mut env.funcs, "F X", &["X".to_string()]).unwrap();
 
         let out = syscmd("VARS", &mut env).unwrap();
-        // sysvars + user vars, sorted
+        // user vars only (⎕-vars filtered out)
         assert!(out[0].contains("A"));
         assert!(out[0].contains("B"));
-        assert!(out[0].contains("⎕IO"));
+        assert!(!out[0].contains("⎕IO"));
 
         let out = syscmd("fns", &mut env).unwrap(); // case-insensitive
         assert!(out[0].contains("F"));
