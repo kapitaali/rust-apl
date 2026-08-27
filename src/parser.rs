@@ -1667,6 +1667,11 @@ impl Environment {
         self.funcs.clear();
     }
 
+    /// erase a single variable (used by )ERASE)
+    pub fn erase_var(&mut self, name: &str) {
+        self.vars.remove(name);
+    }
+
     /// read ⎕IO (index origin; 0 if unset)
     pub fn get_io(&self) -> AplResult<i64> {
         crate::sysvars::get_io(self)
@@ -2938,7 +2943,8 @@ impl Environment {
                         let rows: Vec<Vec<Cell>> = out
                             .iter()
                             .map(|l| {
-                                let mut cps: Vec<Cell> = l.chars().map(|ch| Cell::Char(ch as u32)).collect();
+                                let mut cps: Vec<Cell> =
+                                    l.chars().map(|ch| Cell::Char(ch as u32)).collect();
                                 while cps.len() < max_w {
                                     cps.push(Cell::Char(' ' as u32));
                                 }
@@ -2987,7 +2993,9 @@ impl Environment {
             }
             match c {
                 Cell::Pointer(p) => {
-                    let inner = ValueP { inner: p.value.clone() };
+                    let inner = ValueP {
+                        inner: p.value.clone(),
+                    };
                     if inner.rank() > 0 && inner.element_count() > 1 {
                         s.push('(');
                         Self::enlist(&inner, s);
@@ -5430,9 +5438,14 @@ mod tests {
         env.eval_line("⎕IO←1").unwrap();
         let v = env.eval_line("1⎕CR 1 2 3").unwrap().unwrap();
         assert_eq!(v.rank(), 1);
-        let text: String = v.cells().iter().map(|c| {
-            match c { Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'), _ => '?' }
-        }).collect();
+        let text: String = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
         assert!(text.contains("1 2 3"));
     }
 
@@ -5442,9 +5455,14 @@ mod tests {
         let mut env = Environment::new();
         env.eval_line("⎕IO←1").unwrap();
         let v = env.eval_line("1⎕CR(1 2)(3 4 5)").unwrap().unwrap();
-        let text: String = v.cells().iter().map(|c| {
-            match c { Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'), _ => '?' }
-        }).collect();
+        let text: String = v
+            .cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
         assert!(text.contains("(1 2)"));
         assert!(text.contains("(3 4 5)"));
     }

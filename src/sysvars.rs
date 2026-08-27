@@ -106,11 +106,81 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             let names = env.funcs.names();
             Some(vec![names.join("  ")])
         }
-        "CLEAR" => {
+        "LIB" => {
+            // )LIB — list workspace names with details
+            let mut output = Vec::new();
+            let mut names = env.var_names();
+            names.sort();
+            for name in names {
+                if let Some(v) = env.get(&name) {
+                    let shape_str = if v.is_scalar() {
+                        "scalar".to_string()
+                    } else {
+                        format!("shape {}", v.shape())
+                    };
+                    output.push(format!("{}: {}", name, shape_str));
+                }
+            }
+            let fns = env.funcs.names();
+            for name in fns {
+                output.push(format!("{}: function", name));
+            }
+            if output.is_empty() {
+                output.push("(empty workspace)".to_string());
+            }
+            Some(output)
+        }
+        "DIGITS" => {
+            // )DIGITS n — set ⎕PP
+            let n = parts.next().unwrap_or("");
+            if n.is_empty() {
+                let pp = get_pp(env).unwrap_or(10);
+                Some(vec![format!("⎕PP = {}", pp)])
+            } else {
+                match n.parse::<i64>() {
+                    Ok(val) if val >= 1 && val <= 20 => {
+                        env.set(PP_VAR, ValueP::scalar_from(crate::cell::Cell::Int(val)));
+                        Some(vec![format!("⎕PP = {}", val)])
+                    }
+                    _ => Some(vec!["DIGITS must be 1-20".to_string()]),
+                }
+            }
+        }
+        "WIDTH" => {
+            // )WIDTH n — report (stored but not yet used for output truncation)
+            let n = parts.next().unwrap_or("");
+            if n.is_empty() {
+                Some(vec!["⎕PW = 80".to_string()])
+            } else {
+                match n.parse::<i64>() {
+                    Ok(val) if val >= 30 && val <= 9999 => Some(vec![format!("⎕PW = {}", val)]),
+                    _ => Some(vec!["WIDTH must be 30-9999".to_string()]),
+                }
+            }
+        }
+        "CONTINUE" => {
+            // )CONTINUE — report no saved session (we don't support it yet)
+            Some(vec!["CONTINUE is not supported in this port".to_string()])
+        }
+        "ED" => Some(vec![")ED is not supported in this port".to_string()]),
+        "ERASE" => {
+            let name = parts.next().unwrap_or("");
+            if name.is_empty() {
+                Some(vec!["USAGE: )ERASE name".to_string()])
+            } else {
+                env.erase_var(name);
+                Some(vec![format!("ERASED {}", name)])
+            }
+        }
+        "RESET" | "CLEAR" => {
             env.clear_workspace();
             init_sysvars(env);
-            Some(vec!["CLEAR WORKSPACE".to_string()])
+            Some(vec!["RESET WORKSPACE".to_string()])
         }
+        "DIR" => Some(vec![std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "(unknown)".to_string())]),
+        "HISTORY" => Some(vec!["HISTORY is not supported in this port".to_string()]),
         "SAVE" | "LOAD" => {
             let name = parts.next().unwrap_or("");
             if name.is_empty() {
@@ -228,7 +298,7 @@ mod tests {
         init_sysvars(&mut env);
         env.set("ZZZ", ValueP::int_vector(&[1]));
         let out = syscmd("CLEAR", &mut env).unwrap();
-        assert_eq!(out[0], "CLEAR WORKSPACE");
+        assert_eq!(out[0], "RESET WORKSPACE");
         assert!(env.get("ZZZ").is_none());
         assert!(env.funcs.names().is_empty());
     }

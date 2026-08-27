@@ -190,6 +190,25 @@ impl Shape {
     }
 }
 
+impl std::fmt::Display for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let rank = self.get_rank();
+        if rank == 0 {
+            write!(f, "[]")?;
+            return Ok(());
+        }
+        write!(f, "[")?;
+        for i in 0..rank as SAxis {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", self.get_shape_item(i))?;
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 impl PartialEq for Shape {
     fn eq(&self, other: &Self) -> bool {
         self.rho_rho == other.rho_rho
