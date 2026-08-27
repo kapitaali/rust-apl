@@ -303,10 +303,46 @@ impl Prim {
                     1 => Cell::Float(x.sin()),
                     2 => Cell::Float(x.cos()),
                     3 => Cell::Float(x.tan()),
+                    4 => Cell::Float((1.0 + x * x).sqrt()),
+                    5 => Cell::Float(x.sinh()),
+                    6 => Cell::Float(x.cosh()),
+                    7 => Cell::Float(x.tanh()),
                     9 => Cell::Float(x),        // real part
                     11 => Cell::Float(0.0),     // imaginary part
                     10 => Cell::Float(x.abs()), // magnitude
                     12 => Cell::Float(if x >= 0.0 { 0.0 } else { std::f64::consts::PI }), // phase
+                    -1 => Cell::Float(x.asin()),
+                    -2 => Cell::Float(x.acos()),
+                    -3 => Cell::Float(x.atan()),
+                    -4 => {
+                        // sqrt(x² - 1): for |x|<1 this is imaginary
+                        let x2m1 = x * x - 1.0;
+                        if x2m1 >= 0.0 {
+                            Cell::Float(x2m1.sqrt())
+                        } else {
+                            Cell::Complex(crate::types::APLComplex::new(0.0, (-x2m1).sqrt()))
+                        }
+                    }
+                    -5 => Cell::Float(x.asinh()),
+                    -6 => {
+                        // acosh(x): for |x|<1 this is complex: i*acos(x)
+                        if x.abs() >= 1.0 {
+                            Cell::Float(x.acosh())
+                        } else {
+                            Cell::Complex(crate::types::APLComplex::new(0.0, x.acos()))
+                        }
+                    }
+                    -7 => {
+                        // atanh(x) for |x|>1 is complex
+                        if x.abs() <= 1.0 {
+                            Cell::Float(x.atanh())
+                        } else {
+                            // principal value: 0.5*ln((x+1)/(x-1)) - sign(x)*πi/2
+                            let r = 0.5 * ((x + 1.0) / (x - 1.0)).ln();
+                            let im = -std::f64::consts::PI / 2.0 * x.signum();
+                            Cell::Complex(crate::types::APLComplex::new(r, im))
+                        }
+                    }
                     -12 => Cell::from_f64(x),   // conjugate (identity for real)
                     _ => return Err(ErrorCode::DomainError),
                 })

@@ -6,6 +6,70 @@
 use apl::parser::Environment;
 use std::io::{self, BufRead, Write};
 
+/// Format a float with ⎕PP significant digits (GNU APL uses %g, not %f).
+/// PP=10 means 10 significant digits.
+fn float_to_g(v: f64, pp: usize) -> String {
+    // Use scientific notation with pp-1 decimals (gives pp significant digits)
+    let s = format!("{:.*e}", pp - 1, v);
+    if let Some(e_pos) = s.find('e') {
+        let mantissa = &s[..e_pos];
+        let exp: i32 = s[e_pos + 1..].parse().unwrap_or(0);
+        let dot_pos = mantissa.find('.');
+        if let Some(dot) = dot_pos {
+            let int_part = &mantissa[..dot];
+            let frac_part = &mantissa[dot + 1..];
+            if exp >= 0 {
+                let shift = exp as usize;
+                if shift >= frac_part.len() {
+                    format!("{}{}", int_part, frac_part) + &"0".repeat(shift - frac_part.len())
+                } else {
+                    let whole = &frac_part[..shift];
+                    let rest = &frac_part[shift..];
+                    let rest_trimmed = rest.trim_end_matches('0');
+                    if rest_trimmed.is_empty() {
+                        format!("{}{}", int_part, whole)
+                    } else {
+                        format!("{}{}.{}", int_part, whole, rest_trimmed)
+                    }
+                }
+            } else {
+                // Negative exponent: 0.xxx form
+                let neg_exp = (-exp) as usize;
+                if neg_exp == 1 && int_part == "0" {
+                    // e.g., 8.775e-1 → 0.8775
+                    let frac_trimmed = frac_part.trim_end_matches('0');
+                    if frac_trimmed.is_empty() {
+                        "0".to_string()
+                    } else {
+                        format!("0.{}", frac_trimmed)
+                    }
+                } else if neg_exp == 1 {
+                    // e.g., 1.23e-1 → 0.123
+                    let frac_trimmed = frac_part.trim_end_matches('0');
+                    if frac_trimmed.is_empty() {
+                        "0".to_string()
+                    } else {
+                        format!("0.{}{}", int_part, frac_trimmed)
+                    }
+                } else {
+                    // Larger negative exponent: 0.00...xxx
+                    let zeros = "0".repeat(neg_exp - 1);
+                    let frac_trimmed = frac_part.trim_end_matches('0');
+                    if frac_trimmed.is_empty() {
+                        "0".to_string()
+                    } else {
+                        format!("0.{}{}{}", zeros, int_part, frac_trimmed)
+                    }
+                }
+            }
+        } else {
+            s
+        }
+    } else {
+        s
+    }
+}
+
 fn format_value(v: &apl::value::ValueP, pp: usize) -> String {
     // simple one-line formatting for scalars and vectors
     if v.is_scalar() || v.is_vector() {
@@ -48,9 +112,9 @@ fn format_cell(c: &apl::cell::Cell, pp: usize) -> String {
             let s = if v.fract() == 0.0 && v.abs() < 1e15 {
                 format!("{}", *v as i64)
             } else if v.abs() >= 1e-10 {
-                // ⎕PP precision: up to `pp` decimals, trailing zeros trimmed
-                let s = format!("{:.*}", pp, v);
-                s.trim_end_matches('0').trim_end_matches('.').to_string()
+                // GNU APL uses %g (significant digits), not %f (decimal places)
+                // PP=10 means 10 significant digits
+                float_to_g(*v, pp)
             } else {
                 format!("{}", v)
             };
@@ -60,8 +124,8 @@ fn format_cell(c: &apl::cell::Cell, pp: usize) -> String {
         apl::cell::Cell::Complex(c) => {
             format!(
                 "{}J{}",
-                high_minus(&c.re.to_string()),
-                high_minus(&c.im.to_string())
+                high_minus(&float_to_g(c.re, pp)),
+                high_minus(&float_to_g(c.im, pp))
             )
         }
         apl::cell::Cell::Pointer(p) => format_nested(p.value.cells(), pp),
