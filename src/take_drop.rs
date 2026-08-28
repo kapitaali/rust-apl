@@ -56,33 +56,67 @@ pub fn take(x: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
 
     let total: i64 = dims.iter().product();
-    let mut out = Vec::with_capacity(total as usize);
-    // walk the RESULT in row-major order; map each position back to a source
-    // subscript, emitting the prototype when it falls outside B
-    let mut subs = vec![0i64; dims.len()];
-    for _ in 0..total {
-        let mut src = Vec::with_capacity(subs.len());
-        let mut inside = true;
-        for (ax, &s) in subs.iter().enumerate() {
-            // negative count anchors the window to the END of that axis
-            let off = if counts[ax] >= 0 {
-                s
-            } else {
-                src_dims[ax] + counts[ax] + s
-            };
-            if off < 0 || off >= src_dims[ax] {
-                inside = false;
-                break;
+    let out: Vec<Cell> = if total as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..total as usize)
+            .into_par_iter()
+            .map(|idx| {
+                // decode idx → result subscript
+                let mut subs = vec![0i64; dims.len()];
+                let mut rem = idx as i64;
+                for ax in (0..dims.len()).rev() {
+                    subs[ax] = rem % dims[ax];
+                    rem /= dims[ax];
+                }
+                let mut inside = true;
+                let mut src = Vec::with_capacity(subs.len());
+                for (ax, &s) in subs.iter().enumerate() {
+                    let off = if counts[ax] >= 0 {
+                        s
+                    } else {
+                        src_dims[ax] + counts[ax] + s
+                    };
+                    if off < 0 || off >= src_dims[ax] {
+                        inside = false;
+                        break;
+                    }
+                    src.push(off);
+                }
+                if inside {
+                    Ok(cells[encode(&src, &src_dims) as usize].clone())
+                } else {
+                    Ok(proto.clone())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(total as usize);
+        let mut subs = vec![0i64; dims.len()];
+        for _ in 0..total {
+            let mut src = Vec::with_capacity(subs.len());
+            let mut inside = true;
+            for (ax, &s) in subs.iter().enumerate() {
+                let off = if counts[ax] >= 0 {
+                    s
+                } else {
+                    src_dims[ax] + counts[ax] + s
+                };
+                if off < 0 || off >= src_dims[ax] {
+                    inside = false;
+                    break;
+                }
+                src.push(off);
             }
-            src.push(off);
+            out.push(if inside {
+                cells[encode(&src, &src_dims) as usize].clone()
+            } else {
+                proto.clone()
+            });
+            bump(&mut subs, &dims);
         }
-        out.push(if inside {
-            cells[encode(&src, &src_dims) as usize].clone()
-        } else {
-            proto.clone()
-        });
-        bump(&mut subs, &dims);
-    }
+        out
+    };
+
     ValueP::from_parts(Shape::from_dims(&dims)?, out)
 }
 
@@ -108,19 +142,42 @@ pub fn drop(x: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     }
     let cells = b.cells();
     let total: i64 = dims.iter().product();
-    let mut out = Vec::with_capacity(total.max(0) as usize);
-    if total > 0 {
-        let mut subs = vec![0i64; dims.len()];
-        for _ in 0..total {
-            let src: Vec<i64> = subs
-                .iter()
-                .enumerate()
-                .map(|(ax, &s)| s + starts[ax])
-                .collect();
-            out.push(cells[encode(&src, &src_dims) as usize].clone());
-            bump(&mut subs, &dims);
+    let out: Vec<Cell> = if total as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..total as usize)
+            .into_par_iter()
+            .map(|idx| {
+                let mut subs = vec![0i64; dims.len()];
+                let mut rem = idx as i64;
+                for ax in (0..dims.len()).rev() {
+                    subs[ax] = rem % dims[ax];
+                    rem /= dims[ax];
+                }
+                let src: Vec<i64> = subs
+                    .iter()
+                    .enumerate()
+                    .map(|(ax, &s)| s + starts[ax])
+                    .collect();
+                Ok(cells[encode(&src, &src_dims) as usize].clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(total.max(0) as usize);
+        if total > 0 {
+            let mut subs = vec![0i64; dims.len()];
+            for _ in 0..total {
+                let src: Vec<i64> = subs
+                    .iter()
+                    .enumerate()
+                    .map(|(ax, &s)| s + starts[ax])
+                    .collect();
+                out.push(cells[encode(&src, &src_dims) as usize].clone());
+                bump(&mut subs, &dims);
+            }
         }
-    }
+        out
+    };
+
     ValueP::from_parts(Shape::from_dims(&dims)?, out)
 }
 
@@ -247,21 +304,47 @@ pub fn take_axis(x: &ValueP, b: &ValueP, axis: i64) -> AplResult<ValueP> {
     let out_len = (pre.max(1) * count.abs() * post.max(1)) as usize;
     let mut out = vec![proto.clone(); out_len];
 
-    // process each line along the axis and write results back in place.
-    // flat index = (p*n + k)*post + s for input; output has count.abs()
-    // along the axis: out flat = (p*count + k')*post + s.
-    for p in 0..pre.max(1) as usize {
-        for s in 0..post.max(1) as usize {
-            let line: Vec<Cell> = (0..n as usize)
-                .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
-                .collect();
-            let taken = take_vec(&line, count, &proto);
+    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> = if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..pre.max(1) as usize)
+            .into_par_iter()
+            .map(|p| {
+                let mut results = Vec::with_capacity(post.max(1) as usize);
+                for s in 0..post.max(1) as usize {
+                    let line: Vec<Cell> = (0..n as usize)
+                        .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                        .collect();
+                    let taken = take_vec(&line, count, &proto);
+                    results.push((s, taken));
+                }
+                (p, results)
+            })
+            .collect()
+    } else {
+        let mut results = Vec::with_capacity(pre.max(1) as usize);
+        for p in 0..pre.max(1) as usize {
+            let mut p_results = Vec::with_capacity(post.max(1) as usize);
+            for s in 0..post.max(1) as usize {
+                let line: Vec<Cell> = (0..n as usize)
+                    .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                    .collect();
+                let taken = take_vec(&line, count, &proto);
+                p_results.push((s, taken));
+            }
+            results.push((p, p_results));
+        }
+        results
+    };
+
+    for (p, p_results) in lines {
+        for (s, taken) in p_results {
             let w = count.unsigned_abs() as usize;
             for (k, c) in taken.into_iter().enumerate() {
                 out[(p * w + k) * post as usize + s] = c;
             }
         }
     }
+
     ValueP::from_parts(
         {
             let mut dims: Vec<i64> = (0..rank as usize)
@@ -292,14 +375,40 @@ pub fn drop_axis(x: &ValueP, b: &ValueP, axis: i64) -> AplResult<ValueP> {
     let out_len = (pre.max(1) * keep * post.max(1)) as usize;
     let mut out = vec![prototype(b); out_len];
 
-    // same in-place writeback: input (p*n + k)*post + s; output has `keep`
-    // along the axis, and dropped items shift remaining ones forward.
-    for p in 0..pre.max(1) as usize {
-        for s in 0..post.max(1) as usize {
-            let line: Vec<Cell> = (0..n as usize)
-                .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
-                .collect();
-            let kept = drop_vec(&line, count, &prototype(b));
+    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> = if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..pre.max(1) as usize)
+            .into_par_iter()
+            .map(|p| {
+                let mut results = Vec::with_capacity(post.max(1) as usize);
+                for s in 0..post.max(1) as usize {
+                    let line: Vec<Cell> = (0..n as usize)
+                        .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                        .collect();
+                    let kept = drop_vec(&line, count, &prototype(b));
+                    results.push((s, kept));
+                }
+                (p, results)
+            })
+            .collect()
+    } else {
+        let mut results = Vec::with_capacity(pre.max(1) as usize);
+        for p in 0..pre.max(1) as usize {
+            let mut p_results = Vec::with_capacity(post.max(1) as usize);
+            for s in 0..post.max(1) as usize {
+                let line: Vec<Cell> = (0..n as usize)
+                    .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                    .collect();
+                let kept = drop_vec(&line, count, &prototype(b));
+                p_results.push((s, kept));
+            }
+            results.push((p, p_results));
+        }
+        results
+    };
+
+    for (p, p_results) in lines {
+        for (s, kept) in p_results {
             for (k, c) in kept.into_iter().enumerate() {
                 out[(p * keep as usize + k) * post as usize + s] = c;
             }

@@ -107,9 +107,6 @@ pub fn catenate(a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
     }
     let promo = promo.flatten();
 
-    let mut ravel_out: Vec<Cell> =
-        Vec::with_capacity(av.element_count() as usize + bv.element_count() as usize);
-
     // Catenation joins along the LAST axis, so for rank ≥ 2 the ravels must be
     // INTERLEAVED row by row — appending them wholesale produces the right
     // shape with the wrong contents (`(2 3⍴⍳6),2 3⍴⍳6` gave 1 2 3 4 5 6 1 2 3…
@@ -123,14 +120,45 @@ pub fn catenate(a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
         None => out.push(c.clone()),
     };
 
-    if n_axes <= 1 {
+    let ravel_out: Vec<Cell> = if outer as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        let ca = av.cells().to_vec();
+        let cb = bv.cells().to_vec();
+        (0..outer.max(1) as usize)
+            .into_par_iter()
+            .flat_map_iter(|row| {
+                let a_from = row * last_a as usize;
+                let b_from = row * last_b as usize;
+                let mut row_cells: Vec<Cell> =
+                    Vec::with_capacity(last_a as usize + last_b as usize);
+                for c in &ca[a_from..a_from + last_a as usize] {
+                    row_cells.push(match promo {
+                        Some(t) => lift(c, t),
+                        None => c.clone(),
+                    });
+                }
+                for c in &cb[b_from..b_from + last_b as usize] {
+                    row_cells.push(match promo {
+                        Some(t) => lift(c, t),
+                        None => c.clone(),
+                    });
+                }
+                row_cells
+            })
+            .collect()
+    } else if n_axes <= 1 {
+        let mut ravel_out: Vec<Cell> =
+            Vec::with_capacity(av.element_count() as usize + bv.element_count() as usize);
         for c in av.cells() {
             push(&mut ravel_out, c);
         }
         for c in bv.cells() {
             push(&mut ravel_out, c);
         }
+        ravel_out
     } else {
+        let mut ravel_out: Vec<Cell> =
+            Vec::with_capacity(av.element_count() as usize + bv.element_count() as usize);
         let ca = av.cells();
         let cb = bv.cells();
         for row in 0..outer.max(1) as usize {
@@ -143,7 +171,8 @@ pub fn catenate(a: &ValueP, b: &ValueP) -> Result<ValueP, ErrorCode> {
                 push(&mut ravel_out, c);
             }
         }
-    }
+        ravel_out
+    };
 
     Ok(ValueP {
         inner: std::sync::Arc::new(crate::value::ValueInner::new(shape, ravel_out)),

@@ -2,6 +2,7 @@
 //!
 //! Mirrors `Bif_F2_INDEX` and `Bif_F12_ROTATE1` in C++ (simplified).
 
+use crate::cell::Cell;
 use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
@@ -59,13 +60,28 @@ pub fn reverse_first(b: &ValueP) -> AplResult<ValueP> {
     let m = b.get_shape_item(0); // first axis length
     let inner = b.element_count() / m.max(1);
     let cells = b.cells();
-    let mut out = Vec::with_capacity(b.element_count() as usize);
-    // Reverse the order of "rows" (each row has `inner` elements)
-    for r in (0..m as usize).rev() {
-        for k in 0..inner as usize {
-            out.push(cells[r * inner as usize + k].clone());
+
+    let out: Vec<Cell> = if m as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..m as usize)
+            .into_par_iter()
+            .rev()
+            .flat_map_iter(|r| {
+                let base = r * inner as usize;
+                (0..inner as usize).map(move |k| cells[base + k].clone())
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(b.element_count() as usize);
+        // Reverse the order of "rows" (each row has `inner` elements)
+        for r in (0..m as usize).rev() {
+            for k in 0..inner as usize {
+                out.push(cells[r * inner as usize + k].clone());
+            }
         }
-    }
+        out
+    };
+
     // Build result with explicit shape
     let dims: Vec<i64> = (0..rank).map(|i| b.get_shape_item(i as i16)).collect();
     let shape = Shape::from_dims(&dims)?;
@@ -90,19 +106,40 @@ pub fn rotate_first(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     } else {
         return Err(ErrorCode::DomainError); // per-line shifts not yet supported
     };
-    let mut out = Vec::with_capacity(b.element_count() as usize);
-    for r in 0..m as usize {
-        let mut src_r = r as i64 + shift;
-        while src_r < 0 {
-            src_r += m;
+
+    let out: Vec<Cell> = if m as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..m as usize)
+            .into_par_iter()
+            .flat_map_iter(|r| {
+                let mut src_r = r as i64 + shift;
+                while src_r < 0 {
+                    src_r += m;
+                }
+                while src_r >= m {
+                    src_r -= m;
+                }
+                let base = src_r as usize * inner as usize;
+                (0..inner as usize).map(move |k| cells[base + k].clone())
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(b.element_count() as usize);
+        for r in 0..m as usize {
+            let mut src_r = r as i64 + shift;
+            while src_r < 0 {
+                src_r += m;
+            }
+            while src_r >= m {
+                src_r -= m;
+            }
+            for k in 0..inner as usize {
+                out.push(cells[src_r as usize * inner as usize + k].clone());
+            }
         }
-        while src_r >= m {
-            src_r -= m;
-        }
-        for k in 0..inner as usize {
-            out.push(cells[src_r as usize * inner as usize + k].clone());
-        }
-    }
+        out
+    };
+
     Ok(ValueP::from_ravel_like(b, out))
 }
 
