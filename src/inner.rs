@@ -55,11 +55,8 @@ pub fn inner_product(a: &ValueP, f: Prim, g: Prim, b: &ValueP) -> AplResult<Valu
                         vec![acells[i * n as usize + k].clone()],
                     )
                     .map_err(|_| ErrorCode::DomainError)?;
-                    let bv = ValueP::from_parts(
-                        Shape::scalar(),
-                        vec![bcells[k * pb + j].clone()],
-                    )
-                    .map_err(|_| ErrorCode::DomainError)?;
+                    let bv = ValueP::from_parts(Shape::scalar(), vec![bcells[k * pb + j].clone()])
+                        .map_err(|_| ErrorCode::DomainError)?;
                     let r = g.eval_dyadic(&av, &bv)?;
                     if r.is_scalar() {
                         pair.push(r.first_cell().expect("scalar has a cell").clone());
@@ -83,11 +80,8 @@ pub fn inner_product(a: &ValueP, f: Prim, g: Prim, b: &ValueP) -> AplResult<Valu
                         vec![acells[i * n as usize + k].clone()],
                     )
                     .map_err(|_| ErrorCode::DomainError)?;
-                    let bv = ValueP::from_parts(
-                        Shape::scalar(),
-                        vec![bcells[k * pb + j].clone()],
-                    )
-                    .map_err(|_| ErrorCode::DomainError)?;
+                    let bv = ValueP::from_parts(Shape::scalar(), vec![bcells[k * pb + j].clone()])
+                        .map_err(|_| ErrorCode::DomainError)?;
                     let r = g.eval_dyadic(&av, &bv)?;
                     if r.is_scalar() {
                         pair.push(r.first_cell().expect("scalar has a cell").clone());

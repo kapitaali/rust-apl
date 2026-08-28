@@ -304,37 +304,38 @@ pub fn take_axis(x: &ValueP, b: &ValueP, axis: i64) -> AplResult<ValueP> {
     let out_len = (pre.max(1) * count.abs() * post.max(1)) as usize;
     let mut out = vec![proto.clone(); out_len];
 
-    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> = if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
-        use rayon::prelude::*;
-        (0..pre.max(1) as usize)
-            .into_par_iter()
-            .map(|p| {
-                let mut results = Vec::with_capacity(post.max(1) as usize);
+    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> =
+        if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
+            use rayon::prelude::*;
+            (0..pre.max(1) as usize)
+                .into_par_iter()
+                .map(|p| {
+                    let mut results = Vec::with_capacity(post.max(1) as usize);
+                    for s in 0..post.max(1) as usize {
+                        let line: Vec<Cell> = (0..n as usize)
+                            .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                            .collect();
+                        let taken = take_vec(&line, count, &proto);
+                        results.push((s, taken));
+                    }
+                    (p, results)
+                })
+                .collect()
+        } else {
+            let mut results = Vec::with_capacity(pre.max(1) as usize);
+            for p in 0..pre.max(1) as usize {
+                let mut p_results = Vec::with_capacity(post.max(1) as usize);
                 for s in 0..post.max(1) as usize {
                     let line: Vec<Cell> = (0..n as usize)
                         .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
                         .collect();
                     let taken = take_vec(&line, count, &proto);
-                    results.push((s, taken));
+                    p_results.push((s, taken));
                 }
-                (p, results)
-            })
-            .collect()
-    } else {
-        let mut results = Vec::with_capacity(pre.max(1) as usize);
-        for p in 0..pre.max(1) as usize {
-            let mut p_results = Vec::with_capacity(post.max(1) as usize);
-            for s in 0..post.max(1) as usize {
-                let line: Vec<Cell> = (0..n as usize)
-                    .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
-                    .collect();
-                let taken = take_vec(&line, count, &proto);
-                p_results.push((s, taken));
+                results.push((p, p_results));
             }
-            results.push((p, p_results));
-        }
-        results
-    };
+            results
+        };
 
     for (p, p_results) in lines {
         for (s, taken) in p_results {
@@ -375,37 +376,38 @@ pub fn drop_axis(x: &ValueP, b: &ValueP, axis: i64) -> AplResult<ValueP> {
     let out_len = (pre.max(1) * keep * post.max(1)) as usize;
     let mut out = vec![prototype(b); out_len];
 
-    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> = if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
-        use rayon::prelude::*;
-        (0..pre.max(1) as usize)
-            .into_par_iter()
-            .map(|p| {
-                let mut results = Vec::with_capacity(post.max(1) as usize);
+    let lines: Vec<(usize, Vec<(usize, Vec<Cell>)>)> =
+        if pre.max(1) as usize * post.max(1) as usize >= crate::functions::PARALLEL_THRESHOLD {
+            use rayon::prelude::*;
+            (0..pre.max(1) as usize)
+                .into_par_iter()
+                .map(|p| {
+                    let mut results = Vec::with_capacity(post.max(1) as usize);
+                    for s in 0..post.max(1) as usize {
+                        let line: Vec<Cell> = (0..n as usize)
+                            .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
+                            .collect();
+                        let kept = drop_vec(&line, count, &prototype(b));
+                        results.push((s, kept));
+                    }
+                    (p, results)
+                })
+                .collect()
+        } else {
+            let mut results = Vec::with_capacity(pre.max(1) as usize);
+            for p in 0..pre.max(1) as usize {
+                let mut p_results = Vec::with_capacity(post.max(1) as usize);
                 for s in 0..post.max(1) as usize {
                     let line: Vec<Cell> = (0..n as usize)
                         .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
                         .collect();
                     let kept = drop_vec(&line, count, &prototype(b));
-                    results.push((s, kept));
+                    p_results.push((s, kept));
                 }
-                (p, results)
-            })
-            .collect()
-    } else {
-        let mut results = Vec::with_capacity(pre.max(1) as usize);
-        for p in 0..pre.max(1) as usize {
-            let mut p_results = Vec::with_capacity(post.max(1) as usize);
-            for s in 0..post.max(1) as usize {
-                let line: Vec<Cell> = (0..n as usize)
-                    .map(|k| cells[(p * n as usize + k) * post as usize + s].clone())
-                    .collect();
-                let kept = drop_vec(&line, count, &prototype(b));
-                p_results.push((s, kept));
+                results.push((p, p_results));
             }
-            results.push((p, p_results));
-        }
-        results
-    };
+            results
+        };
 
     for (p, p_results) in lines {
         for (s, kept) in p_results {

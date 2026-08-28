@@ -4,8 +4,8 @@
 //! (mirrors a minimal `main.cc` + `Command::command_loop()`).
 
 use apl::parser::Environment;
-use apl::AplError;
 use apl::types::ErrorCode;
+use apl::AplError;
 use std::io::{self, BufRead, Write};
 
 /// Format a float with ⎕PP significant digits (GNU APL uses %g, not %f).

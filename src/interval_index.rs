@@ -71,10 +71,8 @@ mod tests {
     #[test]
     fn test_interval_index_basic() {
         let a = ValueP::int_vector(&[1, 2, 3]);
-        let b = ValueP::from_parts(
-            Shape::vector(2),
-            vec![Cell::Float(1.5), Cell::Float(2.5)],
-        ).unwrap();
+        let b =
+            ValueP::from_parts(Shape::vector(2), vec![Cell::Float(1.5), Cell::Float(2.5)]).unwrap();
         assert_eq!(ints(&interval_index(&a, &b).unwrap()), [1, 2]);
     }
 
@@ -83,8 +81,14 @@ mod tests {
         let a = ValueP::int_vector(&[1, 2, 3]);
         let b = ValueP::from_parts(
             Shape::vector(4),
-            vec![Cell::Float(0.5), Cell::Float(1.5), Cell::Float(2.5), Cell::Float(3.5)],
-        ).unwrap();
+            vec![
+                Cell::Float(0.5),
+                Cell::Float(1.5),
+                Cell::Float(2.5),
+                Cell::Float(3.5),
+            ],
+        )
+        .unwrap();
         assert_eq!(ints(&interval_index(&a, &b).unwrap()), [0, 1, 2, 3]);
     }
 

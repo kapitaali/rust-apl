@@ -37,7 +37,11 @@ pub fn over_dyad(
     apply_prim_val_dyad(f, &ga, &gb)
 }
 
-fn apply_prim_monadic(p: Prim, operand: &crate::parser::Expr, env: &mut Environment) -> AplResult<ValueP> {
+fn apply_prim_monadic(
+    p: Prim,
+    operand: &crate::parser::Expr,
+    env: &mut Environment,
+) -> AplResult<ValueP> {
     let derived = crate::parser::Expr::Monadic(p, Box::new(operand.clone()));
     env.eval(&derived)
 }

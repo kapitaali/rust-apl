@@ -101,9 +101,8 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             let mut names = env.var_names();
             names.sort();
             // Filter out ⎕-vars from )VARS (they have their own commands)
-            let user_names: Vec<String> = names.into_iter()
-                .filter(|n| !n.starts_with('⎕'))
-                .collect();
+            let user_names: Vec<String> =
+                names.into_iter().filter(|n| !n.starts_with('⎕')).collect();
             Some(vec![user_names.join("  ")])
         }
         "FNS" => {

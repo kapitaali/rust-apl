@@ -174,7 +174,12 @@ impl ValueP {
     /// true iff rank-0 with a simple (non-pointer) cell
     #[inline]
     pub fn is_scalar_simple(&self) -> bool {
-        self.is_scalar() && self.inner.ravel.first().map_or(false, |c| !c.is_pointer_cell())
+        self.is_scalar()
+            && self
+                .inner
+                .ravel
+                .first()
+                .map_or(false, |c| !c.is_pointer_cell())
     }
 
     #[inline]

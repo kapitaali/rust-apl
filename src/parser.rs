@@ -713,16 +713,15 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     if let Ok((f_p, g_p, consumed)) = parse_over_operator(&toks[used..]) {
         let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
         used += consumed + rused;
-        return Ok((
-            Expr::OverDyad(f_p, g_p, Box::new(lhs), Box::new(rhs)),
-            used,
-        ));
+        return Ok((Expr::OverDyad(f_p, g_p, Box::new(lhs), Box::new(rhs)), used));
     }
 
     // dyadic over: A f⍥g B — check before normal dyadic dispatch
     // The tokenizer emits Tok::Prim(Prim::Over) for ⍥
     #[cfg(feature = "unofficial-ext")]
-    if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) = (toks.get(used), toks.get(used + 1)) {
+    if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) =
+        (toks.get(used), toks.get(used + 1))
+    {
         let f = *f_p;
         // Next should be Prim(g)
         if let Some(Tok::Prim(g_p)) = toks.get(used + 2) {
@@ -730,10 +729,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             // B is the rest after g
             let (b, rused) = parse_simple(&toks[used + 3..])?;
             used += 3 + rused;
-            return Ok((
-                Expr::OverDyad(f, *g_p, Box::new(lhs), Box::new(b)),
-                used,
-            ));
+            return Ok((Expr::OverDyad(f, *g_p, Box::new(lhs), Box::new(b)), used));
         }
     }
 
@@ -1021,16 +1017,14 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             // Check for `(f⍥g) B` pattern: LParen Prim(f) Over Prim(g) RParen
             // This is monadic over: f(g(B))
             #[cfg(feature = "unofficial-ext")]
-            if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) = (toks.get(1), toks.get(2)) {
+            if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) = (toks.get(1), toks.get(2))
+            {
                 if let Some(Tok::Prim(g_p)) = toks.get(3) {
                     if matches!(toks.get(4), Some(Tok::RParen)) {
                         let f = *f_p;
                         let g = *g_p;
                         let (rhs, rused) = parse_simple(&toks[5..])?;
-                        return Ok((
-                            Expr::OverMonad(f, g, Box::new(rhs)),
-                            5 + rused,
-                        ));
+                        return Ok((Expr::OverMonad(f, g, Box::new(rhs)), 5 + rused));
                     }
                 }
             }

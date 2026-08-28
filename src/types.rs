@@ -315,9 +315,15 @@ impl std::fmt::Display for AplError {
             if let (Some(start), Some(end)) = (self.caret_start, self.caret_end) {
                 writeln!(f)?;
                 let mut caret_line = String::new();
-                for _ in 0..indent.len() { caret_line.push(' '); }
-                for _ in 0..start { caret_line.push(' '); }
-                for _ in start..end { caret_line.push('^'); }
+                for _ in 0..indent.len() {
+                    caret_line.push(' ');
+                }
+                for _ in 0..start {
+                    caret_line.push(' ');
+                }
+                for _ in start..end {
+                    caret_line.push('^');
+                }
                 write!(f, "{}", caret_line)?;
             }
         }

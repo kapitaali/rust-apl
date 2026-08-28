@@ -353,7 +353,7 @@ impl Prim {
                             Cell::Complex(crate::types::APLComplex::new(r, im))
                         }
                     }
-                    -12 => Cell::from_f64(x),   // conjugate (identity for real)
+                    -12 => Cell::from_f64(x), // conjugate (identity for real)
                     _ => return Err(ErrorCode::DomainError),
                 })
             }),

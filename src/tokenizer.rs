@@ -147,7 +147,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⌹", Prim::Domino),
     ("∧", Prim::And),
     ("∨", Prim::Or),
-    ("*", Prim::Power),   // APL power (dyadic) / exponential (monadic)
+    ("*", Prim::Power), // APL power (dyadic) / exponential (monadic)
     ("⋆", Prim::Power), // STAR OPERATOR — alias for power (GNU APL accepts both)
 ];
 
@@ -472,6 +472,7 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                         continue;
                     }
                     // over: ⍥ — Dyalog "over" operator (f⍥g)
+                    #[cfg(feature = "unofficial-ext")]
                     if rest.starts_with('⍥') {
                         toks.push(Tok::Prim(crate::functions::Prim::Over));
                         i += 1;

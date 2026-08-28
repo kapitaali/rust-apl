@@ -20,12 +20,12 @@ pub mod functions;
 pub mod functions_def;
 pub mod index_of;
 pub mod inner;
+pub mod interval_index;
 pub mod not_match;
 pub mod operators;
 pub mod outer;
 #[cfg(test)]
 pub mod parallel_tests;
-pub mod interval_index;
 pub mod parser;
 pub mod partition;
 pub mod pick;
