@@ -228,8 +228,8 @@ fn main() {
                         header.split_whitespace().next().unwrap_or("?")
                     ),
                     Err(e) => {
-                        // define_function returns String errors; wrap as generic ERROR
-                        let rich = AplError::with_message(ErrorCode::SystemError, e);
+                        let rich = AplError::with_message(ErrorCode::SyntaxError, e)
+                            .with_source_line(trimmed.to_string());
                         println!("ERROR: {}", rich);
                     }
                 }
@@ -268,8 +268,8 @@ fn main() {
             }
             Ok(None) => {} // assignment — no output
             Err(e) => {
-                // Display error with GNU-APL-style line + caret
-                let rich = apl::AplError::from(e);
+                // Display error with source line for context
+                let rich = AplError::from(e).with_source_line(trimmed.to_string());
                 println!("ERROR: {}", rich);
             }
         }

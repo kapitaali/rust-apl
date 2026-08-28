@@ -249,6 +249,14 @@ impl AplError {
         }
     }
 
+    /// Add source line to an existing error (for display).
+    pub fn with_source_line(self, source_line: String) -> Self {
+        Self {
+            source_line: Some(source_line),
+            ..self
+        }
+    }
+
     /// Construct with both message and source context.
     pub fn with_source_and_message(
         code: ErrorCode,
