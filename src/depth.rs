@@ -17,6 +17,14 @@ pub fn depth(b: &ValueP) -> AplResult<ValueP> {
 }
 
 fn compute_depth(b: &ValueP) -> i64 {
+    // GNU APL quirk: a character scalar (char vector of length 1) has depth 0
+    if b.rank() == 1 && b.element_count() == 1 {
+        if let Some(c) = b.first_cell() {
+            if c.is_character_cell() {
+                return 0;
+            }
+        }
+    }
     // scalar: pointer → 1 + nested depth; simple → 0
     if b.rank() == 0 {
         return match b.first_cell() {
