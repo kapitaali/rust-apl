@@ -1101,7 +1101,6 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         return Err(ErrorCode::SyntaxError);
     }
     if items.len() == 1 {
-        // single literal — return it directly
         return Ok((items.pop().unwrap(), used));
     }
 
@@ -1142,7 +1141,7 @@ fn parse_nested_strand_from(toks: &[Tok], mut acc: Vec<(Expr, usize)>) -> AplRes
         match toks.get(used) {
             // another paren group
             Some(Tok::LParen) => {
-                let (e, gu) = parse_expr(&toks[used + 1..])?;
+                let (e, gu) = parse_term(&toks[used + 1..])?;
                 if !matches!(toks.get(used + gu + 1), Some(Tok::RParen)) {
                     return Err(ErrorCode::SyntaxError);
                 }
