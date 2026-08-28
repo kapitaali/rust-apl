@@ -8,6 +8,7 @@
 //!   environment. REPEATED axes are legal and select a DIAGONAL:
 //!   `1 1⍉3 3⍴⍳9` is `1 5 9`.
 
+use crate::cell::Cell;
 use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
@@ -22,6 +23,49 @@ pub fn transpose(b: &ValueP) -> AplResult<ValueP> {
     // reversing all axes is the permutation [rank-1, rank-2, ..., 0]
     let perm: Vec<usize> = (0..rank).rev().collect();
     permute(b, &dims, &perm)
+}
+
+/// Shared output-cell walker for transpose (monadic and dyadic).
+/// Each result cell is independent — embarrassingly parallel.
+fn transpose_cells(
+    cells: &[Cell],
+    strides: &[i64],
+    target: &[usize],
+    out_dims: &[i64],
+    total: usize,
+) -> Vec<Cell> {
+    if total >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                // decode idx → out_rank coordinates
+                let mut coord = vec![0i64; out_dims.len()];
+                let mut rem = idx as i64;
+                for ax in (0..out_dims.len()).rev() {
+                    coord[ax] = rem % out_dims[ax];
+                    rem /= out_dims[ax];
+                }
+                let mut src = 0i64;
+                for (b_ax, &t) in target.iter().enumerate() {
+                    src += coord[t] * strides[b_ax];
+                }
+                cells[src as usize].clone()
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(total);
+        let mut coord = vec![0i64; out_dims.len()];
+        for _ in 0..total {
+            let mut src = 0i64;
+            for (b_ax, &t) in target.iter().enumerate() {
+                src += coord[t] * strides[b_ax];
+            }
+            out.push(cells[src as usize].clone());
+            bump(&mut coord, out_dims);
+        }
+        out
+    }
 }
 
 /// `A⍉B` — dyadic transpose (axis permutation, ⎕IO-relative).
@@ -78,18 +122,7 @@ pub fn transpose_dyadic_io(a: &ValueP, b: &ValueP, io: i64) -> AplResult<ValueP>
     let strides = row_major_strides(&dims);
     let cells = b.cells();
     let total: i64 = out_dims.iter().product();
-    let mut out = Vec::with_capacity(total.max(0) as usize);
-    let mut coord = vec![0i64; out_rank];
-    for _ in 0..total {
-        // every axis of B reads the coordinate of the result axis it maps to,
-        // so repeated targets walk in lockstep down a diagonal
-        let mut src = 0i64;
-        for (b_ax, &t) in target.iter().enumerate() {
-            src += coord[t] * strides[b_ax];
-        }
-        out.push(cells[src as usize].clone());
-        bump(&mut coord, &out_dims);
-    }
+    let out = transpose_cells(&cells, &strides, &target, &out_dims, total.max(0) as usize);
     ValueP::from_parts(Shape::from_dims(&out_dims)?, out)
 }
 
@@ -106,16 +139,7 @@ fn permute(b: &ValueP, dims: &[i64], perm: &[usize]) -> AplResult<ValueP> {
     let strides = row_major_strides(dims);
     let cells = b.cells();
     let total: i64 = out_dims.iter().product();
-    let mut out = Vec::with_capacity(total.max(0) as usize);
-    let mut coord = vec![0i64; out_dims.len()];
-    for _ in 0..total {
-        let mut src = 0i64;
-        for (k, &p) in perm.iter().enumerate() {
-            src += coord[k] * strides[p];
-        }
-        out.push(cells[src as usize].clone());
-        bump(&mut coord, &out_dims);
-    }
+    let out = transpose_cells(&cells, &strides, perm, &out_dims, total.max(0) as usize);
     ValueP::from_parts(Shape::from_dims(&out_dims)?, out)
 }
 

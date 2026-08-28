@@ -18,13 +18,26 @@ pub fn reverse(b: &ValueP) -> AplResult<ValueP> {
     let outer = b.element_count() / n.max(1);
     let cells = b.cells();
 
-    let mut out = Vec::with_capacity(b.element_count() as usize);
-    for row in 0..outer as usize {
-        let base = row * n as usize;
-        for k in (0..n as usize).rev() {
-            out.push(cells[base + k].clone());
+    let out: Vec<Cell> = if outer as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..outer as usize)
+            .into_par_iter()
+            .flat_map_iter(|row| {
+                let base = row * n as usize;
+                (0..n as usize).rev().map(move |k| cells[base + k].clone())
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(b.element_count() as usize);
+        for row in 0..outer as usize {
+            let base = row * n as usize;
+            for k in (0..n as usize).rev() {
+                out.push(cells[base + k].clone());
+            }
         }
-    }
+        out
+    };
+
     Ok(ValueP::from_ravel_like(b, out))
 }
 
@@ -64,22 +77,42 @@ pub fn rotate(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     };
 
     let cells = b.cells();
-    let mut out = Vec::with_capacity(b.element_count() as usize);
-    for (row, shift_row) in shifts.iter().enumerate().take(outer as usize) {
-        let base = row * n as usize;
-        // C++: src = shift + m + n; normalized into [0, n) → positive
-        // shift moves left (element at index m comes from src index m+shift).
-        for m in 0..n as usize {
-            let mut src = shift_row + m as i64;
-            while src < 0 {
-                src += n;
+    let out: Vec<Cell> = if outer as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..outer as usize)
+            .into_par_iter()
+            .flat_map_iter(|row| {
+                let base = row * n as usize;
+                let shift_row = shifts[row];
+                (0..n as usize).map(move |m| {
+                    let mut src = shift_row + m as i64;
+                    while src < 0 {
+                        src += n;
+                    }
+                    while src >= n {
+                        src -= n;
+                    }
+                    cells[base + src as usize].clone()
+                })
+            })
+            .collect()
+    } else {
+        let mut out = Vec::with_capacity(b.element_count() as usize);
+        for (row, shift_row) in shifts.iter().enumerate().take(outer as usize) {
+            let base = row * n as usize;
+            for m in 0..n as usize {
+                let mut src = shift_row + m as i64;
+                while src < 0 {
+                    src += n;
+                }
+                while src >= n {
+                    src -= n;
+                }
+                out.push(cells[base + src as usize].clone());
             }
-            while src >= n {
-                src -= n;
-            }
-            out.push(cells[base + src as usize].clone());
         }
-    }
+        out
+    };
 
     Ok(ValueP::from_ravel_like(b, out))
 }
