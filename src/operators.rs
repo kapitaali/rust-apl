@@ -268,22 +268,42 @@ pub fn scan_first(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
 /// each result in a scalar pointer cell. The result has B's shape.
 pub fn each(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
-    let mut out_ravel = Vec::with_capacity(cells.len());
-    for c in cells {
-        // wrap the cell as a scalar value and apply F through the
-        // standard primitive dispatcher
-        let elem = ValueP {
-            inner: std::sync::Arc::new(crate::value::ValueInner::new(
-                Shape::scalar(),
-                vec![c.clone()],
-            )),
-        };
-        let result = lo.eval_monadic(&elem)?;
-        // nest the result
-        out_ravel.push(Cell::Pointer(crate::cell::PointerCellData {
-            value: result.inner,
-        }));
-    }
+    let n = cells.len();
+
+    let out_ravel: Vec<Cell> = if n >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        cells
+            .par_iter()
+            .map(|c| {
+                let elem = ValueP {
+                    inner: std::sync::Arc::new(crate::value::ValueInner::new(
+                        Shape::scalar(),
+                        vec![c.clone()],
+                    )),
+                };
+                let result = lo.eval_monadic(&elem)?;
+                Ok(Cell::Pointer(crate::cell::PointerCellData {
+                    value: result.inner,
+                }))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(n);
+        for c in cells {
+            let elem = ValueP {
+                inner: std::sync::Arc::new(crate::value::ValueInner::new(
+                    Shape::scalar(),
+                    vec![c.clone()],
+                )),
+            };
+            let result = lo.eval_monadic(&elem)?;
+            out.push(Cell::Pointer(crate::cell::PointerCellData {
+                value: result.inner,
+            }));
+        }
+        out
+    };
+
     Ok(ValueP::from_ravel_like(b, out_ravel))
 }
 
@@ -299,23 +319,49 @@ pub fn each_dyad(lo: Prim, a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         return Err(ErrorCode::LengthError);
     }
 
-    let mut out_ravel = Vec::with_capacity(len as usize);
-    for i in 0..len as usize {
-        let ca = scalar_of(a, i % ac.max(1) as usize);
-        let cb = scalar_of(b, i % bc.max(1) as usize);
-        // reuse the shared dyadic primitive dispatcher from reduce/scan
-        let result = crate::operators::apply_prim_pub(
-            lo,
-            ca.first_cell().unwrap(),
-            cb.first_cell().unwrap(),
-        )?;
-        out_ravel.push(Cell::Pointer(crate::cell::PointerCellData {
-            value: std::sync::Arc::new(crate::value::ValueInner::new(
-                Shape::scalar(),
-                vec![result],
-            )),
-        }));
-    }
+    let out_ravel: Vec<Cell> = if len as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        let acells = a.cells();
+        let bcells = b.cells();
+        (0..len as usize)
+            .into_par_iter()
+            .map(|i| {
+                let ca = scalar_of_arr(&acells, i % ac.max(1) as usize);
+                let cb = scalar_of_arr(&bcells, i % bc.max(1) as usize);
+                let result = crate::operators::apply_prim_pub(
+                    lo,
+                    ca.first_cell().unwrap(),
+                    cb.first_cell().unwrap(),
+                )?;
+                Ok(Cell::Pointer(crate::cell::PointerCellData {
+                    value: std::sync::Arc::new(crate::value::ValueInner::new(
+                        Shape::scalar(),
+                        vec![result],
+                    )),
+                }))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out_ravel = Vec::with_capacity(len as usize);
+        for i in 0..len as usize {
+            let ca = scalar_of(a, i % ac.max(1) as usize);
+            let cb = scalar_of(b, i % bc.max(1) as usize);
+            // reuse the shared dyadic primitive dispatcher from reduce/scan
+            let result = crate::operators::apply_prim_pub(
+                lo,
+                ca.first_cell().unwrap(),
+                cb.first_cell().unwrap(),
+            )?;
+            out_ravel.push(Cell::Pointer(crate::cell::PointerCellData {
+                value: std::sync::Arc::new(crate::value::ValueInner::new(
+                    Shape::scalar(),
+                    vec![result],
+                )),
+            }));
+        }
+        out_ravel
+    };
+
     Ok(ValueP::from_ravel_like(
         if ac > 1 { a } else { b },
         out_ravel,
@@ -325,6 +371,21 @@ pub fn each_dyad(lo: Prim, a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
 /// extract cell `i` as a scalar ValueP (wraps simple cells; discloses pointers)
 fn scalar_of(v: &ValueP, i: usize) -> ValueP {
     match &v.cells()[i] {
+        Cell::Pointer(p) => ValueP {
+            inner: p.value.clone(),
+        },
+        other => ValueP {
+            inner: std::sync::Arc::new(crate::value::ValueInner::new(
+                Shape::scalar(),
+                vec![other.clone()],
+            )),
+        },
+    }
+}
+
+/// Like `scalar_of` but takes a raw cell slice (for parallel paths)
+fn scalar_of_arr(cells: &[Cell], i: usize) -> ValueP {
+    match &cells[i] {
         Cell::Pointer(p) => ValueP {
             inner: p.value.clone(),
         },
