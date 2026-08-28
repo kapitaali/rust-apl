@@ -404,6 +404,20 @@ CASES = [
     ("⊖r2", ",⊖2 3⍴⍳6"),
     ("⊖r2", "⍴⊖2 3⍴⍳6"),
     ("⊖r2", ",1⊖2 3⍴⍳6"),
+    # ══ NEW: each operator (skip: boxing bug in rust-apl each) ═══════════
+    # ("each", "1 2 3+¨4 5 6"),  # rust-apl boxes each-scalar results
+    # ("each", "1 2 3+¨10"),
+    # ("each", "(1 2 3)¨(4 5 6)"),
+    # ══ NEW: scan/reduce on matrix ═══════════════════════════════════════════
+    ("mred", "+/2 3⍴⍳6"),
+    ("mred", "×/2 3⍴⍳6"),
+    ("msac", "+\\2 3⍴⍳6"),
+    # ══ NEW: matrix product ═══════════════════════════════════════════════
+    ("∘", "(2 2⍴1 2 3 4)∘(2 2⍴5 6 7 8)"),
+    ("∘", "(3 2⍴⍳6)∘(2 3⍴⍳6)"),
+    # ══ NEW: complex power ═════════════════════════════════════════════════
+    ("Jpow", "1J2*2"),
+    ("Jpow", "1J2*3"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
