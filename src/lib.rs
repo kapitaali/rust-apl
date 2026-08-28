@@ -44,3 +44,6 @@ pub mod union;
 pub mod unparse;
 pub mod value;
 pub mod workspace;
+
+// Re-export AplError for use in main.rs and elsewhere
+pub use types::AplError;

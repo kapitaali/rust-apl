@@ -4,6 +4,8 @@
 //! (mirrors a minimal `main.cc` + `Command::command_loop()`).
 
 use apl::parser::Environment;
+use apl::AplError;
+use apl::types::ErrorCode;
 use std::io::{self, BufRead, Write};
 
 /// Format a float with ⎕PP significant digits (GNU APL uses %g, not %f).
@@ -225,7 +227,11 @@ fn main() {
                         "{} defined",
                         header.split_whitespace().next().unwrap_or("?")
                     ),
-                    Err(e) => println!("ERROR: {}", e),
+                    Err(e) => {
+                        // define_function returns String errors; wrap as generic ERROR
+                        let rich = AplError::with_message(ErrorCode::SystemError, e);
+                        println!("ERROR: {}", rich);
+                    }
                 }
             } else {
                 def_body.push(trimmed.to_string());
@@ -261,7 +267,11 @@ fn main() {
                 }
             }
             Ok(None) => {} // assignment — no output
-            Err(e) => println!("ERROR: {}", e),
+            Err(e) => {
+                // Display error with GNU-APL-style line + caret
+                let rich = apl::AplError::from(e);
+                println!("ERROR: {}", rich);
+            }
         }
     }
 }

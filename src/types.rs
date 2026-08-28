@@ -192,5 +192,133 @@ impl std::fmt::Display for ErrorCode {
 
 impl std::error::Error for ErrorCode {}
 
+/// Rich APL error — carries the error code and optional source context
+/// (source line + caret range) for user-friendly display.
+///
+/// Use `AplError::from(ErrorCode)` to convert, or `AplError::with_source()`
+/// when you have source context for caret display.
+#[derive(Debug, Clone)]
+pub struct AplError {
+    pub code: ErrorCode,
+    /// Human-readable explanation (empty = none)
+    pub message: String,
+    /// Source line that triggered the error (None = no source context)
+    pub source_line: Option<String>,
+    /// Caret start position in the source line (0-based, inclusive)
+    pub caret_start: Option<usize>,
+    /// Caret end position in the source line (0-based, exclusive)
+    pub caret_end: Option<usize>,
+}
+
+impl AplError {
+    /// Construct a bare error with no source context.
+    pub fn bare(code: ErrorCode) -> Self {
+        Self {
+            code,
+            message: String::new(),
+            source_line: None,
+            caret_start: None,
+            caret_end: None,
+        }
+    }
+
+    /// Construct with an explanatory message (no source context).
+    pub fn with_message(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            source_line: None,
+            caret_start: None,
+            caret_end: None,
+        }
+    }
+
+    /// Construct with full source context for caret display.
+    pub fn with_source(
+        code: ErrorCode,
+        source_line: impl Into<String>,
+        caret_start: usize,
+        caret_end: usize,
+    ) -> Self {
+        Self {
+            code,
+            message: String::new(),
+            source_line: Some(source_line.into()),
+            caret_start: Some(caret_start),
+            caret_end: Some(caret_end),
+        }
+    }
+
+    /// Construct with both message and source context.
+    pub fn with_source_and_message(
+        code: ErrorCode,
+        message: impl Into<String>,
+        source_line: impl Into<String>,
+        caret_start: usize,
+        caret_end: usize,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            source_line: Some(source_line.into()),
+            caret_start: Some(caret_start),
+            caret_end: Some(caret_end),
+        }
+    }
+
+    /// True if no source context was attached.
+    pub fn is_bare(&self) -> bool {
+        self.source_line.is_none()
+    }
+}
+
+impl From<ErrorCode> for AplError {
+    fn from(code: ErrorCode) -> Self {
+        Self::bare(code)
+    }
+}
+
+impl std::fmt::Display for AplError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let code_name = match self.code {
+            ErrorCode::NoError => "no error",
+            ErrorCode::SyntaxError => "SYNTAX ERROR",
+            ErrorCode::DomainError => "DOMAIN ERROR",
+            ErrorCode::LengthError => "LENGTH ERROR",
+            ErrorCode::IndexError => "INDEX ERROR",
+            ErrorCode::RankError => "RANK ERROR",
+            ErrorCode::ValueError => "VALUE ERROR",
+            ErrorCode::NonceError => "NONCE ERROR",
+            ErrorCode::LimitError => "LIMIT ERROR",
+            ErrorCode::SystemError => "SYSTEM ERROR",
+            ErrorCode::InternalError => "INTERNAL ERROR",
+            ErrorCode::FileError => "FILE ERROR",
+        };
+        write!(f, "{}", code_name)?;
+
+        if !self.message.is_empty() {
+            write!(f, " [{}]", self.message)?;
+        }
+
+        if let Some(line) = &self.source_line {
+            let indent = "      ";
+            writeln!(f)?;
+            write!(f, "{}{}", indent, line)?;
+            if let (Some(start), Some(end)) = (self.caret_start, self.caret_end) {
+                writeln!(f)?;
+                let mut caret_line = String::new();
+                for _ in 0..indent.len() { caret_line.push(' '); }
+                for _ in 0..start { caret_line.push(' '); }
+                for _ in start..end { caret_line.push('^'); }
+                write!(f, "{}", caret_line)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl std::error::Error for AplError {}
+
 /// Convenient Result alias used throughout the crate.
 pub type AplResult<T> = Result<T, ErrorCode>;
