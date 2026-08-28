@@ -8,6 +8,7 @@
 //! shared axis; the reduction reuses `operators::reduce`, so an empty
 //! contraction axis falls back to `f`'s identity value.
 
+use crate::cell::Cell;
 use crate::functions::Prim;
 use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
@@ -40,30 +41,67 @@ pub fn inner_product(a: &ValueP, f: Prim, g: Prim, b: &ValueP) -> AplResult<Valu
     let acells = a.cells();
     let bcells = b.cells();
 
-    let mut out = Vec::with_capacity(pa * pb);
-    for i in 0..pa {
-        for j in 0..pb {
-            // gather the shared-axis pairings and apply g elementwise
-            let mut pair = Vec::with_capacity(n as usize);
-            for k in 0..n as usize {
-                let av =
-                    ValueP::from_parts(Shape::scalar(), vec![acells[i * n as usize + k].clone()])
-                        .map_err(|_| ErrorCode::DomainError)?;
-                let bv = ValueP::from_parts(Shape::scalar(), vec![bcells[k * pb + j].clone()])
+    let out: Vec<Cell> = if pa * pb >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..pa * pb)
+            .into_par_iter()
+            .map(|idx| {
+                let i = idx / pb;
+                let j = idx % pb;
+                let mut pair = Vec::with_capacity(n as usize);
+                for k in 0..n as usize {
+                    let av = ValueP::from_parts(
+                        Shape::scalar(),
+                        vec![acells[i * n as usize + k].clone()],
+                    )
                     .map_err(|_| ErrorCode::DomainError)?;
-                let r = g.eval_dyadic(&av, &bv)?;
-                if r.is_scalar() {
-                    pair.push(r.first_cell().expect("scalar has a cell").clone());
-                } else {
-                    // non-scalar g result cannot be contracted
-                    return Err(ErrorCode::DomainError);
+                    let bv = ValueP::from_parts(
+                        Shape::scalar(),
+                        vec![bcells[k * pb + j].clone()],
+                    )
+                    .map_err(|_| ErrorCode::DomainError)?;
+                    let r = g.eval_dyadic(&av, &bv)?;
+                    if r.is_scalar() {
+                        pair.push(r.first_cell().expect("scalar has a cell").clone());
+                    } else {
+                        return Err(ErrorCode::DomainError);
+                    }
                 }
+                let tmp = ValueP::from_parts(Shape::vector(n), pair)?;
+                let red = crate::operators::reduce(f, &tmp)?;
+                Ok(red.first_cell().ok_or(ErrorCode::DomainError)?.clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(pa * pb);
+        for i in 0..pa {
+            for j in 0..pb {
+                let mut pair = Vec::with_capacity(n as usize);
+                for k in 0..n as usize {
+                    let av = ValueP::from_parts(
+                        Shape::scalar(),
+                        vec![acells[i * n as usize + k].clone()],
+                    )
+                    .map_err(|_| ErrorCode::DomainError)?;
+                    let bv = ValueP::from_parts(
+                        Shape::scalar(),
+                        vec![bcells[k * pb + j].clone()],
+                    )
+                    .map_err(|_| ErrorCode::DomainError)?;
+                    let r = g.eval_dyadic(&av, &bv)?;
+                    if r.is_scalar() {
+                        pair.push(r.first_cell().expect("scalar has a cell").clone());
+                    } else {
+                        return Err(ErrorCode::DomainError);
+                    }
+                }
+                let tmp = ValueP::from_parts(Shape::vector(n), pair)?;
+                let red = crate::operators::reduce(f, &tmp)?;
+                out.push(red.first_cell().ok_or(ErrorCode::DomainError)?.clone());
             }
-            let tmp = ValueP::from_parts(Shape::vector(n), pair)?;
-            let red = crate::operators::reduce(f, &tmp)?;
-            out.push(red.first_cell().ok_or(ErrorCode::DomainError)?.clone());
         }
-    }
+        out
+    };
 
     // result shape: A's leading axes ++ B's trailing axes
     let mut rdims: Vec<i64> = adims[..adims.len() - 1].to_vec();
