@@ -109,7 +109,7 @@ The C++ class hierarchy becomes a set of focused Rust modules, one concern per f
 
 ## Status
 
-See `META-INF/PROGRESS-20260824.md` for the detailed session log and the current task queue. The rewrite is a working interpreter, not yet a complete GNU APL replacement — dfns `{}`, full ⎕-system, complex numbers, and libapl embedding remain future work.
+See `META-INF/PROGRESS-20260828.md` for the detailed session log. The rewrite is a working interpreter with 564 tests, 375/375 differential agreement with GNU APL, and a libapl C embedding API. Remaining future work: dfns `{}`, full ⎕-system, complex numbers, and tokenizer spans for caret display.
 
 ## License
 
