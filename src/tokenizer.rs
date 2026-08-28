@@ -47,6 +47,8 @@ pub enum Tok {
     /// power operator `f⍣N` — apply f N times; the operand is either a
     /// primitive or a named function (resolved at parse time)
     PowerOp(PowerFn),
+    /// over operator `f⍥g` — Dyalog "over" (compose f after g)
+    Over,
     /// assignment arrow ←
     Assign,
     /// left parenthesis
@@ -470,6 +472,12 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                     // zilde: ⍬ — the empty numeric vector
                     if rest.starts_with('⍬') {
                         toks.push(Tok::Zilde);
+                        i += 1;
+                        continue;
+                    }
+                    // over: ⍥ — Dyalog "over" operator (f⍥g)
+                    if rest.starts_with('⍥') {
+                        toks.push(Tok::Over);
                         i += 1;
                         continue;
                     }
