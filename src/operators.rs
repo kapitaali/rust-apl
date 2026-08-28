@@ -204,15 +204,29 @@ pub fn reduce_first(lo: Prim, b: &ValueP) -> AplResult<ValueP> {
 
     let cells = b.cells();
     // result: inner cells, each folded down the column
-    let mut out = Vec::with_capacity(inner as usize);
-    for k in 0..inner as usize {
-        // column elements are at k, k+inner, k+2*inner, ... (row-major)
-        let mut acc = cells[(m as usize - 1) * inner as usize + k].clone();
-        for r in (0..m as usize - 1).rev() {
-            acc = apply_prim(lo, &cells[r * inner as usize + k], &acc)?;
+    let out: Vec<Cell> = if inner as usize >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..inner as usize)
+            .into_par_iter()
+            .map(|k| {
+                let mut acc = cells[(m as usize - 1) * inner as usize + k].clone();
+                for r in (0..m as usize - 1).rev() {
+                    acc = apply_prim(lo, &cells[r * inner as usize + k], &acc)?;
+                }
+                Ok(acc)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(inner as usize);
+        for k in 0..inner as usize {
+            let mut acc = cells[(m as usize - 1) * inner as usize + k].clone();
+            for r in (0..m as usize - 1).rev() {
+                acc = apply_prim(lo, &cells[r * inner as usize + k], &acc)?;
+            }
+            out.push(acc);
         }
-        out.push(acc);
-    }
+        out
+    };
 
     // drop the first axis
     let dims: Vec<i64> = (1..rank as usize)
