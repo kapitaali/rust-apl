@@ -636,7 +636,26 @@ pub fn bif_power(a: &Cell, b: &Cell) -> AplResult<Cell> {
         _ => {
             let x = a.get_real_value()?;
             let y = b.get_real_value()?;
-            Float(x.powf(y))
+            // Negative base with fractional exponent → complex result
+            // (Rust f64::powf returns NaN here, GNU APL returns complex)
+            if x < 0.0 && y.fract() != 0.0 {
+                let cx = APLComplex::new(x, 0.0);
+                let cy = APLComplex::new(y, 0.0);
+                let mag_sq = cx.re * cx.re + cx.im * cx.im;
+                let ln_x = APLComplex::new(mag_sq.sqrt().ln(), cx.im.atan2(cx.re));
+                let yln = cy * ln_x;
+                let m = yln.re.exp();
+                let re = m * yln.im.cos();
+                let im = m * yln.im.sin();
+                // Round very small real/imag parts to zero to match GNU APL
+                let eps = 1e-15;
+                Complex(APLComplex::new(
+                    if re.abs() < eps { 0.0 } else { re },
+                    if im.abs() < eps { 0.0 } else { im },
+                ))
+            } else {
+                Float(x.powf(y))
+            }
         }
     })
 }
