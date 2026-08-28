@@ -148,10 +148,10 @@ pub enum Expr {
     KeyDyad(Box<Expr>, Box<Expr>),
     /// monadic operator: (f⍥g)B — over: f(g(B)) (Dyalog extension)
     #[cfg(feature = "unofficial-ext")]
-    OverMonad(Box<Expr>, Box<Expr>, Box<Expr>),
+    OverMonad(Prim, Prim, Box<Expr>),
     /// dyadic operator: A(f⍥g)B — over: f(g(A),g(B)) (Dyalog extension)
     #[cfg(feature = "unofficial-ext")]
-    OverDyad(Box<Expr>, Box<Expr>, Box<Expr>, Box<Expr>),
+    OverDyad(Prim, Prim, Box<Expr>, Box<Expr>),
 }
 
 /// compile a dfn body expression into an anonymous DefinedFunction whose
@@ -356,7 +356,7 @@ fn read_rank_list(toks: &[Tok]) -> AplResult<(i64, i64, usize)> {
 
 /// Parse `(f⍥g)` from tokens starting at `(`. Returns (f, g, tokens_consumed).
 #[cfg(feature = "unofficial-ext")]
-fn parse_over_operator(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)> {
+fn parse_over_operator(toks: &[Tok]) -> AplResult<(Prim, Prim, usize)> {
     // Expected: LParen, f, Over, g, RParen
     if !matches!(toks.first(), Some(Tok::LParen)) {
         return Err(ErrorCode::SyntaxError);
@@ -374,7 +374,15 @@ fn parse_over_operator(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)>
                     let over_idx = over_pos.unwrap();
                     let (f_expr, _) = parse_simple(&toks[1..over_idx])?;
                     let (g_expr, _) = parse_simple(&toks[over_idx + 1..i])?;
-                    return Ok((Box::new(f_expr), Box::new(g_expr), i + 1));
+                    let f = match f_expr {
+                        Expr::Monadic(p, _) => p,
+                        _ => return Err(ErrorCode::SyntaxError),
+                    };
+                    let g = match g_expr {
+                        Expr::Monadic(p, _) => p,
+                        _ => return Err(ErrorCode::SyntaxError),
+                    };
+                    return Ok((f, g, i + 1));
                 }
             }
             Tok::Prim(Prim::Over) if depth == 1 && over_pos.is_none() => {
@@ -388,7 +396,7 @@ fn parse_over_operator(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)>
 
 /// Parse `f⍥g` (without parens) — simplified form for monadic use.
 #[cfg(feature = "unofficial-ext")]
-fn parse_over_operator_simple(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)> {
+fn parse_over_operator_simple(toks: &[Tok]) -> AplResult<(Prim, Prim, usize)> {
     // Expected: LParen, f, Over, g, RParen
     parse_over_operator(toks)
 }
@@ -721,11 +729,28 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     #[cfg(feature = "unofficial-ext")]
     if let (Some(Tok::LParen), Some(Tok::Prim(Prim::Over))) = (toks.get(used), toks.get(used + 1)) {
         // Parse f⍥g inside parens
-        if let Ok((f_expr, g_expr, consumed)) = parse_over_operator(&toks[used..]) {
+        if let Ok((f_p, g_p, consumed)) = parse_over_operator(&toks[used..]) {
             let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
             used += consumed + rused;
             return Ok((
-                Expr::OverDyad(f_expr, g_expr, Box::new(lhs), Box::new(rhs)),
+                Expr::OverDyad(f_p, g_p, Box::new(lhs), Box::new(rhs)),
+                used,
+            ));
+        }
+    }
+
+    // dyadic over: A f⍥g B — check before normal dyadic dispatch
+    #[cfg(feature = "unofficial-ext")]
+    if let (Some(Tok::Prim(f_p)), Some(Tok::Over)) = (toks.get(used), toks.get(used + 1)) {
+        let f = *f_p;
+        // Next should be Prim(g)
+        if let Some(Tok::Prim(g_p)) = toks.get(used + 2) {
+            let g = *g_p;
+            // B is the rest after g
+            let (b, rused) = parse_simple(&toks[used + 3..])?;
+            used += 3 + rused;
+            return Ok((
+                Expr::OverDyad(*f_p, *g_p, Box::new(lhs), Box::new(b)),
                 used,
             ));
         }
@@ -2845,9 +2870,9 @@ impl Environment {
                 crate::key::key_dyad(&av, &bv)
             }
             #[cfg(feature = "unofficial-ext")]
-            Expr::OverMonad(f, g, b) => crate::over::over_monadic(f, g, b, self),
+            Expr::OverMonad(f, g, b) => crate::over::over_monadic(*f, *g, b, self),
             #[cfg(feature = "unofficial-ext")]
-            Expr::OverDyad(f, g, a, b) => crate::over::over_dyad(f, g, a, b, self),
+            Expr::OverDyad(f, g, a, b) => crate::over::over_dyad(*f, *g, a, b, self),
             Expr::RankOp(p, k, b) => {
                 // (f⍤k)B — f applied to each rank-k cell.
                 // Route through eval_monadic_io so ⎕IO-sensitive primitives
