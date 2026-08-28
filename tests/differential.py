@@ -389,6 +389,10 @@ CASES = [
     ("○", "¯7○0.5"),
     ("⍸dy", "1 2 3⍸0.5 1.5 2.5 3.5"),
     ("⍸dy", "1 2 3⍸1 2 3"),
+    # ══ NEW: nested strand with mixed simple/nested items ═══════════════
+    ("nstr", "≢,(1 2)(3 (4 5))"),
+    ("nstr", "⍴(1 2)(3 (4 5))"),
+    ("nstr", "≡(1 2)(3 (4 5))"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")

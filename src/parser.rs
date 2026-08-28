@@ -1094,8 +1094,14 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 used += 1;
             }
             Tok::LParen => {
+                // Check if this paren group is a derived function (e.g. (f⍤k))
+                // which should NOT be consumed as a strand element — let
+                // parse_simple handle the A (F⍤kl kr) B pattern
+                if matches!(toks.get(used + 1), Some(Tok::Rank(_))) {
+                    break;
+                }
                 // paren group as a strand element: 3 (4 5) → 2-element nested vector
-                let (e, gu) = parse_strand(&toks[used + 1..])?;
+                let (e, gu) = parse_term(&toks[used + 1..])?;
                 if !matches!(toks.get(used + 1 + gu), Some(Tok::RParen)) {
                     return Err(ErrorCode::SyntaxError);
                 }
