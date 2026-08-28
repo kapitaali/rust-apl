@@ -73,6 +73,12 @@ pub enum Prim {
     Execute,   // ⍎ — monadic: evaluate a character vector as APL
     Find,      // ⍷ — dyadic: A⍷B locates occurrences of A within B
     Partition, // ⊆ — dyadic: A⊆B groups items of B into partitions
+    /// ⌸ (U+2328) — Key (Dyalog, NOT GNU APL)
+    #[cfg(feature = "unofficial-ext")]
+    Key,
+    /// ⍥ (U+2365) — Over (Dyalog, NOT GNU APL)
+    #[cfg(feature = "unofficial-ext")]
+    Over,
 }
 
 impl Prim {
@@ -131,6 +137,10 @@ impl Prim {
             ">" => Prim::Greater,
             "≠" => Prim::NotEqual,
             "→" => Prim::Branch,
+            #[cfg(feature = "unofficial-ext")]
+            "⌸" => Prim::Key,
+            #[cfg(feature = "unofficial-ext")]
+            "⍥" => Prim::Over,
             _ => return None,
         })
     }

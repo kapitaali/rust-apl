@@ -121,6 +121,10 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⍎", Prim::Execute),
     ("⍷", Prim::Find),
     ("⊆", Prim::Partition),
+    #[cfg(feature = "unofficial-ext")]
+    ("⌸", Prim::Key),
+    #[cfg(feature = "unofficial-ext")]
+    ("⍥", Prim::Over),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
     ("⌽", Prim::Reverse),

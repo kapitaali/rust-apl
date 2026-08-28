@@ -72,6 +72,10 @@ fn prim_symbol(p: Prim) -> &'static str {
         Prim::Execute => "⍎",
         Prim::Find => "⍷",
         Prim::Partition => "⊆",
+        #[cfg(feature = "unofficial-ext")]
+        Prim::Key => "⌸",
+        #[cfg(feature = "unofficial-ext")]
+        Prim::Over => "⍥",
         _ => "?",
     }
 }
