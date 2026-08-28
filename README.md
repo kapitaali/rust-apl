@@ -2,7 +2,7 @@
 
 An experimental rewrite of the [GNU APL](https://www.gnu.org/software/apl/) interpreter in Rust. A from-scratch reimplementation of the C++ interpreter that powers GNU APL 1.7+ (ISO/IEC 13751), following a phased migration of the original class hierarchy into idiomatic Rust.
 
-Phase 1–6+ of the migration are substantially complete: a working REPL with **221 tests passing**, zero clippy warnings, release build verified.
+Phase 1–9 of the migration are substantially complete: a working REPL with **564 tests passing**, clippy clean, release build verified. Unofficial extensions (⌸ Key, ⍥ Over) available via `--features unofficial-ext`.
 
 ## What works
 
@@ -35,6 +35,30 @@ $ ./target/release/apl
 ```
 
 Supported primitives: `+ - × ÷ ⋆ ○ ! ⌈ ⌊ ∣ ⍳ ⍴ ↑ ↓ ⌽ ⍉ ⍋ ⍒ ∈ ⊂ ⊃ ≡ ≤ < = ≥ > ≠ → ⌹ ∧ ∨` (monadic and/or dyadic where meaningful), operators reduce `/`, scan `\`, each `¨`, outer product `∘.`, inner product `f.g`, commute `⍨`, axis-specified `F[n]`, defined functions `∇` with `:If/:Else/:While/:Repeat/:Until/:Leave` control structures and `→` branching, system commands `)VARS )FNS )CLEAR )SAVE )LOAD )OFF`, bracket indexing `B[i]` honoring `⎕IO`, and workspace persistence.
+
+### Unofficial extensions (Dyalog-compatible)
+
+Enable with `--features unofficial-ext`:
+
+```sh
+cargo build --release --features unofficial-ext
+./target/release/apl
+      ⌸1 2 1 3 2        ⍝ Key: group unique elements + indices
+      1 ┏→━━┓
+      2 ┏→┓
+      3 ┏→┓
+      (×⍥⌈) 3.7          ⍝ Over: f(g(B))
+      1
+      2 (+⍥÷) 4 6        ⍝ Dyadic Over: f(g(A), g(B))
+      0.75  0.6666666667
+```
+
+| Glyph | Name | Not in GNU APL |
+|---|---|---|
+| `⌸` (U+2328) | Key | Dyalog APL |
+| `⍥` (U+2365) | Over (compose) | Dyalog APL |
+
+These primitives live in `src/key.rs` and `src/over.rs`, gated by `#[cfg(feature = "unofficial-ext")]` throughout `src/functions.rs`, `src/tokenizer.rs`, `src/parser.rs`, and `src/lib.rs`. The core crate is 100% GNU APL compatible when the feature is off.
 
 ## Building
 

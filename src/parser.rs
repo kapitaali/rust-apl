@@ -710,15 +710,13 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     // dyadic over: A (f⍥g) B — over operator.
     // Token pattern after lhs: LParen Prim(f) Prim(Over) Prim(g) RParen
     #[cfg(feature = "unofficial-ext")]
-    if let Some(Tok::LParen) = toks.get(used) {
-        if let Ok((f_p, g_p, consumed)) = parse_over_operator(&toks[used..]) {
-            let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
-            used += consumed + rused;
-            return Ok((
-                Expr::OverDyad(f_p, g_p, Box::new(lhs), Box::new(rhs)),
-                used,
-            ));
-        }
+    if let Ok((f_p, g_p, consumed)) = parse_over_operator(&toks[used..]) {
+        let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
+        used += consumed + rused;
+        return Ok((
+            Expr::OverDyad(f_p, g_p, Box::new(lhs), Box::new(rhs)),
+            used,
+        ));
     }
 
     // dyadic over: A f⍥g B — check before normal dyadic dispatch
@@ -1082,6 +1080,8 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 match toks.get(total + 1) {
                     Some(Tok::Rank(_)) | Some(Tok::Each(_)) | Some(Tok::Reduce(_))
                     | Some(Tok::Scan(_)) | Some(Tok::Scan1(_)) => return Ok((e, total)),
+                    #[cfg(feature = "unofficial-ext")]
+                    Some(Tok::Prim(Prim::Over)) => return Ok((e, total)),
                     _ => {}
                 }
                 return parse_nested_strand_from(toks, vec![(e, total)]);
@@ -1229,6 +1229,13 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 // parse_simple handle the A (F⍤kl kr) B pattern
                 if matches!(toks.get(used + 1), Some(Tok::Rank(_))) {
                     break;
+                }
+                // Also check for `(f⍥g)` pattern — dyadic over operator
+                #[cfg(feature = "unofficial-ext")]
+                if let Some(Tok::Prim(_)) = toks.get(used + 1) {
+                    if matches!(toks.get(used + 2), Some(Tok::Prim(Prim::Over))) {
+                        break;
+                    }
                 }
                 // paren group as a strand element: 3 (4 5) → 2-element nested vector
                 let (e, gu) = parse_term(&toks[used + 1..])?;
