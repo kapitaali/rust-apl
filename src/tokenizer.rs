@@ -47,8 +47,6 @@ pub enum Tok {
     /// power operator `f⍣N` — apply f N times; the operand is either a
     /// primitive or a named function (resolved at parse time)
     PowerOp(PowerFn),
-    /// over operator `f⍥g` — Dyalog "over" (compose f after g)
-    Over,
     /// assignment arrow ←
     Assign,
     /// left parenthesis
@@ -125,8 +123,6 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("⊆", Prim::Partition),
     #[cfg(feature = "unofficial-ext")]
     ("⌸", Prim::Key),
-    #[cfg(feature = "unofficial-ext")]
-    ("⍥", Prim::Over),
     ("↑", Prim::Take),
     ("↓", Prim::Drop),
     ("⌽", Prim::Reverse),
@@ -477,7 +473,7 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                     }
                     // over: ⍥ — Dyalog "over" operator (f⍥g)
                     if rest.starts_with('⍥') {
-                        toks.push(Tok::Over);
+                        toks.push(Tok::Prim(crate::functions::Prim::Over));
                         i += 1;
                         continue;
                     }

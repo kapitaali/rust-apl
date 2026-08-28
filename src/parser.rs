@@ -357,38 +357,20 @@ fn read_rank_list(toks: &[Tok]) -> AplResult<(i64, i64, usize)> {
 /// Parse `(f⍥g)` from tokens starting at `(`. Returns (f, g, tokens_consumed).
 #[cfg(feature = "unofficial-ext")]
 fn parse_over_operator(toks: &[Tok]) -> AplResult<(Prim, Prim, usize)> {
-    // Expected: LParen, f, Over, g, RParen
+    // Expected: LParen, Prim(f), Prim(Over), Prim(g), RParen
+    if toks.len() < 5 {
+        return Err(ErrorCode::SyntaxError);
+    }
     if !matches!(toks.first(), Some(Tok::LParen)) {
         return Err(ErrorCode::SyntaxError);
     }
-    // Find the Over token
-    let mut depth = 0;
-    let mut over_pos = None;
-    for (i, t) in toks.iter().enumerate() {
-        match t {
-            Tok::LParen => depth += 1,
-            Tok::RParen => {
-                depth -= 1;
-                if depth == 0 && over_pos.is_some() {
-                    // Found matching close paren after Over
-                    let over_idx = over_pos.unwrap();
-                    let (f_expr, _) = parse_simple(&toks[1..over_idx])?;
-                    let (g_expr, _) = parse_simple(&toks[over_idx + 1..i])?;
-                    let f = match f_expr {
-                        Expr::Monadic(p, _) => p,
-                        _ => return Err(ErrorCode::SyntaxError),
-                    };
-                    let g = match g_expr {
-                        Expr::Monadic(p, _) => p,
-                        _ => return Err(ErrorCode::SyntaxError),
-                    };
-                    return Ok((f, g, i + 1));
+    if let Some(Tok::Prim(f_p)) = toks.get(1) {
+        if matches!(toks.get(2), Some(Tok::Prim(Prim::Over))) {
+            if let Some(Tok::Prim(g_p)) = toks.get(3) {
+                if matches!(toks.get(4), Some(Tok::RParen)) {
+                    return Ok((*f_p, *g_p, 5));
                 }
             }
-            Tok::Prim(Prim::Over) if depth == 1 && over_pos.is_none() => {
-                over_pos = Some(i);
-            }
-            _ => {}
         }
     }
     Err(ErrorCode::SyntaxError)
@@ -726,9 +708,9 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     }
 
     // dyadic over: A (f⍥g) B — over operator.
+    // Token pattern after lhs: LParen Prim(f) Prim(Over) Prim(g) RParen
     #[cfg(feature = "unofficial-ext")]
-    if let (Some(Tok::LParen), Some(Tok::Prim(Prim::Over))) = (toks.get(used), toks.get(used + 1)) {
-        // Parse f⍥g inside parens
+    if let Some(Tok::LParen) = toks.get(used) {
         if let Ok((f_p, g_p, consumed)) = parse_over_operator(&toks[used..]) {
             let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
             used += consumed + rused;
@@ -740,8 +722,9 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     }
 
     // dyadic over: A f⍥g B — check before normal dyadic dispatch
+    // The tokenizer emits Tok::Prim(Prim::Over) for ⍥
     #[cfg(feature = "unofficial-ext")]
-    if let (Some(Tok::Prim(f_p)), Some(Tok::Over)) = (toks.get(used), toks.get(used + 1)) {
+    if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) = (toks.get(used), toks.get(used + 1)) {
         let f = *f_p;
         // Next should be Prim(g)
         if let Some(Tok::Prim(g_p)) = toks.get(used + 2) {
@@ -750,7 +733,7 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (b, rused) = parse_simple(&toks[used + 3..])?;
             used += 3 + rused;
             return Ok((
-                Expr::OverDyad(*f_p, *g_p, Box::new(lhs), Box::new(b)),
+                Expr::OverDyad(f, *g_p, Box::new(lhs), Box::new(b)),
                 used,
             ));
         }
@@ -1037,6 +1020,22 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
         }
         Tok::LParen => {
+            // Check for `(f⍥g) B` pattern: LParen Prim(f) Over Prim(g) RParen
+            // This is monadic over: f(g(B))
+            #[cfg(feature = "unofficial-ext")]
+            if let (Some(Tok::Prim(f_p)), Some(Tok::Prim(Prim::Over))) = (toks.get(1), toks.get(2)) {
+                if let Some(Tok::Prim(g_p)) = toks.get(3) {
+                    if matches!(toks.get(4), Some(Tok::RParen)) {
+                        let f = *f_p;
+                        let g = *g_p;
+                        let (rhs, rused) = parse_simple(&toks[5..])?;
+                        return Ok((
+                            Expr::OverMonad(f, g, Box::new(rhs)),
+                            5 + rused,
+                        ));
+                    }
+                }
+            }
             // `(F⍤k) B` or `(F⍤kl kr) B` — a parenthesised DERIVED FUNCTION.
             // The rank operator's argument sits after the closing paren, so
             // the inner parse would fail. Detect LParen Rank(p) Num... RParen

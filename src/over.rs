@@ -43,36 +43,9 @@ fn apply_prim_monadic(p: Prim, operand: &crate::parser::Expr, env: &mut Environm
 }
 
 fn apply_prim_val(p: Prim, val: &ValueP) -> AplResult<ValueP> {
-    // Use eval_monadic on the primitive
-    p.eval_monadic(val).map_err(|e| crate::types::AplError::from(e))
+    p.eval_monadic(val)
 }
 
 fn apply_prim_val_dyad(p: Prim, lhs: &ValueP, rhs: &ValueP) -> AplResult<ValueP> {
-    p.eval_dyadic(lhs, rhs).map_err(|e| crate::types::AplError::from(e))
-}
-
-/// Apply an expression (function) to an argument value.
-fn apply_func_val(func: &crate::parser::Expr, arg_val: &ValueP, env: &mut Environment) -> AplResult<ValueP> {
-    match func {
-        crate::parser::Expr::Monadic(p, _) => {
-            // Evaluate the primitive directly on the value
-            let derived = crate::parser::Expr::Monadic(*p, Box::new(crate::parser::Expr::Zilde));
-            // Actually we need to eval the primitive on arg_val
-            // This is a helper - we'll use the primitive's eval methods
-            match p {
-                _ => {
-                    // Use eval_monadic via the env
-                    let operand_expr = crate::parser::Expr::Zilde; // placeholder
-                    let derived = crate::parser::Expr::Monadic(*p, Box::new(operand_expr));
-                    env.eval(&derived)
-                }
-            }
-        }
-        _ => {
-            // For more complex expressions, create a derived function
-            // and evaluate with the argument
-            let derived = crate::parser::Expr::Monadic(Prim::First, Box::new(crate::parser::Expr::Zilde));
-            env.eval(&derived)
-        }
-    }
+    p.eval_dyadic(lhs, rhs)
 }
