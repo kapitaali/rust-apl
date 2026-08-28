@@ -1080,7 +1080,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 /// differ). This handles the left argument of reshape (`2 3⍴⍳6`) and
 /// similar constructs.
 fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
-    // gather consecutive literal atoms (Num / Str)
+    // gather consecutive literal atoms (Num / Str) and paren groups
     let mut items: Vec<Expr> = Vec::new();
     let mut used = 0;
     while let Some(t) = toks.get(used) {
@@ -1092,6 +1092,15 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             Tok::Str(s) => {
                 items.push(Expr::Str(s.clone()));
                 used += 1;
+            }
+            Tok::LParen => {
+                // paren group as a strand element: 3 (4 5) → 2-element nested vector
+                let (e, gu) = parse_strand(&toks[used + 1..])?;
+                if !matches!(toks.get(used + 1 + gu), Some(Tok::RParen)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                items.push(e);
+                used += gu + 2;
             }
             _ => break,
         }
@@ -3956,6 +3965,18 @@ mod tests {
         for (i, e) in expect.iter().enumerate() {
             assert_eq!(r.cells()[i], crate::cell::Cell::Int(*e));
         }
+    }
+
+    #[test]
+    fn test_nested_strand_deep() {
+        // (1 2)(3 (4 5)) — a nested strand with a nested nested array
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let r = eval_one(&mut env, "(1 2)(3 (4 5))");
+        assert_eq!(r.element_count(), 2);
+        // ≡ = 3 (depth of 3 (4 5))
+        let d = crate::depth::depth(&r).unwrap();
+        assert_eq!(d.first_cell().unwrap(), &crate::cell::Cell::Int(3));
     }
 
     #[test]
