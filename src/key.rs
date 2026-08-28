@@ -87,7 +87,79 @@ pub fn key_monadic(b: &ValueP) -> AplResult<ValueP> {
 }
 
 /// Dyadic A⌸B — key with A applied to B first.
-pub fn key_dyad(_a: &ValueP, _b: &ValueP) -> AplResult<ValueP> {
-    // TODO: Apply A to each element of B, then key_monadic
-    Err(ErrorCode::NonceError)
+///
+/// Dyalog semantics: apply the function A to each element of B, then
+/// group the results. A must be a function value (Prim) that can be
+/// applied monadically to each element.
+///
+/// Example: ⍴⌸(1 2)(3 4 5)(6 7) → 2 ⟨1 3⟩ ⋄ 3 ⟨2⟩
+pub fn key_dyad(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+    let elems = b.cells();
+    if elems.is_empty() {
+        return Ok(ValueP::int_vector(&[]));
+    }
+
+    // A must be a function value — represented as a single-char scalar
+    // whose codepoint matches a Prim glyph. This is a simplified approach:
+    // in a full implementation, A⌸B would require a proper function table
+    // lookup or a callback mechanism.
+    // For now, we require A to be a Char scalar representing a known Prim.
+    if !a.is_scalar() {
+        return Err(ErrorCode::DomainError);
+    }
+
+    let glyph = a.first_cell().unwrap().get_char_value().map_err(|_| ErrorCode::DomainError)?;
+
+    // Map glyph to Prim — only include variants that exist in the enum
+    let prim = match glyph {
+        c if c == '⍴' as u32 => Some(crate::functions::Prim::Rho),
+        c if c == '⍳' as u32 => Some(crate::functions::Prim::Iota),
+        c if c == '⍕' as u32 => Some(crate::functions::Prim::Format),
+        c if c == '≡' as u32 => Some(crate::functions::Prim::Depth),
+        c if c == '⌊' as u32 => Some(crate::functions::Prim::Floor),
+        c if c == '⌈' as u32 => Some(crate::functions::Prim::Ceiling),
+        c if c == '∣' as u32 => Some(crate::functions::Prim::Magnitude),
+        c if c == '⊣' as u32 => Some(crate::functions::Prim::Left),
+        c if c == '⊢' as u32 => Some(crate::functions::Prim::Right),
+        _ => None,
+    };
+
+    let prim = match prim {
+        Some(p) => p,
+        None => return Err(ErrorCode::DomainError),
+    };
+
+    // Apply prim monadically to each element of B
+    let mut transformed: Vec<crate::cell::Cell> = Vec::with_capacity(elems.len());
+    for elem in elems {
+        match elem {
+            crate::cell::Cell::Pointer(p) => {
+                let val = ValueP { inner: p.value.clone() };
+                let result = prim.eval_monadic(&val)?;
+                if result.is_scalar() {
+                    transformed.push(result.first_cell().unwrap().clone());
+                } else {
+                    // For non-scalar results, keep as pointer
+                    transformed.push(Cell::pointer(result.inner.clone()));
+                }
+            }
+            _ => {
+                let val = ValueP::scalar_from(elem.clone());
+                let result = prim.eval_monadic(&val)?;
+                if result.is_scalar() {
+                    transformed.push(result.first_cell().unwrap().clone());
+                } else {
+                    transformed.push(Cell::pointer(result.inner.clone()));
+                }
+            }
+        }
+    }
+
+    // Build a ValueP from the transformed cells, then key_monadic
+    let transformed_vp = ValueP::from_parts(
+        crate::shape::Shape::vector(transformed.len() as i64),
+        transformed,
+    )?;
+
+    key_monadic(&transformed_vp)
 }

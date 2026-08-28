@@ -7,7 +7,6 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 #![allow(unused)]
-#![allow(missing_const_for_thread_local)]
 
 use std::cell::RefCell;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -704,34 +703,75 @@ pub unsafe extern "C" fn install_get_line_from_user_cb(
 //═══════════════════════════════════════════════════════════════════════════════
 
 /// Evaluate a function niladically.
-/// The function pointer is treated as a Prim enum value cast to a pointer.
+/// The function pointer is a leaked CString (function name) from `get_function_ucs`.
 #[no_mangle]
 pub unsafe extern "C" fn eval__fun(fun: *const c_void) -> *mut APLValue {
     if fun.is_null() {
         return ptr::null_mut();
     }
-    // Cast the void* back to a Prim value (stored as usize)
-    let prim_val = fun as usize;
-    // We need to reconstruct the Prim from its discriminant.
-    // For now, return null — this requires a proper function table lookup.
-    let _ = prim_val;
-    ptr::null_mut()
+    // Recover the function name from the leaked CString
+    let name = fun as *const c_char;
+    let name = CStr::from_ptr(name);
+    let name = match name.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    GLOBAL_ENV.with(|env| {
+        let mut env = env.borrow_mut();
+        let env = env.as_mut().unwrap();
+        // Try primitive first
+        if let Some(prim) = crate::functions::Prim::from_symbol(name) {
+            // Niladic primitive call — most primitives need at least one arg
+            // Return null for now
+            return ptr::null_mut();
+        }
+        // Defined function call
+        let expr = crate::parser::Expr::FuncCallMono(name.to_string(), None);
+        match env.eval(&expr) {
+            Ok(v) => Box::into_raw(Box::new(APLValue { inner: v })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// Evaluate a function monadic: fun B
+/// The function pointer is a leaked CString (function name) from `get_function_ucs`.
 #[no_mangle]
 pub unsafe extern "C" fn eval__fun_B(fun: *const c_void, b: *const APLValue) -> *mut APLValue {
     if fun.is_null() || b.is_null() {
         return ptr::null_mut();
     }
     let b = unsafe { &*b };
-    let prim_val = fun as usize;
-    let _ = prim_val;
-    // TODO: implement proper function evaluation
-    ptr::null_mut()
+    // Recover the function name from the leaked CString
+    let name = fun as *const c_char;
+    let name = CStr::from_ptr(name);
+    let name = match name.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    GLOBAL_ENV.with(|env| {
+        let mut env = env.borrow_mut();
+        let env = env.as_mut().unwrap();
+        // Try primitive first
+        if let Some(prim) = crate::functions::Prim::from_symbol(name) {
+            return match prim.eval_monadic(&b.inner) {
+                Ok(v) => Box::into_raw(Box::new(APLValue { inner: v })),
+                Err(_) => ptr::null_mut(),
+            };
+        }
+        // Defined function call
+        env.set("__libapl_b__", b.inner.clone());
+        let b_expr = crate::parser::Expr::Var("__libapl_b__".to_string());
+        let expr = crate::parser::Expr::FuncCallMono(name.to_string(), Some(Box::new(b_expr)));
+        match env.eval(&expr) {
+            Ok(v) => Box::into_raw(Box::new(APLValue { inner: v })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// Evaluate a function dyadic: A fun B
+/// The function pointer is a leaked CString (function name) from `get_function_ucs`.
 #[no_mangle]
 pub unsafe extern "C" fn eval__A_fun_B(
     a: *const APLValue,
@@ -743,10 +783,36 @@ pub unsafe extern "C" fn eval__A_fun_B(
     }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
-    let prim_val = fun as usize;
-    let _ = (a, b, prim_val);
-    // TODO: implement proper function evaluation
-    ptr::null_mut()
+    // Recover the function name from the leaked CString
+    let name = fun as *const c_char;
+    let name = CStr::from_ptr(name);
+    let name = match name.to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    GLOBAL_ENV.with(|env| {
+        let mut env = env.borrow_mut();
+        let env = env.as_mut().unwrap();
+        // Try primitive first
+        if let Some(prim) = crate::functions::Prim::from_symbol(name) {
+            return match prim.eval_dyadic(&a.inner, &b.inner) {
+                Ok(v) => Box::into_raw(Box::new(APLValue { inner: v })),
+                Err(_) => ptr::null_mut(),
+            };
+        }
+        // Defined function call
+        env.set("__libapl_a__", a.inner.clone());
+        env.set("__libapl_b__", b.inner.clone());
+        let expr = crate::parser::Expr::FuncCallDyad(
+            name.to_string(),
+            Box::new(crate::parser::Expr::Var("__libapl_a__".to_string())),
+            Box::new(crate::parser::Expr::Var("__libapl_b__".to_string())),
+        );
+        match env.eval(&expr) {
+            Ok(v) => Box::into_raw(Box::new(APLValue { inner: v })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 //═══════════════════════════════════════════════════════════════════════════════
@@ -763,9 +829,36 @@ pub unsafe extern "C" fn get_owner_count(val: *const APLValue) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn get_function_ucs(
-    _name: *const u32,
-    _L: *mut *const c_void,
-    _R: *mut *const c_void,
+    name: *const u32,
+    _l: *mut *const c_void,
+    _r: *mut *const c_void,
 ) -> *const c_void {
-    ptr::null()
+    if name.is_null() {
+        return ptr::null();
+    }
+    // Read the UCS-4 name string
+    let mut len = 0;
+    while *name.add(len) != 0 {
+        len += 1;
+    }
+    let slice = std::slice::from_raw_parts(name, len);
+    // Convert to Rust String
+    let s: String = slice.iter().filter_map(|&c| std::char::from_u32(c)).collect();
+    // Check if it's a valid function name
+    GLOBAL_ENV.with(|env| {
+        let env = env.borrow();
+        let env = env.as_ref().unwrap();
+        // Check if it's a defined function
+        if env.funcs.get(&s).is_some() {
+            // Return a leaked CString as the function handle
+            let c_string = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+            return c_string.into_raw() as *const c_void;
+        }
+        // Check if it's a primitive
+        if crate::functions::Prim::from_symbol(&s).is_some() {
+            let c_string = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+            return c_string.into_raw() as *const c_void;
+        }
+        ptr::null()
+    })
 }

@@ -26,3 +26,25 @@ impl AplExtension for UnofficialExt {
 }
 
 apl_extension!(|| Box::new(UnofficialExt));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unofficial_ext_name() {
+        let ext = UnofficialExt;
+        assert_eq!(ext.name(), "unofficial");
+    }
+
+    #[test]
+    fn test_unofficial_ext_register_does_not_panic() {
+        let ext = UnofficialExt;
+        let mut reg = Registrar::new();
+        ext.register(&mut reg);
+        // register() should not panic and should produce no entries
+        // (the actual registration happens in the interpreter core)
+        let entries = reg.into_entries();
+        assert_eq!(entries.len(), 0);
+    }
+}
