@@ -3,6 +3,9 @@ name = "apl"
 version = "2.0.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "lib"]
+
 [workspace]
 members = ["crates/apl-ext", "crates/demo-plugin", "crates/apl-java", "crates/apl-unofficial"]
 
@@ -10,6 +13,7 @@ members = ["crates/apl-ext", "crates/demo-plugin", "crates/apl-java", "crates/ap
 rayon = "1.10"
 smallvec = { version = "1.13", features = ["union"] }
 libloading = "0.8"
+libc = "0.2"
 rand = "0.8"
 apl-ext = { path = "crates/apl-ext" }
 apl-unofficial = { path = "crates/apl-unofficial", optional = true }

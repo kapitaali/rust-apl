@@ -4,6 +4,7 @@
 
 pub mod cabi;
 pub mod exchange;
+pub mod libapl;
 pub mod loader;
 pub mod nadecl;
 pub mod plugin;
