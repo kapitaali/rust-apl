@@ -393,6 +393,17 @@ CASES = [
     ("nstr", "≢,(1 2)(3 (4 5))"),
     ("nstr", "⍴(1 2)(3 (4 5))"),
     ("nstr", "≡(1 2)(3 (4 5))"),
+    # ══ NEW: parallel structural ops (catenate, take, drop, squad, reverse/rotate first) ═══
+    ("cat", "⍴(2 3⍴⍳6),2 3⍴⍳6"),
+    ("cat", ",(2 3⍴⍳6),2 3⍴⍳6"),
+    ("⍪r2", "⍴(2 3⍴⍳6)⍪2 3⍴⍳6"),
+    ("↑r2", "⍴3 4↑2 3⍴⍳6"),
+    ("↑r2", ",¯2 ¯2↑2 3⍴⍳6"),
+    ("↓r2", "⍴2 2↓2 3⍴⍳6"),
+    ("↓r2", ",1 1↓2 3⍴⍳6"),
+    ("⊖r2", ",⊖2 3⍴⍳6"),
+    ("⊖r2", "⍴⊖2 3⍴⍳6"),
+    ("⊖r2", ",1⊖2 3⍴⍳6"),
 ]
 
 NOISE = ("GNU APL", "Enter APL", "end-of-input", "end of input", "Goodbye")
