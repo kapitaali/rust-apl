@@ -1,0 +1,8 @@
+[package]
+name = "apl-unofficial"
+version = "0.1.0"
+edition = "2021"
+description = "Unofficial APL extensions (key, over) for rust-apl"
+
+[dependencies]
+apl-ext = { path = "../apl-ext" }
