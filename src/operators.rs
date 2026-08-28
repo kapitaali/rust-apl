@@ -333,45 +333,65 @@ pub fn each_dyad(lo: Prim, a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         return Err(ErrorCode::LengthError);
     }
 
+    let a_cells = a.cells();
+    let b_cells = b.cells();
+
     let out_ravel: Vec<Cell> = if len as usize >= crate::functions::PARALLEL_THRESHOLD {
         use rayon::prelude::*;
-        let acells = a.cells();
-        let bcells = b.cells();
         (0..len as usize)
             .into_par_iter()
             .map(|i| {
-                let ca = scalar_of_arr(&acells, i % ac.max(1) as usize);
-                let cb = scalar_of_arr(&bcells, i % bc.max(1) as usize);
-                let result = crate::operators::apply_prim_pub(
-                    lo,
-                    ca.first_cell().unwrap(),
-                    cb.first_cell().unwrap(),
-                )?;
-                Ok(Cell::Pointer(crate::cell::PointerCellData {
-                    value: std::sync::Arc::new(crate::value::ValueInner::new(
-                        Shape::scalar(),
-                        vec![result],
-                    )),
-                }))
+                let ai = i % ac.max(1) as usize;
+                let bi = i % bc.max(1) as usize;
+                let ca = &a_cells[ai];
+                let cb = &b_cells[bi];
+                // If both cells are simple scalars, return result directly
+                if !ca.is_pointer_cell() && !cb.is_pointer_cell() {
+                    let result = crate::operators::apply_prim_pub(lo, ca, cb)?;
+                    Ok(result)
+                } else {
+                    let ca_v = scalar_of_arr(&a_cells, ai);
+                    let cb_v = scalar_of_arr(&b_cells, bi);
+                    let result = crate::operators::apply_prim_pub(
+                        lo,
+                        ca_v.first_cell().unwrap(),
+                        cb_v.first_cell().unwrap(),
+                    )?;
+                    Ok(Cell::Pointer(crate::cell::PointerCellData {
+                        value: std::sync::Arc::new(crate::value::ValueInner::new(
+                            Shape::scalar(),
+                            vec![result],
+                        )),
+                    }))
+                }
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
         let mut out_ravel = Vec::with_capacity(len as usize);
         for i in 0..len as usize {
-            let ca = scalar_of(a, i % ac.max(1) as usize);
-            let cb = scalar_of(b, i % bc.max(1) as usize);
-            // reuse the shared dyadic primitive dispatcher from reduce/scan
-            let result = crate::operators::apply_prim_pub(
-                lo,
-                ca.first_cell().unwrap(),
-                cb.first_cell().unwrap(),
-            )?;
-            out_ravel.push(Cell::Pointer(crate::cell::PointerCellData {
-                value: std::sync::Arc::new(crate::value::ValueInner::new(
-                    Shape::scalar(),
-                    vec![result],
-                )),
-            }));
+            let ai = i % ac.max(1) as usize;
+            let bi = i % bc.max(1) as usize;
+            let ca = &a_cells[ai];
+            let cb = &b_cells[bi];
+            // If both cells are simple scalars, return result directly
+            if !ca.is_pointer_cell() && !cb.is_pointer_cell() {
+                let result = crate::operators::apply_prim_pub(lo, ca, cb)?;
+                out_ravel.push(result);
+            } else {
+                let ca_v = scalar_of(a, ai);
+                let cb_v = scalar_of(b, bi);
+                let result = crate::operators::apply_prim_pub(
+                    lo,
+                    ca_v.first_cell().unwrap(),
+                    cb_v.first_cell().unwrap(),
+                )?;
+                out_ravel.push(Cell::Pointer(crate::cell::PointerCellData {
+                    value: std::sync::Arc::new(crate::value::ValueInner::new(
+                        Shape::scalar(),
+                        vec![result],
+                    )),
+                }));
+            }
         }
         out_ravel
     };

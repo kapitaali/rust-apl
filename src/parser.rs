@@ -3516,20 +3516,12 @@ mod tests {
     #[test]
     fn test_each_dyad() {
         let mut env = Environment::new();
-        // 1 +¨ ⍳3 → nested scalars (1) (2) (3)
+        // 1 +¨ ⍳3 → simple scalars (no boxing for simple results)
         let v = eval_one(&mut env, "1+¨⍳3");
         assert_eq!(v.element_count(), 3);
-        for c in v.cells() {
-            assert!(matches!(c, crate::cell::Cell::Pointer(_)));
-        }
-        // disclose and check values
         let expect = [1, 2, 3];
         for (i, e) in expect.iter().enumerate() {
-            let d = match &v.cells()[i] {
-                crate::cell::Cell::Pointer(p) => p.value.clone(),
-                _ => panic!(),
-            };
-            match d.cells().first().unwrap() {
+            match &v.cells()[i] {
                 crate::cell::Cell::Int(x) => assert_eq!(*x, *e),
                 o => panic!("expected int, got {:?}", o),
             }
@@ -3538,16 +3530,12 @@ mod tests {
 
     #[test]
     fn test_each_dyad_vector_vector() {
-        // 10 20 +¨ 1 2 → (11) (22)
+        // 10 20 +¨ 1 2 → simple scalars (11) (22)
         let mut env = Environment::new();
         let v = eval_one(&mut env, "10 20+¨1 2");
         assert_eq!(v.element_count(), 2);
         for (i, e) in [11, 22].iter().enumerate() {
-            let d = match &v.cells()[i] {
-                crate::cell::Cell::Pointer(p) => p.value.clone(),
-                _ => panic!(),
-            };
-            match d.cells().first().unwrap() {
+            match &v.cells()[i] {
                 crate::cell::Cell::Int(x) => assert_eq!(*x, *e),
                 o => panic!("expected int, got {:?}", o),
             }

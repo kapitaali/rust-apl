@@ -404,10 +404,10 @@ CASES = [
     ("⊖r2", ",⊖2 3⍴⍳6"),
     ("⊖r2", "⍴⊖2 3⍴⍳6"),
     ("⊖r2", ",1⊖2 3⍴⍳6"),
-    # ══ NEW: each operator (skip: boxing bug in rust-apl each) ═══════════
-    # ("each", "1 2 3+¨4 5 6"),  # rust-apl boxes each-scalar results
-    # ("each", "1 2 3+¨10"),
-    # ("each", "(1 2 3)¨(4 5 6)"),
+    # ══ NEW: each operator ═════════════════════════════════════════════════
+    ("each", "1 2 3+¨4 5 6"),
+    ("each", "1 2 3+¨10"),
+    ("each", "(1 2 3)¨(4 5 6)"),
     # ══ NEW: scan/reduce on matrix ═══════════════════════════════════════════
     ("mred", "+/2 3⍴⍳6"),
     ("mred", "×/2 3⍴⍳6"),

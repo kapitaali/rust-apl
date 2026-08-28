@@ -171,6 +171,12 @@ impl ValueP {
         self.inner.shape.get_rank() == 0
     }
 
+    /// true iff rank-0 with a simple (non-pointer) cell
+    #[inline]
+    pub fn is_scalar_simple(&self) -> bool {
+        self.is_scalar() && self.inner.ravel.first().map_or(false, |c| !c.is_pointer_cell())
+    }
+
     #[inline]
     pub fn is_vector(&self) -> bool {
         self.inner.shape.get_rank() == 1
