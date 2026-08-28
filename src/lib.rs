@@ -45,5 +45,10 @@ pub mod unparse;
 pub mod value;
 pub mod workspace;
 
+#[cfg(feature = "unofficial-ext")]
+pub mod key;
+#[cfg(feature = "unofficial-ext")]
+pub mod over;
+
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;

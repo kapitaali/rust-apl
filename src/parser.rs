@@ -140,6 +140,18 @@ pub enum Expr {
     /// When a dfn body references a function by name (not ⍺⍺/⍵⍵), this
     /// wraps the name so substitute_dop can pass it through unchanged.
     FuncRef(String),
+    /// monadic: ⌸B — key (groups B's ravel elements, Dyalog extension)
+    #[cfg(feature = "unofficial-ext")]
+    Key(Box<Expr>),
+    /// dyadic: A⌸B — key with A applied to B first (Dyalog extension)
+    #[cfg(feature = "unofficial-ext")]
+    KeyDyad(Box<Expr>, Box<Expr>),
+    /// monadic operator: (f⍥g)B — over: f(g(B)) (Dyalog extension)
+    #[cfg(feature = "unofficial-ext")]
+    OverMonad(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// dyadic operator: A(f⍥g)B — over: f(g(A),g(B)) (Dyalog extension)
+    #[cfg(feature = "unofficial-ext")]
+    OverDyad(Box<Expr>, Box<Expr>, Box<Expr>, Box<Expr>),
 }
 
 /// compile a dfn body expression into an anonymous DefinedFunction whose
@@ -340,6 +352,45 @@ fn read_rank_list(toks: &[Tok]) -> AplResult<(i64, i64, usize)> {
         Some(Tok::Num(v)) => Ok((a, *v as i64, 2)),
         _ => Ok((a, a, 1)),
     }
+}
+
+/// Parse `(f⍥g)` from tokens starting at `(`. Returns (f, g, tokens_consumed).
+#[cfg(feature = "unofficial-ext")]
+fn parse_over_operator(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)> {
+    // Expected: LParen, f, Over, g, RParen
+    if !matches!(toks.first(), Some(Tok::LParen)) {
+        return Err(ErrorCode::SyntaxError);
+    }
+    // Find the Over token
+    let mut depth = 0;
+    let mut over_pos = None;
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth == 0 && over_pos.is_some() {
+                    // Found matching close paren after Over
+                    let over_idx = over_pos.unwrap();
+                    let (f_expr, _) = parse_simple(&toks[1..over_idx])?;
+                    let (g_expr, _) = parse_simple(&toks[over_idx + 1..i])?;
+                    return Ok((Box::new(f_expr), Box::new(g_expr), i + 1));
+                }
+            }
+            Tok::Prim(Prim::Over) if depth == 1 && over_pos.is_none() => {
+                over_pos = Some(i);
+            }
+            _ => {}
+        }
+    }
+    Err(ErrorCode::SyntaxError)
+}
+
+/// Parse `f⍥g` (without parens) — simplified form for monadic use.
+#[cfg(feature = "unofficial-ext")]
+fn parse_over_operator_simple(toks: &[Tok]) -> AplResult<(Box<Expr>, Box<Expr>, usize)> {
+    // Expected: LParen, f, Over, g, RParen
+    parse_over_operator(toks)
 }
 
 /// expr := name '←' expr | name '[' expr ']' '←' expr
@@ -656,6 +707,28 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         let (rhs, rused) = parse_simple(&toks[used + 1..])?;
         used += 1 + rused;
         return Ok((Expr::EachDyad(p, Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic key: A ⌸ B — key with A applied to B first.
+    #[cfg(feature = "unofficial-ext")]
+    if let Some(Tok::Prim(Prim::Key)) = toks.get(used) {
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::KeyDyad(Box::new(lhs), Box::new(rhs)), used));
+    }
+
+    // dyadic over: A (f⍥g) B — over operator.
+    #[cfg(feature = "unofficial-ext")]
+    if let (Some(Tok::LParen), Some(Tok::Prim(Prim::Over))) = (toks.get(used), toks.get(used + 1)) {
+        // Parse f⍥g inside parens
+        if let Ok((f_expr, g_expr, consumed)) = parse_over_operator(&toks[used..]) {
+            let (rhs, rused) = parse_simple(&toks[used + consumed..])?;
+            used += consumed + rused;
+            return Ok((
+                Expr::OverDyad(f_expr, g_expr, Box::new(lhs), Box::new(rhs)),
+                used,
+            ));
+        }
     }
 
     // dyadic rank: A (F⍤k) B or A F⍤kl kr B — the rank list follows the glyph
@@ -1003,6 +1076,21 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 let (operand, used) = parse_simple(&toks[1..])?;
                 return Ok((Expr::Monadic(p, Box::new(operand)), used + 1));
             }
+            // Unofficial extensions: ⌸ (key) and ⍥ (over) need special parsing
+            #[cfg(feature = "unofficial-ext")]
+            if p == crate::functions::Prim::Key {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                return Ok((Expr::Key(Box::new(operand)), used + 1));
+            }
+            #[cfg(feature = "unofficial-ext")]
+            if p == crate::functions::Prim::Over {
+                let (f, g, consumed) = parse_over_operator_simple(&toks[1..])?;
+                let (operand, op_used) = parse_simple(&toks[1 + consumed..])?;
+                return Ok((
+                    Expr::OverMonad(f, g, Box::new(operand)),
+                    1 + consumed + op_used,
+                ));
+            }
             // monadic functions bind to the WHOLE expression to their right
             // (APL semantics): ⊖2 3⍴⍳6 = ⊖(2 3⍴⍳6), not (⊖2) 3⍴⍳6
             let (operand, used) = parse_simple(&toks[1..])?;
@@ -1018,6 +1106,24 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let p = *p;
             let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::EachOp(p, Box::new(operand)), used + 1))
+        }
+        #[cfg(feature = "unofficial-ext")]
+        Tok::Prim(Prim::Key) => {
+            // monadic key: ⌸ B — group B's ravel elements
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::Key(Box::new(operand)), used + 1))
+        }
+        #[cfg(feature = "unofficial-ext")]
+        Tok::Prim(Prim::Over) => {
+            // monadic over: (f⍥g) B
+            // Over without left arg is parsed as a dyadic operator form
+            // where the left is implicit: (f⍥g) B
+            let (f, g, consumed) = parse_over_operator_simple(&toks[1..])?;
+            let (operand, op_used) = parse_simple(&toks[1 + consumed..])?;
+            Ok((
+                Expr::OverMonad(f, g, Box::new(operand)),
+                1 + consumed + op_used,
+            ))
         }
         Tok::Rank(p) => {
             // rank operator: (F⍤k) B or (F⍤kl kr) B. The rank list comes
@@ -2727,6 +2833,21 @@ impl Environment {
                 let bv = self.eval(b)?;
                 crate::operators::each_dyad(*p, &av, &bv)
             }
+            #[cfg(feature = "unofficial-ext")]
+            Expr::Key(b) => {
+                let bv = self.eval(b)?;
+                crate::key::key_monadic(&bv)
+            }
+            #[cfg(feature = "unofficial-ext")]
+            Expr::KeyDyad(a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::key::key_dyad(&av, &bv)
+            }
+            #[cfg(feature = "unofficial-ext")]
+            Expr::OverMonad(f, g, b) => crate::over::over_monadic(f, g, b, self),
+            #[cfg(feature = "unofficial-ext")]
+            Expr::OverDyad(f, g, a, b) => crate::over::over_dyad(f, g, a, b, self),
             Expr::RankOp(p, k, b) => {
                 // (f⍤k)B — f applied to each rank-k cell.
                 // Route through eval_monadic_io so ⎕IO-sensitive primitives
