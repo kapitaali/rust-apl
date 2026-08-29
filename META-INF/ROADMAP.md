@@ -42,12 +42,12 @@ These are the most-used system functions. Many are simple; a few need external c
 | 19 | `⎕PNG` | PNG image read/write | image crate |
 
 ### 1.4 Quad System Variables
-| # | Variable | Description |
-|---|---|---|
-| 20 | `⎕IO` | Index origin (0 or 1) |
-| 21 | `⎕CT` | Comparison tolerance |
-| 22 | `⎕PP` | Print precision |
-| 23 | `⎕AV` | APL character vector (done) |
+| # | Variable | Description | Status |
+|---|---|---|---|
+| 20 | `⎕IO` | Index origin (0 or 1) | ✅ Done |
+| 21 | `⎕CT` | Comparison tolerance | ✅ Done |
+| 22 | `⎕PP` | Print precision | ✅ Done |
+| 23 | `⎕AV` | APL character vector | ✅ Done |
 
 ---
 
@@ -57,6 +57,7 @@ These are the most-used system functions. Many are simple; a few need external c
 - Maps a function over each element of an array independently
 - Works with all scalar primitives
 - Example: `⍳¨ 3 4 5` → `(⍳3)(⍳4)(⍳5)`
+- ✅ Partially done: monadic `f¨B` works for primitive f; dyadic `A¨B` with non-primitive A needs tokenizer fix
 
 ### 2.2 Rank `⤡` (dyadic operator)
 - Selects subarrays of specified rank for a function
