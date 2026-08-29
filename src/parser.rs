@@ -442,8 +442,17 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             Some(Tok::Name(_)) | Some(Tok::Str(_)) => {
                 let second_is_na = matches!(toks.get(1), Some(Tok::Name(m)) if m == "⎕NA");
                 if second_is_na {
-                    let (e, used) = parse_term(toks)?;
-                    debug_assert_eq!(used, 1);
+                    // The apl_name is evaluated to a character vector at runtime.
+                    // For a Name token, we treat it as a string literal (not a
+                    // variable reference) since ⎕NA defines the name, not reads it.
+                    let e = match toks.first() {
+                        Some(Tok::Name(n)) => {
+                            let cps: Vec<u32> = n.chars().map(|c| c as u32).collect();
+                            Expr::Str(cps)
+                        }
+                        Some(Tok::Str(s)) => Expr::Str(s.clone()),
+                        _ => return Err(ErrorCode::SyntaxError),
+                    };
                     Some(Box::new(e))
                 } else {
                     None
@@ -4933,6 +4942,24 @@ mod tests {
         env.eval_line("Q←{e ADD 4}").unwrap();
         let v = eval_one(&mut env, "Q 0");
         assert_eq!(v.first_cell().unwrap().get_near_int().unwrap(), 7);
+    }
+
+    #[test]
+    fn test_na_eval() {
+        let mut env = Environment::new();
+        // ⎕NA with library|symbol format — div is in libc.so.6
+        let result = env.eval_line("mydiv ⎕NA 'I4 libc.so.6|div I4 I4'");
+        assert!(
+            result.is_ok(),
+            "⎕NA association should succeed: {:?}",
+            result
+        );
+        // now call it: 10 mydiv 3 should give 3 (integer division)
+        let v = env.eval_line("10 mydiv 3").unwrap();
+        assert!(v.is_some());
+        let val = v.unwrap();
+        let first = val.first_cell().unwrap().get_near_int().unwrap();
+        assert_eq!(first, 3, "10 div 3 should be 3");
     }
 
     #[test]

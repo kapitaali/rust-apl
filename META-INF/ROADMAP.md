@@ -99,15 +99,21 @@ These are the most-used system functions. Many are simple; a few need external c
 
 ## Phase 4 — Native Functions
 
-### 4.1 Native Function Loader
-- Load `.aplfn` shared libraries
+### 4.1 Native Function Loader — Done ✓
+- Load `.so` shared libraries via `libloading`
 - Resolve function signatures
-- Call via FFI
+- Call via FFI with `CAbiBinding::associate`
 
-### 4.2 Native Function Interface
+### 4.2 Native Function Interface — Done ✓
 - Define the C ABI for native functions
 - Pass ValueP pointers, return ValueP
 - Memory management across the FFI boundary
+
+### 4.3 ⎕NA Quad Function — Done ✓
+- Syntax: `name ⎕NA 'result lib|symbol arg1 arg2 ...'`
+- Format: `|` separates library from symbol (e.g., `libc.so.6|div`)
+- Type codes: `I4` (int), `F8` (double), `F4` (float), etc.
+- Verified: `10 mydiv 3` with `'I4 libc.so.6|div I4 I4'` → `3`
 
 ---
 

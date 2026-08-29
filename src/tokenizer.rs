@@ -681,6 +681,23 @@ mod tests {
     }
 
     #[test]
+    fn test_na_tokenize() {
+        let toks = tokenize("mydiv ⎕NA 'F8 libm.so.6|cdiv I4 I4'").unwrap();
+        assert!(toks.contains(&Tok::Name("⎕NA".to_string())));
+        // must have Name, Name(⎕NA), Str, End
+        assert!(toks.len() >= 3);
+    }
+
+    #[test]
+    fn test_na_parse() {
+        let line = "mydiv ⎕NA 'F8 libm.so.6|cdiv I4 I4'";
+        let toks = tokenize(line).unwrap();
+        let (expr, used) = crate::parser::parse(&toks).unwrap();
+        assert!(matches!(expr, crate::parser::Expr::QuadNa(Some(_), _)));
+        assert_eq!(used, 3);
+    }
+
+    #[test]
     fn test_rank_op() {
         let toks = tokenize("⌽⍤1").unwrap();
         assert!(toks.contains(&Tok::Rank(Prim::Reverse)));
