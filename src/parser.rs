@@ -20,6 +20,8 @@ pub enum Expr {
     Num(f64),
     /// a numeric strand: adjacent literals `2 3 4`
     NumVec(Vec<f64>),
+    /// a complex strand: adjacent complex literals `1J2 2J3 3J4`
+    ComplexVec(Vec<(f64, f64)>),
     /// a nested strand: adjacent parenthesized groups `(1 2)(3 4)` or
     /// mixed `(1)(2 3)` — each element is enclosed
     NestedVec(Vec<Expr>),
@@ -1249,7 +1251,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::Scan1Op(p, Box::new(operand)), used + 1))
         }
-        Tok::Num(_) | Tok::Str(_) => parse_strand(toks),
+        Tok::Num(_) | Tok::Complex(_, _) | Tok::Str(_) => parse_strand(toks),
         _ => parse_atom(toks),
     }
 }
@@ -1261,13 +1263,17 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 /// differ). This handles the left argument of reshape (`2 3⍴⍳6`) and
 /// similar constructs.
 fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
-    // gather consecutive literal atoms (Num / Str) and paren groups
+    // gather consecutive literal atoms (Num / Complex / Str) and paren groups
     let mut items: Vec<Expr> = Vec::new();
     let mut used = 0;
     while let Some(t) = toks.get(used) {
         match t {
             Tok::Num(v) => {
                 items.push(Expr::Num(*v));
+                used += 1;
+            }
+            Tok::Complex(re, im) => {
+                items.push(Expr::Complex(*re, *im));
                 used += 1;
             }
             Tok::Str(s) => {
@@ -1320,6 +1326,19 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         return Ok((Expr::NumVec(nums), used));
     }
 
+    // homogeneous all-complex strand
+    let all_complex = items.iter().all(|e| matches!(e, Expr::Complex(_, _)));
+    if all_complex {
+        let complexes: Vec<(f64, f64)> = items
+            .into_iter()
+            .map(|e| match e {
+                Expr::Complex(re, im) => (re, im),
+                _ => unreachable!(),
+            })
+            .collect();
+        return Ok((Expr::ComplexVec(complexes), used));
+    }
+
     // mixed strand: each item enclosed
     Ok((Expr::NestedVec(items), used))
 }
@@ -1328,7 +1347,7 @@ fn parse_strand(toks: &[Tok]) -> AplResult<(Expr, usize)> {
 fn is_strand_atom(t: Option<&Tok>) -> bool {
     matches!(
         t,
-        Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::Name(_))
+        Some(Tok::Num(_)) | Some(Tok::Complex(_, _)) | Some(Tok::Str(_)) | Some(Tok::Name(_))
     )
 }
 
@@ -2338,6 +2357,10 @@ impl Environment {
             Expr::NumVec(vs) => Ok(ValueP::from_ravel_like(
                 &ValueP::vector(vs.len() as i64),
                 vs.iter().map(|&v| crate::cell::Cell::from_f64(v)).collect(),
+            )),
+            Expr::ComplexVec(vs) => Ok(ValueP::from_ravel_like(
+                &ValueP::vector(vs.len() as i64),
+                vs.iter().map(|&(re, im)| crate::cell::Cell::complex(re, im)).collect(),
             )),
             Expr::NestedVec(items) => {
                 // Strand semantics (GNU APL): any SINGLE-ELEMENT item

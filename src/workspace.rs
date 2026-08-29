@@ -247,22 +247,46 @@ fn ws_path(name: &str) -> PathBuf {
 
 /// One-line variable encoding. Returns None for values we can't round-trip.
 ///
-/// Generic format for any-rank simple numeric/char arrays:
+/// Format for any-rank simple numeric/char/complex arrays:
 ///   `AI <dims-comma>;<vals-comma>`   int array (rank ≥ 0)
 ///   `AF <dims-comma>;<vals-comma>`   float array
 ///   `AC <dims-comma>;<vals-comma>`   char array (u32 codepoints)
+///   `AX <dims-comma>;<re,im;...>`    complex array (real,imag pairs)
+///   `AN <dims-comma>;<child1>|...`   nested array (enclosed children)
 /// Scalars serialize with an empty dim list (`I`/`F`/`C` legacy forms are
 /// still parsed for backward compatibility).
 fn serialize_var(v: &ValueP) -> Option<String> {
     let cells = v.cells();
-    if cells.iter().any(|c| c.is_pointer_cell()) {
-        return None; // nested values not yet supported
+
+    // Check if all cells are pointers (nested array)
+    if cells.iter().all(|c| c.is_pointer_cell()) {
+        let dims: Vec<String> = (0..v.rank() as usize)
+            .map(|k| v.get_shape_item(k as i16).to_string())
+            .collect();
+        let children: Vec<String> = cells
+            .iter()
+            .map(|c| {
+                if let Cell::Pointer(p) = c {
+                    serialize_var(&ValueP {
+                        inner: p.value.clone(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        return Some(format!(
+            "AN {};{}",
+            dims.join(","),
+            children.join("|")
+        ));
     }
 
     let kind = match cells.first()? {
         Cell::Int(_) => "AI",
         Cell::Float(_) => "AF",
         Cell::Char(_) => "AC",
+        Cell::Complex(_) => "AX",
         _ => return None,
     };
     // mixed int/float arrays: promote to AF
@@ -282,6 +306,7 @@ fn serialize_var(v: &ValueP) -> Option<String> {
             ("AF", Cell::Int(i)) => Ok((*i as f64).to_string()),
             ("AF", Cell::Float(f)) => Ok(f.to_string()),
             ("AC", Cell::Char(cp)) => Ok(cp.to_string()),
+            ("AX", Cell::Complex(c)) => Ok(format!("{}J{}", c.re, c.im)),
             _ => Err(()),
         })
         .collect::<Result<_, _>>()
@@ -301,7 +326,7 @@ fn parse_dims(s: &str) -> Result<Vec<i64>, String> {
 fn deserialize_var(payload: &str) -> Result<ValueP, String> {
     let (kind, rest) = payload.split_once(' ').ok_or("corrupt var payload")?;
     // generic any-rank forms
-    if matches!(kind, "AI" | "AF" | "AC") {
+    if matches!(kind, "AI" | "AF" | "AC" | "AX") {
         let (dim_str, val_str) = rest.split_once(';').ok_or("corrupt array payload")?;
         let dims = parse_dims(dim_str)?;
         let shape =
@@ -318,13 +343,38 @@ fn deserialize_var(payload: &str) -> Result<ValueP, String> {
                     .parse::<f64>()
                     .map(Cell::Float)
                     .map_err(|_| "bad float".to_string()),
-                _ => s
+                "AC" => s
                     .parse::<u32>()
                     .map(Cell::Char)
                     .map_err(|_| "bad char".to_string()),
+                "AX" => {
+                    let parts: Vec<&str> = s.split('J').collect();
+                    if parts.len() != 2 {
+                        return Err("bad complex".to_string());
+                    }
+                    let re = parts[0].parse::<f64>().map_err(|_| "bad complex re")?;
+                    let im = parts[1].parse::<f64>().map_err(|_| "bad complex im")?;
+                    Ok(Cell::Complex(crate::types::APLComplex::new(re, im)))
+                }
+                _ => unreachable!(),
             })
             .collect::<Result<_, _>>()?;
-        return ValueP::from_parts(shape, cells).map_err(|e| format!("shape error: {:?}", e));
+        return Ok(ValueP::from_parts(shape, cells).map_err(|e| format!("shape error: {:?}", e))?);
+    }
+    // nested array format: AN <dims-comma>;<child1>|...
+    if kind == "AN" {
+        let (dim_str, val_str) = rest.split_once(';').ok_or("corrupt nested payload")?;
+        let dims = parse_dims(dim_str)?;
+        let shape =
+            crate::shape::Shape::from_dims(&dims).map_err(|e| format!("shape error: {:?}", e))?;
+        let cells: Vec<Cell> = val_str
+            .split('|')
+            .map(|child_payload| {
+                let child = deserialize_var(child_payload)?;
+                Ok(Cell::pointer(child.inner.clone()))
+            })
+            .collect::<Result<_, String>>()?;
+        return Ok(ValueP::from_parts(shape, cells).map_err(|e| format!("shape error: {:?}", e))?);
     }
     match kind {
         "I" => Ok(ValueP::scalar_from(Cell::Int(
@@ -398,8 +448,49 @@ mod tests {
     #[test]
     fn test_save_unsupported_value_errors() {
         let mut env = fresh();
-        env.eval_line("N←(1 2)(3 4)").unwrap(); // nested — unsupported
-        assert!(save(&env, "test_ws_nested").is_err());
+        // Nested arrays are now supported, so this should succeed
+        env.eval_line("N←(1 2)(3 4)").unwrap();
+        assert!(save(&env, "test_ws_nested").is_ok());
+        let path = save(&env, "test_ws_nested").unwrap();
+        let mut env2 = fresh();
+        load(&mut env2, "test_ws_nested").unwrap();
+        assert!(env2.get("N").is_some());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_save_load_complex_values() {
+        let mut env = fresh();
+        env.eval_line("C←1J2 2J3 3J4").unwrap();
+
+        let path = save(&env, "test_ws_complex").unwrap();
+        let mut env2 = fresh();
+        load(&mut env2, "test_ws_complex").unwrap();
+        let c = env2.eval_line("C").unwrap().unwrap();
+        assert_eq!(c.element_count(), 3);
+        assert_eq!(c.cells()[0], Cell::complex(1.0, 2.0));
+        assert_eq!(c.cells()[1], Cell::complex(2.0, 3.0));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_save_load_nested_arrays() {
+        let mut env = fresh();
+        env.eval_line("N←(1 2)(3 4 5)").unwrap();
+
+        let path = save(&env, "test_ws_nested").unwrap();
+        let mut env2 = fresh();
+        load(&mut env2, "test_ws_nested").unwrap();
+        let n = env2.eval_line("N").unwrap().unwrap();
+        assert_eq!(n.rank(), 1);
+        assert_eq!(n.element_count(), 2);
+        // first child should be 1 2
+        if let Cell::Pointer(p) = &n.cells()[0] {
+            assert_eq!(p.value.element_count(), 2);
+        } else {
+            panic!("expected pointer cell");
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

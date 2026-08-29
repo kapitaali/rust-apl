@@ -11,7 +11,6 @@
 //! - ⎕DFT — default format
 
 use crate::cell::Cell;
-use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
