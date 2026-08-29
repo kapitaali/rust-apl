@@ -53,6 +53,7 @@ pub mod over;
 pub mod quad;
 pub mod ap;
 pub mod xml_archive;
+pub mod packed_bool;
 
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;
