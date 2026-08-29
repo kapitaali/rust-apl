@@ -48,6 +48,19 @@ impl ValueInner {
         }
     }
 
+    /// Create a ValueInner from a SmallVec-backed ravel (avoids heap allocation for ≤8 elements)
+    pub fn new_with_smallvec(shape: Shape, ravel: smallvec::SmallVec<[Cell; 8]>) -> ValueInner {
+        let proto = ravel
+            .first()
+            .cloned()
+            .unwrap_or_else(|| crate::cell::Cell::int(0));
+        ValueInner {
+            shape,
+            ravel: ravel.into_vec(),
+            proto,
+        }
+    }
+
     /// the prototype cell (element type)
     pub fn proto(&self) -> &Cell {
         &self.proto
@@ -318,6 +331,20 @@ impl ValueP {
         self.clone()
     }
 
+    /// build a value from a SmallVec-backed ravel (avoids heap allocation for small arrays ≤8 elements)
+    pub fn from_smallvec(
+        shape: Shape,
+        ravel: smallvec::SmallVec<[Cell; 8]>,
+    ) -> Result<ValueP, ErrorCode> {
+        let want = shape.get_volume();
+        if want < 0 || want as usize != ravel.len() {
+            return Err(ErrorCode::LengthError);
+        }
+        Ok(ValueP {
+            inner: Arc::new(ValueInner::new(shape, ravel.into_vec())),
+        })
+    }
+
     /// build a value from an explicit shape and ravel
     pub fn from_parts(shape: Shape, ravel: Vec<Cell>) -> Result<ValueP, ErrorCode> {
         let want = shape.get_volume();
@@ -422,5 +449,19 @@ mod tests {
     fn test_zilde() {
         let z = ValueP::char_vector(&[]);
         assert!(z.is_empty());
+    }
+
+    #[test]
+    fn test_from_smallvec() {
+        use smallvec::SmallVec;
+        let mut sv: SmallVec<[Cell; 8]> = SmallVec::new();
+        sv.push(Cell::int(1));
+        sv.push(Cell::int(2));
+        sv.push(Cell::int(3));
+        let v = ValueP::from_smallvec(Shape::vector(3), sv).unwrap();
+        assert_eq!(v.element_count(), 3);
+        assert_eq!(v.cells()[0], Cell::int(1));
+        assert_eq!(v.cells()[1], Cell::int(2));
+        assert_eq!(v.cells()[2], Cell::int(3));
     }
 }
