@@ -61,6 +61,20 @@ pub enum Expr {
     QuadLoadSo(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
     QuadCr(i64, Box<Expr>),
+    /// `⎕UCS B` — Unicode character set conversion
+    QuadUcs(Box<Expr>),
+    /// `⎕AV` — APL character vector
+    QuadAv,
+    /// `⎕TS` — current timestamp
+    QuadTs,
+    /// `⎕WA` — workspace available
+    QuadWa,
+    /// `⎕TC` — terminal control characters
+    QuadTc,
+    /// `⎕DM` — error message
+    QuadDm,
+    /// `⎕EN` — error number
+    QuadEn,
     /// `(F⍣N) B` — power operator: apply F N times to B
     PowerOp(PowerFn, i64, Box<Expr>),
     /// `⍬` — zilde: the empty numeric vector
@@ -962,6 +976,49 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         };
         let (arg, used) = parse(&toks[2..])?;
         return Ok((Expr::QuadCr(n, Box::new(arg)), 2 + used));
+    }
+    // ⎕UCS B — Unicode character set conversion
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕UCS" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadUcs(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕AV — APL character vector
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕AV" {
+            return Ok((Expr::QuadAv, 1));
+        }
+    }
+    // ⎕TS — current timestamp
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕TS" {
+            return Ok((Expr::QuadTs, 1));
+        }
+    }
+    // ⎕WA — workspace available
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕WA" {
+            return Ok((Expr::QuadWa, 1));
+        }
+    }
+    // ⎕TC — terminal control characters
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕TC" {
+            return Ok((Expr::QuadTc, 1));
+        }
+    }
+    // ⎕DM — error message
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕DM" {
+            return Ok((Expr::QuadDm, 1));
+        }
+    }
+    // ⎕EN — error number
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕EN" {
+            return Ok((Expr::QuadEn, 1));
+        }
     }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
@@ -2151,6 +2208,16 @@ impl Environment {
                 self.vars.insert(n.clone(), v.clone());
             }
         }
+        // ambivalent function (no args in header): bind ⍵/⍺ from call args
+        // so bodies that reference them work when called monadically/dyadically
+        if f.arg_right.is_none() && f.arg_left.is_none() {
+            if let Some(v) = &right {
+                self.vars.insert("⍵".to_string(), v.clone());
+            }
+            if let Some(v) = &left {
+                self.vars.insert("⍺".to_string(), v.clone());
+            }
+        }
         // named dfns: bind ⍺ on dyadic calls even though arg_left was
         // dropped from the arity signature (dfns are ambivalent)
         if let Some(alpha) = self
@@ -3153,6 +3220,16 @@ impl Environment {
                     }
                 }
             }
+            Expr::QuadUcs(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_ucs(&bv)
+            }
+            Expr::QuadAv => Ok(crate::quad::quad_av()),
+            Expr::QuadTs => crate::quad::quad_ts(),
+            Expr::QuadWa => crate::quad::quad_wa(),
+            Expr::QuadTc => Ok(crate::quad::quad_tc()),
+            Expr::QuadDm => Ok(crate::quad::quad_dm()),
+            Expr::QuadEn => Ok(crate::quad::quad_en()),
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
                 let xv = self.eval(axis)?;

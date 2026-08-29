@@ -50,5 +50,8 @@ pub mod key;
 #[cfg(feature = "unofficial-ext")]
 pub mod over;
 
+pub mod quad;
+pub mod ap;
+
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;
