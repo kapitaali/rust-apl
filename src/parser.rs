@@ -79,6 +79,12 @@ pub enum Expr {
     QuadMap(Box<Expr>),
     /// `⎕MX B` — matrix operations
     QuadMx(Box<Expr>),
+    /// `⎕FIO B` — file I/O operations
+    QuadFio(Box<Expr>),
+    /// `⎕JSON B` — JSON parse/serialize
+    QuadJson(Box<Expr>),
+    /// `⎕XML B` — XML parse/serialize
+    QuadXml(Box<Expr>),
     /// `⎕UCS B` — Unicode character set conversion
     QuadUcs(Box<Expr>),
     /// `⎕AV` — APL character vector
@@ -1092,6 +1098,27 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕MX" {
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadMx(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕FIO — file I/O
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕FIO" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadFio(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕JSON — JSON parse/serialize
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕JSON" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadJson(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕XML — XML parse/serialize
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕XML" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadXml(Box::new(arg)), 1 + used));
         }
     }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
@@ -3371,6 +3398,18 @@ impl Environment {
             Expr::QuadMx(arg) => {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_mx(&bv)
+            }
+            Expr::QuadFio(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_fio(&bv)
+            }
+            Expr::QuadJson(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_json(&bv)
+            }
+            Expr::QuadXml(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_xml(&bv)
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
