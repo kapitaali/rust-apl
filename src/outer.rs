@@ -10,29 +10,64 @@ use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
 pub fn outer_product(a: &ValueP, p: Prim, b: &ValueP) -> AplResult<ValueP> {
-    let prim = p; // dyadic use only
+    let prim = p;
     let na = a.element_count() as usize;
     let nb = b.element_count() as usize;
-    let mut cells = Vec::with_capacity(na * nb);
-    for ac in a.cells() {
-        for bc in b.cells() {
-            // build 1-element scalars for the primitive's dyadic eval
-            let av = ValueP::from_parts(crate::shape::Shape::scalar(), vec![ac.clone()])
+    let total = na * nb;
+
+    let out: Vec<Cell> = if total >= crate::functions::PARALLEL_THRESHOLD {
+        // Large outer products: parallelize over result cells
+        use rayon::prelude::*;
+        let acells = a.cells();
+        let bcells = b.cells();
+        (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                let i = idx / nb;
+                let j = idx % nb;
+                let av = ValueP::from_parts(
+                    crate::shape::Shape::scalar(),
+                    vec![acells[i].clone()],
+                )
                 .map_err(|_| ErrorCode::DomainError)?;
-            let bv = ValueP::from_parts(crate::shape::Shape::scalar(), vec![bc.clone()])
+                let bv = ValueP::from_parts(
+                    crate::shape::Shape::scalar(),
+                    vec![bcells[j].clone()],
+                )
                 .map_err(|_| ErrorCode::DomainError)?;
-            // scalar × scalar via the primitive's dyadic eval
-            {
+                let v = prim.eval_dyadic(&av, &bv)?;
+                if v.is_scalar() {
+                    Ok(v.first_cell().unwrap().clone())
+                } else {
+                    Ok(Cell::pointer(v.inner.clone()))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut cells = Vec::with_capacity(total);
+        for ac in a.cells() {
+            for bc in b.cells() {
+                let av = ValueP::from_parts(
+                    crate::shape::Shape::scalar(),
+                    vec![ac.clone()],
+                )
+                .map_err(|_| ErrorCode::DomainError)?;
+                let bv = ValueP::from_parts(
+                    crate::shape::Shape::scalar(),
+                    vec![bc.clone()],
+                )
+                .map_err(|_| ErrorCode::DomainError)?;
                 let v = prim.eval_dyadic(&av, &bv)?;
                 if v.is_scalar() {
                     cells.push(v.first_cell().unwrap().clone());
                 } else {
-                    // non-scalar result → box it
                     cells.push(Cell::pointer(v.inner.clone()));
                 }
             }
         }
-    }
+        cells
+    };
+
     // result shape: (⍴A) ++ (⍴B)
     let mut dims: Vec<i64> = Vec::new();
     for k in 0..a.rank() as usize {
@@ -42,7 +77,7 @@ pub fn outer_product(a: &ValueP, p: Prim, b: &ValueP) -> AplResult<ValueP> {
         dims.push(b.get_shape_item(k as i16));
     }
     let shape = crate::shape::Shape::from_dims(&dims)?;
-    ValueP::from_parts(shape, cells)
+    ValueP::from_parts(shape, out)
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +104,24 @@ mod tests {
         for (i, e) in expect.iter().enumerate() {
             assert_eq!(r.cells()[i], Cell::Int(*e));
         }
+    }
+
+    #[test]
+    fn test_outer_parallel_path() {
+        // Large enough to trigger the parallel path (≥4096 result cells)
+        let n = 64;
+        let a: Vec<i64> = (0..n).collect();
+        let b: Vec<i64> = (0..n).collect();
+        let av = vec_val(&a);
+        let bv = vec_val(&b);
+        let r = outer_product(&av, Prim::Add, &bv).unwrap();
+        assert_eq!(r.rank(), 2);
+        assert_eq!(r.get_shape_item(0), n);
+        assert_eq!(r.get_shape_item(1), n);
+        // spot check: 0+0=0, 1+1=2, 63+63=126
+        assert_eq!(r.cells()[0], Cell::Int(0));
+        assert_eq!(r.cells()[n as usize + 1], Cell::Int(2));
+        assert_eq!(r.cells()[(n * n - 1) as usize], Cell::Int(126));
     }
 
     #[test]

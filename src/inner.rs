@@ -170,6 +170,32 @@ mod tests {
     }
 
     #[test]
+    fn test_inner_parallel_path() {
+        // Large enough to trigger the parallel path (pa*pb ≥ 4096)
+        // Use a 100-element vector +.× 100-element vector → scalar
+        let n = 100;
+        let a: Vec<i64> = (1..=n).collect();
+        let b: Vec<i64> = (1..=n).collect();
+        let av = vec_val(&a);
+        let bv = vec_val(&b);
+        // pa = 1 (vector frame), pb = 1 → pa*pb = 1, won't trigger parallel
+        // For parallel we need matrix × matrix: 64×64 +.× 64×64 → 64×64
+        let m = 64;
+        let size = m * m;
+        let a: Vec<i64> = (0..size).collect();
+        let b: Vec<i64> = (0..size).collect();
+        let am = mat_val(m, m, &a);
+        let bm = mat_val(m, m, &b);
+        let r = inner_product(&am, Prim::Add, Prim::Multiply, &bm).unwrap();
+        assert_eq!(r.rank(), 2);
+        assert_eq!(r.get_shape_item(0), m);
+        assert_eq!(r.get_shape_item(1), m);
+        // spot check: result[0,0] = sum_{k=0}^{63} A[0,k] * B[k,0]
+        // = sum_{k=0}^{63} k * (k*64) = 64 * sum(k^2) = 64 * 85344 = 5462016
+        assert_eq!(r.cells()[0], Cell::Int(5462016));
+    }
+
+    #[test]
     fn test_length_error_on_mismatched_axes() {
         let a = vec_val(&[1, 2]);
         let b = vec_val(&[1, 2, 3]);
