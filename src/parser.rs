@@ -1401,6 +1401,25 @@ fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             );
             if next_is_value {
                 let (operand, used) = parse_simple(&toks[1..])?;
+                // Check for prefix dyadic call: F A B → FuncCallDyad(F, A, B)
+                // ONLY when F is a primitive — defined functions use infix
+                // dyadic form (A F B), not prefix. In APL, `SUM 3 4` where
+                // SUM is a defined function is `SUM(3 4)` (monadic), not
+                // `3 SUM 4` (dyadic). Only primitives can use prefix dyadic.
+                let is_prim = crate::functions::Prim::from_symbol(&n).is_some();
+                if is_prim {
+                    let next_next_is_value = matches!(
+                        toks.get(1 + used),
+                        Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::Name(_)) | Some(Tok::LParen)
+                    );
+                    if next_next_is_value {
+                        let (rhs, rused) = parse_simple(&toks[1 + used..])?;
+                        return Ok((
+                            Expr::FuncCallDyad(n, Box::new(operand), Box::new(rhs)),
+                            1 + used + rused,
+                        ));
+                    }
+                }
                 return Ok((Expr::FuncCallMono(n, Some(Box::new(operand))), used + 1));
             }
             // bare name — ambivalent call FN (no args) or a variable reference;
