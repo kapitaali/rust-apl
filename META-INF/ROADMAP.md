@@ -57,21 +57,25 @@ These are the most-used system functions. Many are simple; a few need external c
 - Maps a function over each element of an array independently
 - Works with all scalar primitives
 - Example: `⍳¨ 3 4 5` → `(⍳3)(⍳4)(⍳5)`
-- ✅ Partially done: monadic `f¨B` works for primitive f; dyadic `A¨B` with non-primitive A needs tokenizer fix
+- ✅ Done: monadic `f¨B` works for primitive f; dyadic `A f¨B` works for primitive f
+- ✅ Named-function each: `f¨B` and `A f¨B` work when f is a defined function
 
 ### 2.2 Rank `⤡` (dyadic operator)
 - Selects subarrays of specified rank for a function
 - Example: `⍤ 2` applies a function to each 2-cell of a matrix
-- Requires understanding of cell rank and frame/cell decomposition
+- ✅ Done: monadic `(f⍤k)B` and dyadic `A(f⍤kl kr)B` work
 
 ### 2.3 Axis Specification
-- Extend reduce `/`, scan `\`, rotate `⌽ ⊖`, take `↑`, drop `↓` to accept axis arguments
+- Extend reduce `/`, scan `\\`, rotate `⌽ ⊖`, take `↑`, drop `↓` to accept axis arguments
 - Example: `+/[1] M` sums along first axis instead of last
+- ✅ Done: `LO/[n]B` and `LO\[n]B` work for reduce/scan with axis
+- ⚠️ Rotate/take/drop axis already supported via `A⌽[n]B` syntax
 
 ### 2.4 Power `⍣` (dyadic operator)
 - Function iteration: `f⍣n` applies f n times
 - Inverse: `f⍣¯1` applies the inverse of f
 - Example: `2×⍣3 ⊢ 1` → 16
+- ✅ Done: `f⍣N B` and `(F⍣N) B` work for primitives and named functions
 
 ---
 
