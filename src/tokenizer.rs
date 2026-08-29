@@ -30,6 +30,8 @@ pub enum Tok {
     Scan1(Prim),
     /// the each operator: `F¨B`
     Each(Prim),
+    /// the each operator with a named function: `f¨B`
+    EachName(String),
     /// rank operator `f⍤k` — the operand prim; k follows as the next token
     Rank(Prim),
     /// statement separator `⋄` (diamond)
@@ -424,6 +426,13 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                                 let p = *p;
                                 toks.pop();
                                 toks.push(Tok::Each(p));
+                                i += 1;
+                                continue;
+                            }
+                            Some(Tok::Name(n)) => {
+                                let n = n.clone();
+                                toks.pop();
+                                toks.push(Tok::EachName(n));
                                 i += 1;
                                 continue;
                             }

@@ -30,16 +30,24 @@ pub enum Expr {
     Monadic(Prim, Box<Expr>),
     /// `LO/B` — reduce
     ReduceOp(Prim, Box<Expr>),
-    /// `LO\B` — scan
+    /// `LO\\B` — scan
     ScanOp(Prim, Box<Expr>),
     /// `LO⌿B` — first-axis reduce
     Reduce1Op(Prim, Box<Expr>),
     /// `LO⍀B` — first-axis scan
     Scan1Op(Prim, Box<Expr>),
+    /// `LO/[n] B` — reduce along axis n
+    ReduceAxis(Prim, Box<Expr>, Box<Expr>),
+    /// `LO\\[n] B` — scan along axis n
+    ScanAxis(Prim, Box<Expr>, Box<Expr>),
     /// `F¨B` — each (monadic)
     EachOp(Prim, Box<Expr>),
     /// `A F¨B` — each (dyadic)
     EachDyad(Prim, Box<Expr>, Box<Expr>),
+    /// `f¨B` — each with named function (monadic)
+    EachOpName(String, Box<Expr>),
+    /// `A f¨B` — each with named function (dyadic)
+    EachDyadName(String, Box<Expr>, Box<Expr>),
     /// rank operator `(f⍤k)B` — apply f to each rank-k cell of B
     RankOp(Prim, i64, Box<Expr>),
     /// dyadic rank `A(f⍤kl kr)B` — separate cell ranks for the two arguments
@@ -736,6 +744,13 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         used += 1 + rused;
         return Ok((Expr::EachDyad(p, Box::new(lhs), Box::new(rhs)), used));
     }
+    // dyadic each with named function: A f¨ B
+    if let Some(Tok::EachName(n)) = toks.get(used) {
+        let n = n.clone();
+        let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+        used += 1 + rused;
+        return Ok((Expr::EachDyadName(n, Box::new(lhs), Box::new(rhs)), used));
+    }
 
     // dyadic key: A ⌸ B — key with A applied to B first.
     #[cfg(feature = "unofficial-ext")]
@@ -1200,6 +1215,18 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     }
                 }
             }
+            // `(F⍣N) B` — parenthesised power operator.
+            // Detect LParen PowerOp(p) Num(n) RParen and apply F N times.
+            if let Some(Tok::PowerOp(p)) = toks.get(1) {
+                let p = p.clone();
+                if let Some(Tok::Num(n)) = toks.get(2) {
+                    if matches!(toks.get(3), Some(Tok::RParen)) {
+                        let n = *n as i64;
+                        let (operand, used) = parse_simple(&toks[4..])?;
+                        return Ok((Expr::PowerOp(p, n, Box::new(operand)), 4 + used));
+                    }
+                }
+            }
             let (e, used) = parse_expr(&toks[1..])?;
             if !matches!(toks.get(used + 1), Some(Tok::RParen)) {
                 return Err(ErrorCode::SyntaxError);
@@ -1283,6 +1310,12 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             let (operand, used) = parse_simple(&toks[1..])?;
             Ok((Expr::EachOp(p, Box::new(operand)), used + 1))
         }
+        Tok::EachName(n) => {
+            // monadic operator with named function: f¨ B
+            let n = n.clone();
+            let (operand, used) = parse_simple(&toks[1..])?;
+            Ok((Expr::EachOpName(n, Box::new(operand)), used + 1))
+        }
         #[cfg(feature = "unofficial-ext")]
         Tok::Prim(Prim::Key) => {
             // monadic key: ⌸ B — group B's ravel elements
@@ -1332,13 +1365,41 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             // the WHOLE expression to its right (operators bind tighter
             // than functions): ×/20⍴2 = ×/(20⍴2)
             let p = *p;
-            let (operand, used) = parse_simple(&toks[1..])?;
-            Ok((Expr::ReduceOp(p, Box::new(operand)), used + 1))
+            // Check for axis specification: LO/[n] B
+            if matches!(toks.get(1), Some(Tok::LBracket)) {
+                let (axis, aused) = parse_expr(&toks[2..])?;
+                if !matches!(toks.get(2 + aused), Some(Tok::RBracket)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                let after = 3 + aused;
+                let (operand, used) = parse_simple(&toks[after..])?;
+                Ok((
+                    Expr::ReduceAxis(p, Box::new(axis), Box::new(operand)),
+                    after + used,
+                ))
+            } else {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                Ok((Expr::ReduceOp(p, Box::new(operand)), used + 1))
+            }
         }
         Tok::Scan(p) => {
             let p = *p;
-            let (operand, used) = parse_simple(&toks[1..])?;
-            Ok((Expr::ScanOp(p, Box::new(operand)), used + 1))
+            // Check for axis specification: LO\[n] B
+            if matches!(toks.get(1), Some(Tok::LBracket)) {
+                let (axis, aused) = parse_expr(&toks[2..])?;
+                if !matches!(toks.get(2 + aused), Some(Tok::RBracket)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                let after = 3 + aused;
+                let (operand, used) = parse_simple(&toks[after..])?;
+                Ok((
+                    Expr::ScanAxis(p, Box::new(axis), Box::new(operand)),
+                    after + used,
+                ))
+            } else {
+                let (operand, used) = parse_simple(&toks[1..])?;
+                Ok((Expr::ScanOp(p, Box::new(operand)), used + 1))
+            }
         }
         Tok::Reduce1(p) => {
             let p = *p;
@@ -3064,6 +3125,20 @@ impl Environment {
                 let bv = self.eval(b)?;
                 crate::operators::scan(*p, &bv)
             }
+            Expr::ReduceAxis(p, axis, b) => {
+                let bv = self.eval(b)?;
+                let xv = self.eval(axis)?;
+                let ax = xv.first_cell().unwrap().get_near_int()?;
+                let io = self.get_io()?;
+                crate::operators::reduce_axis(*p, &bv, ax - io)
+            }
+            Expr::ScanAxis(p, axis, b) => {
+                let bv = self.eval(b)?;
+                let xv = self.eval(axis)?;
+                let ax = xv.first_cell().unwrap().get_near_int()?;
+                let io = self.get_io()?;
+                crate::operators::scan_axis(*p, &bv, ax - io)
+            }
             Expr::Reduce1Op(p, b) => {
                 let bv = self.eval(b)?;
                 crate::operators::reduce_first(*p, &bv)
@@ -3080,6 +3155,19 @@ impl Environment {
                 let av = self.eval(a)?;
                 let bv = self.eval(b)?;
                 crate::operators::each_dyad(*p, &av, &bv)
+            }
+            Expr::EachOpName(n, b) => {
+                let bv = self.eval(b)?;
+                crate::operators::each_name(n, &bv, |val| {
+                    self.call_function(n, None, Some(val))
+                })
+            }
+            Expr::EachDyadName(n, a, b) => {
+                let av = self.eval(a)?;
+                let bv = self.eval(b)?;
+                crate::operators::each_dyad_name(n, &av, &bv, |x, y| {
+                    self.call_function(n, Some(x), Some(y))
+                })
             }
             #[cfg(feature = "unofficial-ext")]
             Expr::Key(b) => {

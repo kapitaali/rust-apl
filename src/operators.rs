@@ -417,6 +417,64 @@ fn scalar_of(v: &ValueP, i: usize) -> ValueP {
     }
 }
 
+/// `f¨ B` — each with a named function: apply f to each ravel element of B,
+/// nesting each result. Binds the whole expression to its right.
+pub fn each_name<F>(name: &str, b: &ValueP, mut f: F) -> AplResult<ValueP>
+where
+    F: FnMut(ValueP) -> AplResult<ValueP>,
+{
+    let cells = b.cells();
+    let n = cells.len();
+
+    let out_ravel: Vec<Cell> = (0..n)
+        .map(|i| {
+            let elem = scalar_of(b, i);
+            let result = f(elem)?;
+            Ok(Cell::Pointer(crate::cell::PointerCellData {
+                value: result.inner,
+            }))
+        })
+        .collect::<Result<Vec<_>, ErrorCode>>()?;
+
+    Ok(ValueP::from_ravel_like(b, out_ravel))
+}
+
+/// `A f¨ B` — dyadic each with a named function: pair corresponding elements
+/// of A and B (scalar extension allowed), apply dyadic f, nest each result.
+pub fn each_dyad_name<F>(name: &str, a: &ValueP, b: &ValueP, mut f: F) -> AplResult<ValueP>
+where
+    F: FnMut(ValueP, ValueP) -> AplResult<ValueP>,
+{
+    let ac = a.element_count();
+    let bc = b.element_count();
+    let len = ac.max(bc);
+
+    if ac != bc && ac != 1 && bc != 1 {
+        return Err(ErrorCode::LengthError);
+    }
+
+    let a_cells = a.cells();
+    let b_cells = b.cells();
+
+    let out_ravel: Vec<Cell> = (0..len as usize)
+        .map(|i| {
+            let ai = i % ac.max(1) as usize;
+            let bi = i % bc.max(1) as usize;
+            let ca_v = scalar_of(a, ai);
+            let cb_v = scalar_of(b, bi);
+            let result = f(ca_v, cb_v)?;
+            Ok(Cell::Pointer(crate::cell::PointerCellData {
+                value: result.inner,
+            }))
+        })
+        .collect::<Result<Vec<_>, ErrorCode>>()?;
+
+    Ok(ValueP::from_ravel_like(
+        if ac > 1 { a } else { b },
+        out_ravel,
+    ))
+}
+
 /// Like `scalar_of` but takes a raw cell slice (for parallel paths)
 fn scalar_of_arr(cells: &[Cell], i: usize) -> ValueP {
     match &cells[i] {
@@ -628,4 +686,255 @@ mod tests {
             assert_eq!(z.cells()[base + 2], Cell::Int(a - (b_val - c)));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests for reduce_axis / scan_axis
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+    use crate::cell::Cell;
+    use crate::shape::Shape;
+
+    fn ints(v: &ValueP) -> Vec<i64> {
+        v.cells()
+            .iter()
+            .map(|c| match c {
+                Cell::Int(i) => *i,
+                Cell::Float(f) => *f as i64,
+                other => panic!("expected int, got {:?}", other),
+            })
+            .collect()
+    }
+
+    fn int_matrix(data: &[i64], rows: i64, cols: i64) -> ValueP {
+        let shape = Shape::from_dims(&[rows, cols]).unwrap();
+        let cells = data.iter().map(|&i| Cell::Int(i)).collect();
+        ValueP::from_parts(shape, cells).unwrap()
+    }
+
+    #[test]
+    fn test_reduce_axis_0_matrix() {
+        // 2 3⍴⍳6 = [[0 1 2][3 4 5]]
+        // +/[0] = reduce down columns → [0+3, 1+4, 2+5] = [3 5 7]
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        let z = reduce_axis(Prim::Add, &b, 0).unwrap();
+        assert_eq!(z.rank(), 1);
+        assert_eq!(ints(&z), vec![3, 5, 7]);
+    }
+
+    #[test]
+    fn test_reduce_axis_1_matrix() {
+        // 2 3⍴⍳6 = [[0 1 2][3 4 5]]
+        // +/[1] = reduce along rows → [0+1+2, 3+4+5] = [3 12]
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        let z = reduce_axis(Prim::Add, &b, 1).unwrap();
+        assert_eq!(z.rank(), 1);
+        assert_eq!(ints(&z), vec![3, 12]);
+    }
+
+    #[test]
+    fn test_reduce_axis_1_equals_last_axis_reduce() {
+        // For a matrix, +/[1] should equal +/
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        let z_axis = reduce_axis(Prim::Add, &b, 1).unwrap();
+        let z_plain = reduce(Prim::Add, &b).unwrap();
+        assert_eq!(ints(&z_axis), ints(&z_plain));
+    }
+
+    #[test]
+    fn test_scan_axis_0_matrix() {
+        // 2 3⍴⍳6 = [[0 1 2][3 4 5]]
+        // +\[0] = scan down columns → [[0 1 2][3 5 7]]
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        let z = scan_axis(Prim::Add, &b, 0).unwrap();
+        assert_eq!(z.rank(), 2);
+        assert_eq!(ints(&z), vec![0, 1, 2, 3, 5, 7]);
+    }
+
+    #[test]
+    fn test_scan_axis_1_matrix() {
+        // 2 3⍴⍳6 = [[0 1 2][3 4 5]]
+        // +\[1] = scan along rows → [[0 1 3][3 7 12]]
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        let z = scan_axis(Prim::Add, &b, 1).unwrap();
+        assert_eq!(z.rank(), 2);
+        assert_eq!(ints(&z), vec![0, 1, 3, 3, 7, 12]);
+    }
+
+    #[test]
+    fn test_reduce_axis_3d() {
+        // 2 2 3⍴⍳12
+        // +/[0] reduces along axis 0 → shape (2,3)
+        let data: Vec<i64> = (0..12).collect();
+        let b = ValueP::from_parts(
+            Shape::from_dims(&[2, 2, 3]).unwrap(),
+            data.iter().map(|&i| Cell::Int(i)).collect(),
+        )
+        .unwrap();
+        let z = reduce_axis(Prim::Add, &b, 0).unwrap();
+        assert_eq!(z.rank(), 2);
+        // axis 0: fold pairs (0,6),(1,7),(2,8),(3,9),(4,10),(5,11) → [6,8,10,12,14,16]
+        assert_eq!(ints(&z), vec![6, 8, 10, 12, 14, 16]);
+    }
+
+    #[test]
+    fn test_reduce_axis_scalar() {
+        let b = ValueP::int_vector(&[42]);
+        let z = reduce_axis(Prim::Add, &b, 0).unwrap();
+        assert_eq!(ints(&z), vec![42]);
+    }
+
+    #[test]
+    fn test_reduce_axis_bad_axis() {
+        let b = int_matrix(&[0, 1, 2, 3, 4, 5], 2, 3);
+        assert!(reduce_axis(Prim::Add, &b, 2).is_err());
+        assert!(reduce_axis(Prim::Add, &b, -1).is_err());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reduce / Scan with axis
+// ---------------------------------------------------------------------------
+
+/// `LO/[n] B` — reduce along axis n (0-based).
+///
+/// The axis is specified as a 0-based index. For a matrix (m, n):
+/// - axis 0: reduce down columns → result shape (n)
+/// - axis 1: reduce along rows → result shape (m)
+pub fn reduce_axis(lo: Prim, b: &ValueP, axis: i64) -> AplResult<ValueP> {
+    let rank = b.rank();
+    if rank == 0 {
+        return Ok(b.clone());
+    }
+    if axis < 0 || axis >= rank as i64 {
+        return Err(ErrorCode::RankError);
+    }
+    let axis = axis as usize;
+    let n = b.get_shape_item(axis as i16);
+    let n_us = n as usize;
+
+    // Result shape: same as B but without the reduced axis
+    let dims: Vec<i64> = (0..rank as usize)
+        .filter(|&k| k != axis)
+        .map(|k| b.get_shape_item(k as i16))
+        .collect();
+
+    if n == 0 {
+        return match identity(lo) {
+            Some(cell) => {
+                let shape = if dims.is_empty() {
+                    Shape::scalar()
+                } else {
+                    Shape::from_dims(&dims)?
+                };
+                let out_len: i64 = dims.iter().product::<i64>().max(1);
+                ValueP::from_parts(shape, vec![cell; out_len as usize])
+            }
+            None => Err(ErrorCode::DomainError),
+        };
+    }
+
+    let cells = b.cells();
+    let elem_count = b.element_count() as usize;
+
+    // For axis a, the stride is the product of dimensions after it
+    let stride: i64 = ((axis + 1)..rank as usize)
+        .map(|k| b.get_shape_item(k as i16))
+        .product::<i64>()
+        .max(1);
+    let stride_us = stride as usize;
+
+    // The "pre" is the product of dimensions before axis a
+    let pre: i64 = (0..axis)
+        .map(|k| b.get_shape_item(k as i16))
+        .product::<i64>()
+        .max(1);
+    let pre_us = pre as usize;
+
+    // Number of independent lines along the axis = pre * stride
+    let nlines = pre_us * stride_us;
+
+    let fold_line = |line: usize| -> Result<Cell, ErrorCode> {
+        let pre_idx = line / stride_us;
+        let s = line % stride_us;
+        let base = pre_idx * n_us * stride_us + s;
+
+        // Fold right-to-left along the axis
+        let mut acc = cells[base + (n_us - 1) * stride_us].clone();
+        for kk in (0..n_us - 1).rev() {
+            acc = apply_prim(lo, &cells[base + kk * stride_us], &acc)?;
+        }
+        Ok(acc)
+    };
+
+    let out: Vec<Cell> = if nlines >= crate::functions::PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
+        (0..nlines)
+            .into_par_iter()
+            .map(fold_line)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        (0..nlines).map(fold_line).collect::<Result<Vec<_>, _>>()?
+    };
+
+    let shape = if dims.is_empty() {
+        Shape::scalar()
+    } else {
+        Shape::from_dims(&dims)?
+    };
+    ValueP::from_parts(shape, out)
+}
+
+/// `LO\[n] B` — scan along axis n (0-based).
+pub fn scan_axis(lo: Prim, b: &ValueP, axis: i64) -> AplResult<ValueP> {
+    let rank = b.rank();
+    if rank == 0 {
+        return Ok(b.clone());
+    }
+    if axis < 0 || axis >= rank as i64 {
+        return Err(ErrorCode::RankError);
+    }
+    let axis = axis as usize;
+    let n = b.get_shape_item(axis as i16);
+    let n_us = n as usize;
+
+    if n == 0 {
+        return Ok(b.clone());
+    }
+
+    let cells = b.cells();
+    let elem_count = b.element_count() as usize;
+    let stride: i64 = ((axis + 1)..rank as usize)
+        .map(|k| b.get_shape_item(k as i16))
+        .product::<i64>()
+        .max(1);
+    let stride_us = stride as usize;
+    let pre: i64 = (0..axis)
+        .map(|k| b.get_shape_item(k as i16))
+        .product::<i64>()
+        .max(1);
+    let pre_us = pre as usize;
+    let nlines = pre_us * stride_us;
+
+    let mut out = vec![Cell::Int(0); elem_count];
+
+    for line in 0..nlines {
+        let pre_idx = line / stride_us;
+        let s = line % stride_us;
+        let base = pre_idx * n_us * stride_us + s;
+
+        for kk in 0..n_us {
+            let idx = base + kk * stride_us;
+            if kk == 0 {
+                out[idx] = cells[idx].clone();
+            } else {
+                out[idx] = apply_prim(lo, &out[idx - stride_us], &cells[idx])?;
+            }
+        }
+    }
+
+    Ok(ValueP::from_ravel_like(b, out))
 }
