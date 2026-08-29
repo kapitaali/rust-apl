@@ -1047,7 +1047,7 @@ pub fn quad_mx(b: &ValueP) -> AplResult<ValueP> {
     if cells.is_empty() {
         return Err(ErrorCode::DomainError);
     }
-    
+
     if cells.len() == 1 {
         // Return operation info
         let op = cells[0].get_int_value()?;
@@ -1062,11 +1062,11 @@ pub fn quad_mx(b: &ValueP) -> AplResult<ValueP> {
         let cps: Vec<u32> = desc.chars().map(|c| c as u32).collect();
         return Ok(ValueP::char_vector(&cps));
     }
-    
+
     // Dyadic: B[0] is operation, B[1..] is the matrix
     let op = cells[0].get_int_value()?;
     let matrix_cells = &cells[1..];
-    
+
     match op {
         3 => {
             // Trace: sum of diagonal
@@ -1282,7 +1282,7 @@ mod tests {
         let path = "/tmp/test_quad_fio_size.txt";
         std::fs::write(path, "hello world").unwrap();
         let v = ValueP::int_vector(&[7]); // file size operation
-        // Note: this simplified version doesn't actually read the path from args
+                                          // Note: this simplified version doesn't actually read the path from args
         let _ = quad_fio(&v);
         let _ = std::fs::remove_file(path);
     }
@@ -1306,7 +1306,9 @@ mod tests {
 
     #[test]
     fn test_quad_json_parse_array() {
-        let v = ValueP::char_vector(&['[' as u32, '1' as u32, ',' as u32, '2' as u32, ',' as u32, '3' as u32, ']' as u32]);
+        let v = ValueP::char_vector(&[
+            '[' as u32, '1' as u32, ',' as u32, '2' as u32, ',' as u32, '3' as u32, ']' as u32,
+        ]);
         let result = quad_json(&v).unwrap();
         assert_eq!(result.element_count(), 3);
         assert_eq!(result.cells()[0], Cell::Int(1));

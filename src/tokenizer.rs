@@ -34,6 +34,8 @@ pub enum Tok {
     EachName(String),
     /// rank operator `f⍤k` — the operand prim; k follows as the next token
     Rank(Prim),
+    /// a modified assignment `NAME +← expr` — shorthand for NAME ← NAME + expr
+    ModifiedAssign(Prim),
     /// statement separator `⋄` (diamond)
     Diamond,
     /// outer product: `A ∘.f B`
@@ -221,8 +223,17 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 i += 1;
             }
             '←' => {
-                toks.push(Tok::Assign);
-                i += 1;
+                // modified assignment: NAME +← expr — detect Prim Assign
+                // and convert to ModifiedAssign(Prim)
+                if let Some(Tok::Prim(p)) = toks.last() {
+                    let p = *p;
+                    toks.pop();
+                    toks.push(Tok::ModifiedAssign(p));
+                    i += 1;
+                } else {
+                    toks.push(Tok::Assign);
+                    i += 1;
+                }
             }
             '⍨' => {
                 toks.push(Tok::Commute);
@@ -680,6 +691,20 @@ mod tests {
         // Each needs a preceding prim
         let toks = tokenize("×¨").unwrap();
         assert!(toks.contains(&Tok::Each(Prim::Multiply)));
+    }
+
+    #[test]
+    fn test_each_op_named() {
+        // Each with a named function
+        let toks = tokenize("f¨").unwrap();
+        assert!(toks.contains(&Tok::EachName("f".to_string())));
+    }
+
+    #[test]
+    fn test_modified_assignment_token() {
+        // V +← 10: the +← should become ModifiedAssign(Add)
+        let toks = tokenize("V+←10").unwrap();
+        assert!(toks.contains(&Tok::ModifiedAssign(Prim::Add)));
     }
 
     #[test]

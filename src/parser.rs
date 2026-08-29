@@ -120,6 +120,8 @@ pub enum Expr {
     IndexAxes(Box<Expr>, Vec<Option<Expr>>),
     Dyadic(Prim, Box<Expr>, Box<Expr>),
     Assign(String, Box<Expr>),
+    /// `NAME +← expr` — modified assignment (shorthand for NAME ← NAME + expr)
+    ModifiedAssign(String, Prim, Box<Expr>),
     /// selective assignment: `NAME[idx] ← expr`
     AssignIndexed(String, Box<Expr>, Box<Expr>),
     /// Multi-axis selective assignment: `NAME[i;j;...] ← expr`. One entry per
@@ -531,6 +533,12 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             }
             let (rhs, used) = parse_expr(&toks[2..])?;
             return Ok((Expr::Assign(name, Box::new(rhs)), used + 2));
+        }
+        // modified assignment: NAME +← expr — shorthand for NAME ← NAME + expr
+        if let Some(Tok::ModifiedAssign(p)) = toks.get(1) {
+            let p = *p;
+            let (rhs, used) = parse_expr(&toks[2..])?;
+            return Ok((Expr::ModifiedAssign(name, p, Box::new(rhs)), used + 2));
         }
         // selective assignment: NAME[expr] ← expr  or  NAME[i;j;...] ← expr
         if matches!(toks.get(1), Some(Tok::LBracket)) {
@@ -2789,6 +2797,18 @@ impl Environment {
                 self.vars.insert(name.clone(), v.clone());
                 Ok(v)
             }
+            Expr::ModifiedAssign(name, p, rhs) => {
+                // NAME +← expr is shorthand for NAME ← NAME + expr
+                let rv = self.eval(rhs)?;
+                let lv = self
+                    .vars
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(ValueP::int_vector(&[0]));
+                let result = p.eval_dyadic(&lv, &rv)?;
+                self.vars.insert(name.clone(), result.clone());
+                Ok(result)
+            }
             Expr::AssignIndexed(name, idx, rhs) => {
                 // B[idx] ← value. The index is ⎕IO-relative, and a
                 // multi-element right side is distributed ELEMENTWISE
@@ -3158,9 +3178,7 @@ impl Environment {
             }
             Expr::EachOpName(n, b) => {
                 let bv = self.eval(b)?;
-                crate::operators::each_name(n, &bv, |val| {
-                    self.call_function(n, None, Some(val))
-                })
+                crate::operators::each_name(n, &bv, |val| self.call_function(n, None, Some(val)))
             }
             Expr::EachDyadName(n, a, b) => {
                 let av = self.eval(a)?;
@@ -4631,6 +4649,76 @@ mod tests {
         // A must be unchanged (COW isolation)
         assert_eq!(eval_int_env(&mut env, "A[0]"), 1);
         assert_eq!(eval_int_env(&mut env, "B[0]"), 99);
+    }
+
+    #[test]
+    fn test_modified_assignment() {
+        let mut env = Environment::new();
+        env.eval_line("V←1 2 3 4").unwrap();
+        env.eval_line("V+←10").unwrap();
+        let v = env.eval_line("V").unwrap().unwrap();
+        let cells = v.cells();
+        assert_eq!(cells.len(), 4);
+        for (i, c) in cells.iter().enumerate() {
+            match c {
+                crate::cell::Cell::Int(val) => assert_eq!(*val, 11 + i as i64),
+                o => panic!("expected int, got {:?}", o),
+            }
+        }
+    }
+
+    #[test]
+    fn test_modified_assignment_multiply() {
+        let mut env = Environment::new();
+        env.eval_line("X←2 3 4").unwrap();
+        env.eval_line("X×←3").unwrap();
+        let v = env.eval_line("X").unwrap().unwrap();
+        let cells = v.cells();
+        assert_eq!(cells.len(), 3);
+        for (i, c) in cells.iter().enumerate() {
+            match c {
+                crate::cell::Cell::Int(val) => assert_eq!(*val, (2 + i as i64) * 3),
+                o => panic!("expected int, got {:?}", o),
+            }
+        }
+    }
+
+    #[test]
+    fn test_named_function_each() {
+        let mut env = Environment::new();
+        env.eval_line("f←{⍵+1}").unwrap();
+        let v = env.eval_line("f¨ 1 2 3").unwrap().unwrap();
+        assert_eq!(v.rank(), 1);
+        assert_eq!(v.cells().len(), 3);
+        for (i, c) in v.cells().iter().enumerate() {
+            match c {
+                crate::cell::Cell::Pointer(p) => {
+                    let inner = crate::value::ValueP {
+                        inner: p.value.clone(),
+                    };
+                    match inner.first_cell().unwrap() {
+                        crate::cell::Cell::Int(val) => assert_eq!(*val, 2 + i as i64),
+                        o => panic!("expected int, got {:?}", o),
+                    }
+                }
+                o => panic!("expected pointer, got {:?}", o),
+            }
+        }
+    }
+
+    #[test]
+    fn test_axis_reduce() {
+        let mut env = Environment::new();
+        env.eval_line("M←2 3⍴⍳6").unwrap();
+        let v1 = env.eval_line("+/[1]M").unwrap().unwrap();
+        let v2 = env.eval_line("+/M").unwrap().unwrap();
+        assert_eq!(v1.cells().len(), v2.cells().len());
+        for (a, b) in v1.cells().iter().zip(v2.cells().iter()) {
+            match (a, b) {
+                (crate::cell::Cell::Int(x), crate::cell::Cell::Int(y)) => assert_eq!(x, y),
+                _ => panic!("expected ints"),
+            }
+        }
     }
 
     #[test]
