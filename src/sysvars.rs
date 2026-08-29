@@ -12,7 +12,7 @@
 //! )VARS — list variable names
 //! )FNS  — list defined function names
 //! )CLEAR— wipe workspace (vars + functions)
-//! )SAVE — save variables to <name>.aplws
+//! )SAVE — save variables to <name>.xml
 //! )LOAD — load a saved workspace (wipes current first, like GNU APL)
 //! )OFF  — exit (handled by REPL)
 
@@ -193,13 +193,23 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 )]);
             }
             let result = match cmd.as_str() {
-                "SAVE" => crate::workspace::save(env, name),
-                _ => crate::workspace::load(env, name),
+                "SAVE" => match crate::xml_archive::save_xml(env, name) {
+                    Ok(path) => Some(path),
+                    Err(e) => return Some(vec![format!("ERROR: {}", e)]),
+                },
+                _ => {
+                    env.clear_workspace();
+                    crate::xml_archive::load_xml(env, name).ok()?;
+                    init_sysvars(env);
+                    Some(format!("{}.xml", name))
+                }
             };
-            match result {
-                Ok(path) => Some(vec![format!("{} {} ({})", cmd, name.to_uppercase(), path)]),
-                Err(e) => Some(vec![format!("ERROR: {}", e)]),
-            }
+            Some(vec![format!(
+                "{} {} ({})",
+                cmd,
+                name.to_uppercase(),
+                result.unwrap_or_else(|| "failed".to_string())
+            )])
         }
         "SI" => {
             // )SI — state indicator (call stack). No active functions in v1.
@@ -253,7 +263,7 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             if name.is_empty() {
                 Some(vec!["USAGE: )DROP name".to_string()])
             } else {
-                let path = format!("{}.aplws", name);
+                let path = format!("{}.xml", name);
                 match std::fs::remove_file(&path) {
                     Ok(()) => Some(vec![format!("DROPPED {}", name.to_uppercase())]),
                     Err(e) => Some(vec![format!("ERROR: cannot drop {}: {}", name, e)]),
@@ -380,5 +390,45 @@ mod tests {
         assert!(syscmd("OFF", &mut env).is_none());
         let out = syscmd("NOPE", &mut env).unwrap();
         assert!(out[0].starts_with("UNKNOWN"));
+    }
+
+    #[test]
+    fn test_syscmd_save_load_xml() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("X←42").unwrap();
+        env.eval_line("S←'HELLO'").unwrap();
+        crate::functions_def::define_function(&mut env.funcs, "INCR", &["⍵+1".to_string()])
+            .unwrap();
+
+        // Save
+        let out = syscmd("SAVE test_ws", &mut env).unwrap();
+        assert!(out[0].contains("SAVE"));
+        assert!(out[0].ends_with(".xml)"));
+
+        // Clear and load
+        env.clear_workspace();
+        assert!(env.get("X").is_none());
+        assert!(env.funcs.names().is_empty());
+
+        let out = syscmd("LOAD test_ws", &mut env).unwrap();
+        assert!(out[0].contains("LOAD"));
+
+        // Verify variables restored
+        assert_eq!(
+            env.eval_line("X+0").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(42))
+        );
+        let s = env.eval_line("S").unwrap().unwrap();
+        assert_eq!(s.cells()[0], crate::cell::Cell::Char('H' as u32));
+
+        // Verify function restored
+        assert_eq!(
+            env.eval_line("INCR 5").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(6))
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file("test_ws.xml");
     }
 }
