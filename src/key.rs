@@ -108,7 +108,11 @@ pub fn key_dyad(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
         return Err(ErrorCode::DomainError);
     }
 
-    let glyph = a.first_cell().unwrap().get_char_value().map_err(|_| ErrorCode::DomainError)?;
+    let glyph = a
+        .first_cell()
+        .unwrap()
+        .get_char_value()
+        .map_err(|_| ErrorCode::DomainError)?;
 
     // Map glyph to Prim — only include variants that exist in the enum
     let prim = match glyph {
@@ -134,7 +138,9 @@ pub fn key_dyad(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     for elem in elems {
         match elem {
             crate::cell::Cell::Pointer(p) => {
-                let val = ValueP { inner: p.value.clone() };
+                let val = ValueP {
+                    inner: p.value.clone(),
+                };
                 let result = prim.eval_monadic(&val)?;
                 if result.is_scalar() {
                     transformed.push(result.first_cell().unwrap().clone());

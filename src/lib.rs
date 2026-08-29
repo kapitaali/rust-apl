@@ -50,10 +50,10 @@ pub mod key;
 #[cfg(feature = "unofficial-ext")]
 pub mod over;
 
-pub mod quad;
 pub mod ap;
-pub mod xml_archive;
 pub mod packed_bool;
+pub mod quad;
+pub mod xml_archive;
 
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;

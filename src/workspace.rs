@@ -275,11 +275,7 @@ fn serialize_var(v: &ValueP) -> Option<String> {
                 }
             })
             .collect::<Option<Vec<_>>>()?;
-        return Some(format!(
-            "AN {};{}",
-            dims.join(","),
-            children.join("|")
-        ));
+        return Some(format!("AN {};{}", dims.join(","), children.join("|")));
     }
 
     let kind = match cells.first()? {

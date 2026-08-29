@@ -25,16 +25,10 @@ pub fn outer_product(a: &ValueP, p: Prim, b: &ValueP) -> AplResult<ValueP> {
             .map(|idx| {
                 let i = idx / nb;
                 let j = idx % nb;
-                let av = ValueP::from_parts(
-                    crate::shape::Shape::scalar(),
-                    vec![acells[i].clone()],
-                )
-                .map_err(|_| ErrorCode::DomainError)?;
-                let bv = ValueP::from_parts(
-                    crate::shape::Shape::scalar(),
-                    vec![bcells[j].clone()],
-                )
-                .map_err(|_| ErrorCode::DomainError)?;
+                let av = ValueP::from_parts(crate::shape::Shape::scalar(), vec![acells[i].clone()])
+                    .map_err(|_| ErrorCode::DomainError)?;
+                let bv = ValueP::from_parts(crate::shape::Shape::scalar(), vec![bcells[j].clone()])
+                    .map_err(|_| ErrorCode::DomainError)?;
                 let v = prim.eval_dyadic(&av, &bv)?;
                 if v.is_scalar() {
                     Ok(v.first_cell().unwrap().clone())
@@ -47,16 +41,10 @@ pub fn outer_product(a: &ValueP, p: Prim, b: &ValueP) -> AplResult<ValueP> {
         let mut cells = Vec::with_capacity(total);
         for ac in a.cells() {
             for bc in b.cells() {
-                let av = ValueP::from_parts(
-                    crate::shape::Shape::scalar(),
-                    vec![ac.clone()],
-                )
-                .map_err(|_| ErrorCode::DomainError)?;
-                let bv = ValueP::from_parts(
-                    crate::shape::Shape::scalar(),
-                    vec![bc.clone()],
-                )
-                .map_err(|_| ErrorCode::DomainError)?;
+                let av = ValueP::from_parts(crate::shape::Shape::scalar(), vec![ac.clone()])
+                    .map_err(|_| ErrorCode::DomainError)?;
+                let bv = ValueP::from_parts(crate::shape::Shape::scalar(), vec![bc.clone()])
+                    .map_err(|_| ErrorCode::DomainError)?;
                 let v = prim.eval_dyadic(&av, &bv)?;
                 if v.is_scalar() {
                     cells.push(v.first_cell().unwrap().clone());

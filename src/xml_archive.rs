@@ -21,8 +21,8 @@ pub fn save_xml(env: &Environment, name: &str) -> Result<String, String> {
 /// Load workspace from XML file.
 pub fn load_xml(env: &mut Environment, name: &str) -> Result<(), String> {
     let path = PathBuf::from(format!("{}.xml", name));
-    let text =
-        std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
     parse_xml(env, &text)
 }
 

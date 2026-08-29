@@ -843,7 +843,10 @@ pub unsafe extern "C" fn get_function_ucs(
     }
     let slice = std::slice::from_raw_parts(name, len);
     // Convert to Rust String
-    let s: String = slice.iter().filter_map(|&c| std::char::from_u32(c)).collect();
+    let s: String = slice
+        .iter()
+        .filter_map(|&c| std::char::from_u32(c))
+        .collect();
     // Check if it's a valid function name
     GLOBAL_ENV.with(|env| {
         let env = env.borrow();

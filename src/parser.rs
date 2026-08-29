@@ -63,6 +63,22 @@ pub enum Expr {
     QuadLoadSo(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
     QuadCr(i64, Box<Expr>),
+    /// `⎕RVAL B` — random value (rank, shape, type, depth)
+    QuadRval(Box<Expr>),
+    /// `⎕RL B` — random link (seed state)
+    QuadRl(Box<Expr>),
+    /// `⎕CC B` — case conversion
+    QuadCc(Box<Expr>),
+    /// `⎕DLX B` — dancing links exact cover
+    QuadDlx(Box<Expr>),
+    /// `⎕TF B` — transfer form
+    QuadTf(Box<Expr>),
+    /// `⎕FX B` — fix function from character matrix
+    QuadFx(Box<Expr>),
+    /// `⎕MAP B` — symbol table map
+    QuadMap(Box<Expr>),
+    /// `⎕MX B` — matrix operations
+    QuadMx(Box<Expr>),
     /// `⎕UCS B` — Unicode character set conversion
     QuadUcs(Box<Expr>),
     /// `⎕AV` — APL character vector
@@ -1022,6 +1038,62 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             return Ok((Expr::QuadEn, 1));
         }
     }
+    // ⎕RVAL — random value
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕RVAL" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadRval(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕RL — random link
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕RL" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadRl(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕CC — case conversion
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕CC" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadCc(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕DLX — dancing links
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕DLX" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadDlx(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕TF — transfer form
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕TF" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadTf(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕FX — fix function
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕FX" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadFx(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕MAP — symbol table map
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕MAP" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadMap(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕MX — matrix operations
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕MX" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadMx(Box::new(arg)), 1 + used));
+        }
+    }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
             // dfn: `{ BODY }` — body is one or more expressions separated by
@@ -1486,7 +1558,10 @@ fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 if is_prim {
                     let next_next_is_value = matches!(
                         toks.get(1 + used),
-                        Some(Tok::Num(_)) | Some(Tok::Str(_)) | Some(Tok::Name(_)) | Some(Tok::LParen)
+                        Some(Tok::Num(_))
+                            | Some(Tok::Str(_))
+                            | Some(Tok::Name(_))
+                            | Some(Tok::LParen)
                     );
                     if next_next_is_value {
                         let (rhs, rused) = parse_simple(&toks[1 + used..])?;
@@ -2370,7 +2445,9 @@ impl Environment {
             )),
             Expr::ComplexVec(vs) => Ok(ValueP::from_ravel_like(
                 &ValueP::vector(vs.len() as i64),
-                vs.iter().map(|&(re, im)| crate::cell::Cell::complex(re, im)).collect(),
+                vs.iter()
+                    .map(|&(re, im)| crate::cell::Cell::complex(re, im))
+                    .collect(),
             )),
             Expr::NestedVec(items) => {
                 // Strand semantics (GNU APL): any SINGLE-ELEMENT item
@@ -3263,6 +3340,38 @@ impl Environment {
             Expr::QuadTc => Ok(crate::quad::quad_tc()),
             Expr::QuadDm => Ok(crate::quad::quad_dm()),
             Expr::QuadEn => Ok(crate::quad::quad_en()),
+            Expr::QuadRval(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_rval(&bv)
+            }
+            Expr::QuadRl(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_rl(&bv)
+            }
+            Expr::QuadCc(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_cc(&bv)
+            }
+            Expr::QuadDlx(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_dlx(&bv)
+            }
+            Expr::QuadTf(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_tf(&bv)
+            }
+            Expr::QuadFx(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_fx(self, &bv)
+            }
+            Expr::QuadMap(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_map(self, &bv)
+            }
+            Expr::QuadMx(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_mx(&bv)
+            }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
                 let xv = self.eval(axis)?;
