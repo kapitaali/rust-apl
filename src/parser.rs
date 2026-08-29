@@ -1915,6 +1915,16 @@ impl Environment {
         self.vars.remove(name);
     }
 
+    /// insert or update a variable (used by XML loading)
+    pub fn insert_var(&mut self, name: String, val: ValueP) {
+        self.vars.insert(name, val);
+    }
+
+    /// get a variable's value (used by XML saving)
+    pub fn get_var(&self, name: &str) -> Option<ValueP> {
+        self.vars.get(name).cloned()
+    }
+
     /// read ⎕IO (index origin; 0 if unset)
     pub fn get_io(&self) -> AplResult<i64> {
         crate::sysvars::get_io(self)

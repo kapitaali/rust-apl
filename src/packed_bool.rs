@@ -6,7 +6,6 @@
 //! cache locality for large boolean arrays.
 
 use crate::cell::Cell;
-use crate::types::ShapeItem;
 
 /// A packed boolean vector stored as bits in `u64` words.
 ///
