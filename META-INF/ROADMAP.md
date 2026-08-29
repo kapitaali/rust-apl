@@ -84,15 +84,16 @@ These are the most-used system functions. Many are simple; a few need external c
 ### 3.1 LvalCell
 - Pointer cells that reference another value's ravel slot
 - Enables `arr[idx]←val` and `(expr)←val`
-- Requires careful lifetime management in Rust (likely `Arc<Mutex<...>>` or unsafe)
+- ✅ Done: LvalCellData in cell.rs, COW isolation in value.rs
 
 ### 3.2 Modified Assignment
 - `arr[idx]+=val` and similar
-- Depends on LvalCell
+- ✅ Done: `NAME +← expr` works (shorthand for `NAME ← NAME + expr`)
 
 ### 3.3 Structural Selective Assignment
 - `arr[idx]←val` where idx is an array of indices
 - `(arr1 arr2)[idx]←val` — multiple arrays
+- ✅ Done: `NAME[idx]←expr`, `NAME[i;j;...]←expr`, `(selector)←value`, `(A⊃NAME)←expr`
 
 ---
 
