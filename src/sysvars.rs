@@ -172,7 +172,6 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             // )CONTINUE — report no saved session (we don't support it yet)
             Some(vec!["CONTINUE is not supported in this port".to_string()])
         }
-        "ED" => Some(vec![")ED is not supported in this port".to_string()]),
         "ERASE" => {
             let name = parts.next().unwrap_or("");
             if name.is_empty() {
@@ -190,6 +189,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         "DIR" => Some(vec![std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "(unknown)".to_string())]),
+        "SVS" => {
+            // )SVS — shared variable status (stub: no shared variables in this port)
+            Some(vec!["(no shared variables)".to_string()])
+        }
         "HISTORY" => Some(vec!["HISTORY is not supported in this port".to_string()]),
         "SAVE" | "LOAD" => {
             let name = parts.next().unwrap_or("");

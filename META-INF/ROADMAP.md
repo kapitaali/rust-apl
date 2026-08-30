@@ -129,9 +129,9 @@ These are the most-used system functions. Many are simple; a few need external c
 |---|---|---|---|
 | 1 | `)INP` | Input session from file | ✅ Done |
 | 2 | `)OUT` | Save session to file | ✅ Done |
-| 3 | `)LIB` | List saved workspaces | |
+| 3 | `)LIB` | List saved workspaces | ✅ Done |
 | 4 | `)COPY` | Copy functions/variables from workspace | ✅ Done |
-| 5 | `)ERASE` | Erase functions/variables | |
+| 5 | `)ERASE` | Erase functions/variables | ✅ Done |
 | 6 | `)FNS` | List functions | ✅ Done |
 | 7 | `)VARS` | List variables | ✅ Done |
 | 8 | `)OPS` | List operators | ✅ Done |
@@ -146,7 +146,7 @@ These are the most-used system functions. Many are simple; a few need external c
 ### 5.2 State Indicator
 - `)SI` — display call stack | ✅ Done
 - `)SINL` — SI with line numbers | ✅ Done
-- `)SVS` — shared variable status |
+- `)SVS` — shared variable status | ✅ Done (stub: no shared variables)
 
 ### 5.4 Macros
 - Session macros (input/output recording)
