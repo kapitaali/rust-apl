@@ -171,8 +171,11 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             }
         }
         "CONTINUE" => {
-            // )CONTINUE — report no saved session (we don't support it yet)
-            Some(vec!["CONTINUE is not supported in this port".to_string()])
+            // )CONTINUE — save workspace to CONTINUE.xml and exit
+            match crate::xml_archive::save_xml(env, "CONTINUE") {
+                Ok(_) => None, // caller exits
+                Err(e) => Some(vec![format!("CONTINUE ERROR: {}", e)]),
+            }
         }
         "ERASE" => {
             let name = parts.next().unwrap_or("");
@@ -678,6 +681,32 @@ mod tests {
         assert!(syscmd("OFF", &mut env).is_none());
         let out = syscmd("NOPE", &mut env).unwrap();
         assert!(out[0].starts_with("UNKNOWN"));
+    }
+
+    #[test]
+    fn test_syscmd_continue_saves_workspace() {
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("X←42").unwrap();
+        env.eval_line("S←'HELLO'").unwrap();
+
+        // )CONTINUE returns None (signals exit) on save success
+        let result = syscmd("CONTINUE", &mut env);
+        assert!(result.is_none(), "CONTINUE should return None to signal exit");
+
+        // Verify CONTINUE.xml was created
+        assert!(std::path::Path::new("CONTINUE.xml").exists());
+
+        // Verify it can be loaded back
+        let mut env2 = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env2);
+        crate::xml_archive::load_xml(&mut env2, "CONTINUE").unwrap();
+        assert_eq!(
+            env2.eval_line("X+0").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(42))
+        );
+
+        let _ = std::fs::remove_file("CONTINUE.xml");
     }
 
     #[test]
