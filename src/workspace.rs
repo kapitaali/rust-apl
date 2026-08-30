@@ -446,10 +446,10 @@ mod tests {
         let mut env = fresh();
         // Nested arrays are now supported, so this should succeed
         env.eval_line("N←(1 2)(3 4)").unwrap();
-        assert!(save(&env, "test_ws_nested").is_ok());
-        let path = save(&env, "test_ws_nested").unwrap();
+        assert!(save(&env, "test_ws_unsupported").is_ok());
+        let path = save(&env, "test_ws_unsupported").unwrap();
         let mut env2 = fresh();
-        load(&mut env2, "test_ws_nested").unwrap();
+        load(&mut env2, "test_ws_unsupported").unwrap();
         assert!(env2.get("N").is_some());
         let _ = std::fs::remove_file(path);
     }

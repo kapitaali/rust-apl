@@ -221,6 +221,141 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         }
         "OFF" => None, // caller exits
         "" => Some(vec!["(empty system command)".to_string()]),
+        "OUT" => {
+            // )OUT file — save session as APL source (variables + dfns)
+            let name = parts.next().unwrap_or("");
+            if name.is_empty() {
+                return Some(vec!["USAGE: )OUT file".to_string()]);
+            }
+            let mut lines = Vec::new();
+            // emit variable assignments
+            let mut var_names = env.var_names();
+            var_names.sort();
+            for vname in &var_names {
+                if vname.starts_with('⎕') {
+                    continue; // skip system vars
+                }
+                if let Some(val) = env.get(vname) {
+                    // simple scalar/vector emission
+                    if val.is_scalar() || val.is_vector() {
+                        let cells: Vec<String> = val
+                            .cells()
+                            .iter()
+                            .map(|c| match c {
+                                crate::cell::Cell::Int(n) => n.to_string(),
+                                crate::cell::Cell::Float(f) => format!("{}", f),
+                                crate::cell::Cell::Char(ch) => {
+                                    format!("'{}'", char::from_u32(*ch).unwrap_or('?'))
+                                }
+                                _ => "?".to_string(),
+                            })
+                            .collect();
+                        let val_str = cells.join(" ");
+                        lines.push(format!("{} ← {}", vname, val_str));
+                    }
+                    // skip matrices/functions for now
+                }
+            }
+            // emit function definitions
+            for fname in env.funcs.names() {
+                if let Some(crate::functions_def::Callable::Interpreted(f)) = env.funcs.get(&fname)
+                {
+                    if !f.no_save && !f.source.is_empty() {
+                        lines.push(format!("∇{}", fname));
+                        for sline in &f.source {
+                            lines.push(sline.clone());
+                        }
+                        lines.push("∇".to_string());
+                    }
+                }
+            }
+            let content = lines.join("\n");
+            match std::fs::write(name, content) {
+                Ok(()) => Some(vec![format!("SAVED {}", name)]),
+                Err(e) => Some(vec![format!("ERROR: cannot write {}: {}", name, e)]),
+            }
+        }
+        "OPS" => {
+            // )OPS — list available operators
+            let ops = vec![
+                "¨ (Each)",
+                "⍤ (Rank)",
+                "⍣ (Power)",
+                "⍨ (Commute)",
+                "∘. (Outer Dot)",
+                "∘ (Matrix Product)",
+                ". (Inner Dot)",
+                "⍀ (Scan1)",
+                "⌿ (Reduce1)",
+                "⍥ (Over)",
+            ];
+            Some(vec![ops.join("  ")])
+        }
+        "GRP" => {
+            // )GRP — grouped name display (by type)
+            let mut groups: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            for name in env.var_names() {
+                if name.starts_with('⎕') {
+                    continue; // skip system vars (consistent with )VARS)
+                }
+                if let Some(val) = env.get(&name) {
+                    let kind = if val.is_scalar() {
+                        "scalar"
+                    } else if val.is_vector() {
+                        "vector"
+                    } else {
+                        "array"
+                    };
+                    groups.entry(kind.to_string()).or_default().push(name);
+                }
+            }
+            for name in env.funcs.names() {
+                groups.entry("function".to_string()).or_default().push(name);
+            }
+            let mut output = Vec::new();
+            for (kind, names) in groups {
+                let mut sorted = names;
+                sorted.sort();
+                output.push(format!("{}: {}", kind, sorted.join(" ")));
+            }
+            output.sort();
+            if output.is_empty() {
+                output.push("(empty workspace)".to_string());
+            }
+            Some(output)
+        }
+        "NMS" => {
+            // )NMS — name space display (all names, grouped by first letter)
+            let mut all_names: Vec<String> = env
+                .var_names()
+                .into_iter()
+                .filter(|n| !n.starts_with('⎕'))
+                .collect();
+            all_names.extend(env.funcs.names());
+            all_names.sort();
+            let mut groups: std::collections::HashMap<char, Vec<String>> =
+                std::collections::HashMap::new();
+            for name in &all_names {
+                let first = name.chars().next().unwrap_or('?');
+                groups.entry(first).or_default().push(name.clone());
+            }
+            let mut output = Vec::new();
+            let mut keys: Vec<char> = groups.keys().copied().collect();
+            keys.sort();
+            for k in keys {
+                let names = groups.get(&k).unwrap();
+                output.push(format!("{}: {}", k, names.join(" ")));
+            }
+            if output.is_empty() {
+                output.push("(empty workspace)".to_string());
+            }
+            Some(output)
+        }
+        "SINL" => {
+            // )SINL — state indicator with line numbers (no active functions in v1)
+            Some(vec!["(no active functions)".to_string()])
+        }
         "COPY" | "IN" => {
             // minimal )COPY: evaluate each line of an APL source file in
             // the live workspace. Covers ⎕NA associations, variable and
@@ -430,5 +565,110 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file("test_ws.xml");
+    }
+
+    #[test]
+    fn test_syscmd_out_scalar_vector() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("X←42").unwrap();
+        env.eval_line("V←1 2 3").unwrap();
+        env.eval_line("S←'HELLO'").unwrap();
+
+        let out = syscmd("OUT /tmp/test_out_ws", &mut env).unwrap();
+        assert_eq!(out[0], "SAVED /tmp/test_out_ws");
+
+        let content = std::fs::read_to_string("/tmp/test_out_ws").unwrap();
+        assert!(content.contains("X ← 42"));
+        assert!(content.contains("V ← 1 2 3"));
+        assert!(content.contains("S ← 'H' 'E' 'L' 'L' 'O'"));
+        // system vars should not be saved
+        assert!(!content.contains("⎕IO"));
+
+        let _ = std::fs::remove_file("/tmp/test_out_ws");
+    }
+
+    #[test]
+    fn test_syscmd_out_with_function() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        crate::functions_def::define_function(&mut env.funcs, "DOUBLE", &["⍵+⍵".to_string()])
+            .unwrap();
+
+        let out = syscmd("OUT /tmp/test_out_fn", &mut env).unwrap();
+        assert_eq!(out[0], "SAVED /tmp/test_out_fn");
+
+        let content = std::fs::read_to_string("/tmp/test_out_fn").unwrap();
+        assert!(content.contains("∇DOUBLE"));
+        assert!(content.contains("⍵+⍵"));
+        assert!(content.contains("∇"));
+
+        let _ = std::fs::remove_file("/tmp/test_out_fn");
+    }
+
+    #[test]
+    fn test_syscmd_out_no_args() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("OUT", &mut env).unwrap();
+        assert!(out[0].contains("USAGE"));
+    }
+
+    #[test]
+    fn test_syscmd_ops() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("OPS", &mut env).unwrap();
+        assert!(out[0].contains("Each"));
+        assert!(out[0].contains("Rank"));
+        assert!(out[0].contains("Power"));
+        assert!(out[0].contains("Commute"));
+    }
+
+    #[test]
+    fn test_syscmd_grp() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("A←5").unwrap();
+        env.eval_line("B←1 2 3").unwrap();
+        crate::functions_def::define_function(&mut env.funcs, "F", &["⍵".to_string()]).unwrap();
+
+        let out = syscmd("GRP", &mut env).unwrap();
+        let joined = out.join("\n");
+        assert!(joined.contains("scalar:"));
+        assert!(joined.contains("vector:"));
+        assert!(joined.contains("function:"));
+        assert!(joined.contains(" A"));
+        assert!(joined.contains(" B"));
+        assert!(joined.contains(" F"));
+        // ⎕-vars should be filtered out
+        assert!(!joined.contains("⎕IO"));
+        assert!(!joined.contains("⎕PP"));
+    }
+
+    #[test]
+    fn test_syscmd_nms() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("ALPHA←1").unwrap();
+        env.eval_line("BETA←2").unwrap();
+        env.eval_line("AARDVARK←3").unwrap();
+
+        let out = syscmd("NMS", &mut env).unwrap();
+        let joined = out.join("\n");
+        // all names grouped by first letter
+        assert!(joined.contains("A:"));
+        assert!(joined.contains("B:"));
+        assert!(joined.contains("ALPHA"));
+        assert!(joined.contains("AARDVARK"));
+        assert!(joined.contains("BETA"));
+    }
+
+    #[test]
+    fn test_syscmd_sinl() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("SINL", &mut env).unwrap();
+        assert_eq!(out[0], "(no active functions)");
     }
 }
