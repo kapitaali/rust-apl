@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn test_cdr_read_missing_file() {
         let v = ValueP::char_vector(
-            &"nonexistent.cdr".chars().map(|c| c as u32).collect::<Vec<_>>(),
+            &"nonexistent.cdr"
+                .chars()
+                .map(|c| c as u32)
+                .collect::<Vec<_>>(),
         );
         assert!(quad_cdr(&v).is_err());
     }

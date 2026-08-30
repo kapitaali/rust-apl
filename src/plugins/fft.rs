@@ -25,7 +25,10 @@ pub fn quad_fft(b: &ValueP) -> AplResult<ValueP> {
     fft.process(&mut input);
 
     let shape = crate::shape::Shape::vector(input.len() as crate::shape::ShapeItem * 2);
-    let ravel: Vec<crate::cell::Cell> = input.iter().flat_map(|c| vec![Cell::Float(c.re), Cell::Float(c.im)]).collect();
+    let ravel: Vec<crate::cell::Cell> = input
+        .iter()
+        .flat_map(|c| vec![Cell::Float(c.re), Cell::Float(c.im)])
+        .collect();
     ValueP::from_parts(shape, ravel)
 }
 

@@ -10,12 +10,17 @@ pub fn quad_sql(b: &ValueP) -> AplResult<ValueP> {
     use rusqlite::{Connection, Result};
 
     let filename = match b {
-        ValueP::Char(s) => s.iter().map(|c| char::from_u32(*c).unwrap()).collect::<String>(),
+        ValueP::Char(s) => s
+            .iter()
+            .map(|c| char::from_u32(*c).unwrap())
+            .collect::<String>(),
         _ => return Err(ErrorCode::DomainError),
     };
 
     let conn = Connection::open(&filename).map_err(|_| ErrorCode::DomainError)?;
-    let mut stmt = conn.prepare("SELECT * FROM sqlite_master WHERE type='table'").map_err(|_| ErrorCode::DomainError)?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM sqlite_master WHERE type='table'")
+        .map_err(|_| ErrorCode::DomainError)?;
 
     let mut rows = stmt.query([]).map_err(|_| ErrorCode::DomainError)?;
     let mut result = Vec::new();
@@ -26,7 +31,11 @@ pub fn quad_sql(b: &ValueP) -> AplResult<ValueP> {
     }
 
     Ok(ValueP::char_vector(
-        &result.concat().chars().map(|c| c as u32).collect::<Vec<_>>(),
+        &result
+            .concat()
+            .chars()
+            .map(|c| c as u32)
+            .collect::<Vec<_>>(),
     ))
 }
 

@@ -15,6 +15,7 @@ smallvec = { version = "1.13", features = ["union"] }
 libloading = "0.8"
 libc = "0.2"
 rand = "0.8"
+regex = "1.10"
 plotters = "0.3"
 image = "0.25"
 rustfft = "6.2"

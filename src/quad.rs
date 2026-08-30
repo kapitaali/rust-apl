@@ -1429,3 +1429,77 @@ pub fn quad_cs(env: &mut crate::parser::Environment, b: &ValueP) -> AplResult<Va
         &prev.chars().map(|c| c as u32).collect::<Vec<_>>(),
     ))
 }
+
+// ---------------------------------------------------------------------------
+// ⎕RE — regular expression
+// ---------------------------------------------------------------------------
+//
+// ⎕RE B — regular expression operations
+// B[0] = operation: 0=match, 1=replace, 2=split
+// B[1] = pattern (char vector)
+// B[2] = input string (char vector) or replacement string
+
+pub fn quad_re(b: &ValueP) -> AplResult<ValueP> {
+    use regex::Regex;
+
+    let cells = b.cells();
+    if cells.len() < 3 {
+        return Err(ErrorCode::DomainError);
+    }
+
+    let op = cells[0].get_int_value()?;
+    let pattern_cp = cells[1].get_char_value()?;
+    let pattern = std::char::from_u32(pattern_cp).unwrap_or('?').to_string();
+    let input: String = cells[2..]
+        .iter()
+        .filter(|c| matches!(c, crate::cell::Cell::Char(_)))
+        .map(|c| {
+            c.get_char_value()
+                .map(|cp| std::char::from_u32(cp).unwrap_or('?'))
+        })
+        .collect::<Result<String, _>>()?;
+
+    let re = Regex::new(&pattern).map_err(|_| ErrorCode::DomainError)?;
+
+    match op {
+        0 => {
+            let matches: Vec<(usize, usize)> =
+                re.find_iter(&input).map(|m| (m.start(), m.end())).collect();
+            if matches.is_empty() {
+                Ok(ValueP::int_vector(&[]))
+            } else {
+                let result: Vec<i64> = matches
+                    .iter()
+                    .flat_map(|(s, e)| vec![*s as i64, *e as i64])
+                    .collect();
+                Ok(ValueP::int_vector(&result))
+            }
+        }
+        1 => {
+            let replacement: String = if cells.len() > 3 {
+                cells[3..]
+                    .iter()
+                    .filter(|c| matches!(c, crate::cell::Cell::Char(_)))
+                    .map(|c| {
+                        c.get_char_value()
+                            .map(|cp| std::char::from_u32(cp).unwrap_or('?'))
+                    })
+                    .collect::<Result<String, _>>()?
+            } else {
+                String::new()
+            };
+            let result = re.replace_all(&input, replacement.as_str());
+            Ok(ValueP::char_vector(
+                &result.chars().map(|c| c as u32).collect::<Vec<_>>(),
+            ))
+        }
+        2 => {
+            let parts: Vec<String> = re.split(&input).map(|s| s.to_string()).collect();
+            let joined = parts.join("\n");
+            Ok(ValueP::char_vector(
+                &joined.chars().map(|c| c as u32).collect::<Vec<_>>(),
+            ))
+        }
+        _ => Err(ErrorCode::DomainError),
+    }
+}

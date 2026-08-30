@@ -37,11 +37,21 @@ pub fn quad_plot(b: &ValueP) -> AplResult<ValueP> {
         .build_cartesian_2d(x_range, (y_min - y_margin)..(y_max + y_margin))
         .map_err(|_| ErrorCode::DomainError)?;
 
-    chart.configure_mesh().draw().map_err(|_| ErrorCode::DomainError)?;
-    chart.draw_series(LineSeries::new(data.iter().enumerate().map(|(x, y)| (x, *y)), &RED)).map_err(|_| ErrorCode::DomainError)?;
+    chart
+        .configure_mesh()
+        .draw()
+        .map_err(|_| ErrorCode::DomainError)?;
+    chart
+        .draw_series(LineSeries::new(
+            data.iter().enumerate().map(|(x, y)| (x, *y)),
+            &RED,
+        ))
+        .map_err(|_| ErrorCode::DomainError)?;
     root.present().map_err(|_| ErrorCode::DomainError)?;
 
-    Ok(ValueP::char_vector(&filename.chars().map(|c| c as u32).collect::<Vec<_>>()))
+    Ok(ValueP::char_vector(
+        &filename.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
 }
 
 /// ⎕PLOT B — disabled version (returns error when plugin not compiled in).

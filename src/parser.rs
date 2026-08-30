@@ -93,6 +93,8 @@ pub enum Expr {
     QuadJson(Box<Expr>),
     /// `⎕XML B` — XML parse/serialize
     QuadXml(Box<Expr>),
+    /// `⎕RE B` — regular expression
+    QuadRe(Box<Expr>),
     /// `⎕NS name` — create/retrieve a namespace; returns the namespace name
     QuadNs(Box<Expr>),
     /// `⎕CS name` — switch current namespace
@@ -1169,6 +1171,13 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕XML" {
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadXml(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕RE — regular expression
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕RE" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadRe(Box::new(arg)), 1 + used));
         }
     }
     // ⎕NS — namespace creation/retrieval
@@ -3691,6 +3700,10 @@ impl Environment {
             Expr::QuadXml(arg) => {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_xml(&bv)
+            }
+            Expr::QuadRe(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_re(&bv)
             }
             Expr::QuadNs(arg) => {
                 let bv = self.eval(arg)?;
