@@ -124,29 +124,29 @@ These are the most-used system functions. Many are simple; a few need external c
 - `⎕NS` — namespace creation
 - `⎕CS` — current namespace switching
 
-### 5.2 State Indicator
-- `)SI` — display call stack
-- `)SINL` — SI with line numbers
-- `)SVS` — shared variable status
-
 ### 5.3 Workspace Commands
-| # | Command | Description |
-|---|---|---|
-| 1 | `)INP` | Input session from file |
-| 2 | `)OUT` | Save session to file |
-| 3 | `)LIB` | List saved workspaces |
-| 4 | `)COPY` | Copy functions/variables from workspace |
-| 5 | `)ERASE` | Erase functions/variables |
-| 6 | `)FNS` | List functions |
-| 7 | `)VARS` | List variables |
-| 8 | `)OPS` | List operators |
-| 9 | `)GRP` | Grouped name display |
-| 10 | `)NMS` | Name space display |
-| 11 | `)SAVE` | Done ✓ |
-| 12 | `)LOAD` | Done ✓ |
-| 13 | `)CLEAR` | Done ✓ |
-| 14 | `)DROP` | Done ✓ |
-| 15 | `)OFF` | Done ✓ |
+| # | Command | Description | Status |
+|---|---|---|---|
+| 1 | `)INP` | Input session from file | ✅ Done |
+| 2 | `)OUT` | Save session to file | ✅ Done |
+| 3 | `)LIB` | List saved workspaces | |
+| 4 | `)COPY` | Copy functions/variables from workspace | ✅ Done |
+| 5 | `)ERASE` | Erase functions/variables | |
+| 6 | `)FNS` | List functions | ✅ Done |
+| 7 | `)VARS` | List variables | ✅ Done |
+| 8 | `)OPS` | List operators | ✅ Done |
+| 9 | `)GRP` | Grouped name display | ✅ Done |
+| 10 | `)NMS` | Name space display | ✅ Done |
+| 11 | `)SAVE` | Done ✓ | ✅ Done |
+| 12 | `)LOAD` | Done ✓ | ✅ Done |
+| 13 | `)CLEAR` | Done ✓ | ✅ Done |
+| 14 | `)DROP` | Done ✓ | ✅ Done |
+| 15 | `)OFF` | Done ✓ | ✅ Done |
+
+### 5.2 State Indicator
+- `)SI` — display call stack | ✅ Done
+- `)SINL` — SI with line numbers | ✅ Done
+- `)SVS` — shared variable status |
 
 ### 5.4 Macros
 - Session macros (input/output recording)
