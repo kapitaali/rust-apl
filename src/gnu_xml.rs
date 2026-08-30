@@ -136,7 +136,11 @@ fn generate_gnu_xml(env: &Environment) -> Result<String, String> {
         let vid = name.as_str().as_ptr() as usize;
         out.push_str(&format!("  <Ravel vid=\"{}\" depth=\"0\" cells=\"", vid));
         emit_gnu_cells(&mut out, val.cells());
-        out.push_str("\"/>\n");
+        out.push_str("\"");
+        // Add packed bytes attribute for compact storage
+        let packed = pack_cells_to_bytes(val.cells());
+        out.push_str(&format!(" bytes=\"{}\"", packed));
+        out.push_str("/>\n");
     }
 
     // Symbol table
@@ -216,6 +220,90 @@ fn emit_gnu_cells(out: &mut String, cells: &[Cell]) {
     }
 }
 
+/// Pack cells into a compact hex byte representation.
+/// Format: type-tag (1 byte) + data (variable length)
+/// Type tags: 0x01=Int(8 bytes LE), 0x02=Float(8 bytes LE), 0x03=Char(4 bytes UTF-32 LE),
+///            0x04=Complex(16 bytes: re+im as f64 LE)
+fn pack_cells_to_bytes(cells: &[Cell]) -> String {
+    let mut buf = Vec::new();
+    for cell in cells {
+        match cell {
+            Cell::Int(i) => {
+                buf.push(0x01);
+                buf.extend_from_slice(&i.to_le_bytes());
+            }
+            Cell::Float(f) => {
+                buf.push(0x02);
+                buf.extend_from_slice(&f.to_le_bytes());
+            }
+            Cell::Char(c) => {
+                buf.push(0x03);
+                buf.extend_from_slice(&(*c as u32).to_le_bytes());
+            }
+            Cell::Complex(c) => {
+                buf.push(0x04);
+                buf.extend_from_slice(&c.re.to_le_bytes());
+                buf.extend_from_slice(&c.im.to_le_bytes());
+            }
+            Cell::Pointer(_) | Cell::Lval(_) => {
+                buf.push(0x00); // null/placeholder
+            }
+        }
+    }
+    buf.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Unpack hex bytes back to cells.
+fn unpack_bytes_to_cells(hex: &str) -> Result<Vec<Cell>, String> {
+    let bytes = hex::decode(hex).map_err(|e| format!("hex decode error: {}", e))?;
+    let mut cells = Vec::new();
+    let mut pos: usize = 0;
+    while pos < bytes.len() {
+        let tag = bytes[pos];
+        pos += 1;
+        match tag {
+            0x01 => {
+                if pos + 8 > bytes.len() {
+                    return Err("truncated int".to_string());
+                }
+                let val = i64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+                cells.push(Cell::Int(val));
+                pos += 8;
+            }
+            0x02 => {
+                if pos + 8 > bytes.len() {
+                    return Err("truncated float".to_string());
+                }
+                let val = f64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+                cells.push(Cell::Float(val));
+                pos += 8;
+            }
+            0x03 => {
+                if pos + 4 > bytes.len() {
+                    return Err("truncated char".to_string());
+                }
+                let val = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+                cells.push(Cell::Char(val));
+                pos += 4;
+            }
+            0x04 => {
+                if pos + 16 > bytes.len() {
+                    return Err("truncated complex".to_string());
+                }
+                let re = f64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+                let im = f64::from_le_bytes(bytes[pos + 8..pos + 16].try_into().unwrap());
+                cells.push(Cell::Complex(crate::types::APLComplex { re, im }));
+                pos += 16;
+            }
+            0x00 => {
+                // null/placeholder - skip
+            }
+            _ => return Err(format!("unknown type tag: {:02x}", tag)),
+        }
+    }
+    Ok(cells)
+}
+
 fn parse_gnu_xml(env: &mut Environment, text: &str) -> Result<(), String> {
     // Parse Function elements (with Canonical/Source children)
     for func_elem in extract_elements(text, "Function") {
@@ -229,10 +317,8 @@ fn parse_gnu_xml(env: &mut Environment, text: &str) -> Result<(), String> {
                 if let Some(header) = lines.next() {
                     let source: Vec<String> = lines.map(|s| s.to_string()).collect();
                     if !source.is_empty() {
-                        match crate::functions_def::define_function(&mut env.funcs, header, &source) {
-                            Ok(()) => {},
-                            Err(e) => return Err(format!("error loading function {}: {}", header, e)),
-                        }
+                        crate::functions_def::define_function(&mut env.funcs, header, &source)
+                            .map_err(|e| format!("error loading function {}: {}", header, e))?;
                     }
                 }
             }
@@ -262,10 +348,15 @@ fn parse_gnu_xml(env: &mut Environment, text: &str) -> Result<(), String> {
     for ravel_elem in extract_elements(text, "Ravel") {
         let attrs = parse_attrs(&ravel_elem);
         if let Some(vid) = attrs.get("vid") {
-            if let Some(cells_str) = attrs.get("cells") {
-                let cells = parse_gnu_cells(cells_str)?;
-                vid_to_cells.insert(vid.clone(), cells);
-            }
+            // Prefer packed bytes representation if available
+            let cells = if let Some(bytes) = attrs.get("bytes") {
+                unpack_bytes_to_cells(bytes)?
+            } else if let Some(cells_str) = attrs.get("cells") {
+                parse_gnu_cells(cells_str)?
+            } else {
+                continue;
+            };
+            vid_to_cells.insert(vid.clone(), cells);
         }
     }
 
@@ -447,7 +538,7 @@ fn extract_elements<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     let open_start = format!("<{} ", tag);
     let open_simple = format!("<{}>", tag);
     let close = format!("</{}>", tag);
-    let mut pos = 0;
+    let mut pos: usize = 0;
     while pos < text.len() {
         let remaining = &text[pos..];
         let start = if let Some(i) = remaining.find(&open_start) {
@@ -579,6 +670,41 @@ mod tests {
         let attrs = parse_attrs(elem);
         assert_eq!(attrs.get("vid"), Some(&"42".to_string()));
         assert_eq!(attrs.get("name"), Some(&"X".to_string()));
+    }
+
+    #[test]
+    fn test_pack_cells_to_bytes_int() {
+        let cells = vec![Cell::Int(42)];
+        let packed = pack_cells_to_bytes(&cells);
+        // 0x01 (tag) + 8 bytes LE of 42
+        assert_eq!(packed, "01000000000000002a");
+    }
+
+    #[test]
+    fn test_pack_cells_to_bytes_string() {
+        let cells = vec![Cell::Char('A' as u32), Cell::Char('B' as u32)];
+        let packed = pack_cells_to_bytes(&cells);
+        // 2 chars * (1 tag + 4 bytes) = 10 bytes = 20 hex chars
+        assert_eq!(packed.len(), 20);
+    }
+
+    #[test]
+    fn test_unpack_bytes_roundtrip() {
+        let cells = vec![
+            Cell::Int(42),
+            Cell::Float(3.14),
+            Cell::Char('X' as u32),
+            Cell::complex(1.0, 2.0),
+        ];
+        let packed = pack_cells_to_bytes(&cells);
+        let unpacked = unpack_bytes_to_cells(&packed).unwrap();
+        assert_eq!(unpacked, cells);
+    }
+
+    #[test]
+    fn test_unpack_bytes_invalid() {
+        assert!(unpack_bytes_to_cells("zz").is_err()); // invalid hex
+        assert!(unpack_bytes_to_cells("01").is_err()); // truncated int
     }
 
     #[test]
