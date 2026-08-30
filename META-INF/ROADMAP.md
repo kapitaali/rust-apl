@@ -149,8 +149,8 @@ These are the most-used system functions. Many are simple; a few need external c
 - `)SVS` — shared variable status | ✅ Done (stub: no shared variables)
 
 ### 5.4 Macros
-- Session macros (input/output recording)
-- Function macros
+- Session macros (input/output recording) ✅ Done
+- Function macros |
 
 ### 5.5 Security
 - `⎕SEC` — security level
