@@ -190,8 +190,8 @@ These are the most-used system functions. Many are simple; a few need external c
 ## Phase 7 — Performance
 
 ### 7.1 Packed Arrays
-- Extend PackedBool to packed Int/Float/Complex
-- Bit-width selection based on range
+- Extend PackedBool to packed Int/Float/Complex ✅ Done (Int)
+- Bit-width selection based on range ✅ Done
 
 ### 7.2 Parallel Scalar Operations
 - Parallelize all scalar operations on long vectors
