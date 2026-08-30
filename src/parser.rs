@@ -4812,14 +4812,12 @@ mod tests {
 
     #[test]
     fn test_dfn_self_call_dyadic() {
-        // ⍺-using dfn: body references ⍺ which is bound when called dyadically.
-        // Note: this requires the parser to detect ambivalent usage (⍺+⍵) and
-        // create arg_left/arg_right. Current simplified parser may not handle this.
+        // Dyadic dfn call: body references ⍺ and ⍵
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        env.eval_line("GCD←{⍺+⍵}").unwrap();
-        let result = env.eval_line("GCD 48 18").unwrap().unwrap();
-        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(66)));
+        env.eval_line("SUM←{⍺+⍵}").unwrap();
+        let result = env.eval_line("5 SUM 7").unwrap().unwrap();
+        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(12)));
     }
 
     #[test]

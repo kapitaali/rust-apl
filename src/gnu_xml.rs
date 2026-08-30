@@ -677,7 +677,7 @@ mod tests {
         let cells = vec![Cell::Int(42)];
         let packed = pack_cells_to_bytes(&cells);
         // 0x01 (tag) + 8 bytes LE of 42
-        assert_eq!(packed, "01000000000000002a");
+        assert_eq!(packed, "012a00000000000000");
     }
 
     #[test]
