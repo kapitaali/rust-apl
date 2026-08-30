@@ -172,7 +172,7 @@ These are the most-used system functions. Many are simple; a few need external c
 
 ### 5.5 Security
 - `⎕SEC` — security level | ✅ Done
-- Restricted operations at higher security levels | 🔲 Not enforced
+- Restricted operations at higher security levels | ✅ Done (security.rs)
 
 ### 5.6 Symbol Table
 - Namespaces (`⎕NS`, `⎕CS`) | ✅ Done
