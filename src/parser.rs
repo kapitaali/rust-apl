@@ -2068,6 +2068,8 @@ pub struct Environment {
     pub(crate) current_ns: String,
     /// set of known namespace names (created via ⎕NS or ⎕CS)
     pub(crate) namespaces: std::collections::HashSet<String>,
+    /// input recording for session macros (captures each eval_line input)
+    pub(crate) input_recording: Option<Vec<String>>,
 }
 
 impl Environment {
@@ -2086,6 +2088,7 @@ impl Environment {
             call_stack: Vec::new(),
             current_ns: String::new(),
             namespaces: std::collections::HashSet::new(),
+            input_recording: None,
         }
     }
 
@@ -2154,6 +2157,23 @@ impl Environment {
         self.call_stack.clear();
         self.current_ns = String::new();
         self.namespaces.clear();
+        self.input_recording = None;
+    }
+
+    /// Enable input recording for session macros (returns recording ID)
+    pub fn start_recording(&mut self) -> usize {
+        self.input_recording = Some(Vec::new());
+        0
+    }
+
+    /// Disable input recording
+    pub fn stop_recording(&mut self) -> Option<Vec<String>> {
+        self.input_recording.take()
+    }
+
+    /// Get a reference to the current recording (if any)
+    pub fn get_recording(&self) -> Option<&[String]> {
+        self.input_recording.as_deref()
     }
 
     /// erase a single variable (used by )ERASE)
@@ -3671,6 +3691,10 @@ impl Environment {
     /// (None if the line was a pure assignment with no displayed value —
     /// but in APL assignments DO display nothing; we return None then).
     pub fn eval_line(&mut self, line: &str) -> AplResult<Option<ValueP>> {
+        // Record input for session macros (before tokenization to capture raw line)
+        if let Some(rec) = &mut self.input_recording {
+            rec.push(line.to_string());
+        }
         let toks = tokenize(line)?;
         if matches!(toks.first(), Some(Tok::End)) || toks.len() < 2 {
             return Ok(None); // empty line

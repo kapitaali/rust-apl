@@ -186,6 +186,31 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             init_sysvars(env);
             Some(vec!["RESET WORKSPACE".to_string()])
         }
+        "RECORD" => {
+            // )RECORD — start recording session input for macros
+            env.start_recording();
+            Some(vec!["RECORDING STARTED".to_string()])
+        }
+        "PLAY" => {
+            // )PLAY — replay recorded session input
+            if let Some(recording) = env.get_recording() {
+                let mut output = Vec::new();
+                for line in recording {
+                    output.push(format!("> {}", line));
+                }
+                Some(output)
+            } else {
+                Some(vec!["NO RECORDING ACTIVE".to_string()])
+            }
+        }
+        "STOP" => {
+            // )STOP — stop recording
+            if env.stop_recording().is_some() {
+                Some(vec!["RECORDING STOPPED".to_string()])
+            } else {
+                Some(vec!["NO RECORDING ACTIVE".to_string()])
+            }
+        }
         "DIR" => Some(vec![std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "(unknown)".to_string())]),
@@ -600,6 +625,49 @@ mod tests {
         init_sysvars(&mut env);
         env.set(SEC_VAR, ValueP::scalar_from(crate::cell::Cell::Int(2)));
         assert_eq!(get_sec(&env), 2);
+    }
+
+    #[test]
+    fn test_session_macro_record_replay() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Start recording
+        let out = syscmd("RECORD", &mut env).unwrap();
+        assert_eq!(out[0], "RECORDING STARTED");
+
+        // Execute some lines
+        env.eval_line("X←42").unwrap();
+        env.eval_line("Y←X+1").unwrap();
+
+        // Play recording
+        let out = syscmd("PLAY", &mut env).unwrap();
+        assert_eq!(out[0], "> X←42");
+        assert_eq!(out[1], "> Y←X+1");
+
+        // Stop recording
+        let out = syscmd("STOP", &mut env).unwrap();
+        assert_eq!(out[0], "RECORDING STOPPED");
+
+        // Play after stop should report no recording
+        let out = syscmd("PLAY", &mut env).unwrap();
+        assert_eq!(out[0], "NO RECORDING ACTIVE");
+    }
+
+    #[test]
+    fn test_session_macro_reset_clears_recording() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Start recording
+        env.start_recording();
+        env.eval_line("A←1").unwrap();
+
+        // Clear workspace
+        env.clear_workspace();
+
+        // Recording should be gone
+        assert!(env.get_recording().is_none());
     }
 
     #[test]
