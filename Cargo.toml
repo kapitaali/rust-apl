@@ -18,13 +18,18 @@ rand = "0.8"
 apl-ext = { path = "crates/apl-ext" }
 apl-unofficial = { path = "crates/apl-unofficial", optional = true }
 
+# Phase 6 plugin dependencies (all optional)
+plotters = { version = "0.3", optional = true }
+image = { version = "0.25", optional = true }
+rustfft = { version = "6.2", optional = true }
+
 [features]
 default = []
 unofficial-ext = ["dep:apl-unofficial"]
-plugin-plot = []
-plugin-png = []
+plugin-plot = ["dep:plotters"]
+plugin-png = ["dep:image"]
 plugin-sql = []
-plugin-fft = []
+plugin-fft = ["dep:rustfft"]
 plugin-python = []
 plugin-gtk = []
 plugin-cdr = []
