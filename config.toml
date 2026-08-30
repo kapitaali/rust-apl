@@ -1,0 +1,37 @@
+# Phase 6 Ext-Plugin Configuration
+#
+# This file specifies which plugins are compiled into the APL binary.
+# Each plugin can be: "static" (compiled in), "dynamic" (loaded at runtime via ⎕LOADSO), or "disabled"
+
+[plugins.plugin_states]
+# GUI and graphics
+gtk = "disabled"        # GTK4 GUI (requires gtk4-rs)
+plot = "static"         # Plotting via plotters crate
+
+# Data interchange
+python = "disabled"     # Python pipe (requires pyo3)
+sql = "disabled"        # SQL database access (requires sqlx/rusqlite)
+fft = "disabled"        # Fast Fourier Transform (requires rustfft)
+png = "disabled"        # PNG image read/write (requires image crate)
+cdr = "disabled"        # CDR binary interchange format
+
+[plugins.plot]
+backend = "plotters"    # "plotters" or "gtk"
+width = 800
+height = 600
+
+[plugins.sql]
+backend = "sqlite"      # "sqlite" or "postgres"
+connection_string = "apl.db"
+
+[plugins.python]
+executable = "python3"
+
+[plugins.gtk]
+version = "4"
+
+[plugins.fft]
+backend = "rustfft"     # "rustfft" or "gsl"
+
+[plugins.png]
+format = "auto"         # "auto", "png", "jpeg", "bmp"

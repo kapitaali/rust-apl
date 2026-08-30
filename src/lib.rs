@@ -49,6 +49,10 @@ pub mod value;
 pub mod workspace;
 pub mod xml_archive;
 
+// Plugin system (Phase 6)
+pub mod plugin_system;
+pub mod plugins;
+
 #[cfg(feature = "unofficial-ext")]
 pub mod key;
 #[cfg(feature = "unofficial-ext")]

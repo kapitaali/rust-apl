@@ -167,6 +167,14 @@ fn main() {
     let stdin = io::stdin();
     let mut env = Environment::new();
     apl::sysvars::init_sysvars(&mut env);
+
+    // Initialize plugins (Phase 6)
+    if let Err(e) =
+        apl::plugin_system::init_plugins(&mut env.funcs, &mut std::collections::HashMap::new())
+    {
+        eprintln!("Warning: plugin initialization failed: {}", e);
+    }
+
     // function definition mode state: Some(header) while inside ∇ editing
     let mut def_header: Option<String> = None;
     let mut def_body: Vec<String> = Vec::new();
