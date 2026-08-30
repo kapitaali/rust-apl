@@ -31,7 +31,6 @@ pub mod parser;
 pub mod partition;
 pub mod pick;
 pub mod quad;
-#[cfg(feature = "plugin-plot")]
 pub mod quad_plot;
 pub mod rank;
 pub mod replicate;

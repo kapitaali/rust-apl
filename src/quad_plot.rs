@@ -1,10 +1,11 @@
-use plotters::prelude::*;
-use crate::cell::Cell;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
 /// ⎕PLOT B — plot a vector of numbers.
+#[cfg(feature = "plugin-plot")]
 pub fn quad_plot(b: &ValueP) -> AplResult<ValueP> {
+    use plotters::prelude::*;
+
     let cells = b.cells();
     if cells.is_empty() {
         return Err(ErrorCode::DomainError);
@@ -43,7 +44,13 @@ pub fn quad_plot(b: &ValueP) -> AplResult<ValueP> {
     Ok(ValueP::char_vector(&filename.chars().map(|c| c as u32).collect::<Vec<_>>()))
 }
 
-#[cfg(test)]
+/// ⎕PLOT B — disabled version (returns error when plugin not compiled in).
+#[cfg(not(feature = "plugin-plot"))]
+pub fn quad_plot(_b: &ValueP) -> AplResult<ValueP> {
+    Err(ErrorCode::DomainError)
+}
+
+#[cfg(all(test, feature = "plugin-plot"))]
 mod tests {
     use super::*;
 
