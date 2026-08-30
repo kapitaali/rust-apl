@@ -176,7 +176,7 @@ These are the most-used system functions. Many are simple; a few need external c
 
 ### 5.6 Symbol Table
 - Namespaces (`⎕NS`, `⎕CS`) | ✅ Done
-- Local symbol tables per function | 🔲 Not started
+- Local symbol tables per function | ✅ Done (shadowed globals)
 - Global symbol table management | ✅ Done
 
 ---

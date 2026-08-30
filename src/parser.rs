@@ -4811,6 +4811,20 @@ mod tests {
     }
 
     #[test]
+    fn test_dfn_local_scope() {
+        // Local variables in dfns should not leak to global scope
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("X←100").unwrap();
+        env.eval_line("FOO←{X←42 ⋄ X}").unwrap();
+        // Inside FOO, X is locally assigned; after call, global X unchanged
+        let result = env.eval_line("FOO 0").unwrap().unwrap();
+        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(42)));
+        let global_x = env.eval_line("X").unwrap().unwrap();
+        assert_eq!(global_x.first_cell(), Some(&crate::cell::Cell::Int(100)));
+    }
+
+    #[test]
     fn test_dfn_self_call_dyadic() {
         // Dyadic dfn call: body references ⍺ and ⍵
         let mut env = Environment::new();
