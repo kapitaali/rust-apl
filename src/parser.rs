@@ -2043,6 +2043,8 @@ pub struct Environment {
     /// assignment). eval_line reads it so `⍎'X←5'` displays nothing, matching
     /// a bare `X←5`.
     pub(crate) execute_was_shy: bool,
+    /// call stack tracking: (function-name, current-line-1-based) for )SI
+    pub(crate) call_stack: Vec<(String, usize)>,
 }
 
 impl Environment {
@@ -2058,6 +2060,7 @@ impl Environment {
             loaded_plugins: Vec::new(),
             execute_depth: 0,
             execute_was_shy: false,
+            call_stack: Vec::new(),
         }
     }
 
@@ -2088,6 +2091,7 @@ impl Environment {
     pub fn clear_workspace(&mut self) {
         self.vars.clear();
         self.funcs.clear();
+        self.call_stack.clear();
     }
 
     /// erase a single variable (used by )ERASE)
@@ -2297,7 +2301,12 @@ impl Environment {
         let mut pc = 0usize;
         self.branch_stack.push(None);
         let frame_base = self.branch_stack.len() - 1;
+        // push this frame onto the call stack for )SI
+        self.call_stack
+            .push((name.to_string(), 0 /* current line, 1-based */));
+        let cs_top = self.call_stack.len() - 1;
         while pc < f.body.len() {
+            self.call_stack[cs_top].1 = pc + 1; // update current line (1-based)
             let block_end = f.control.iter().find_map(|b| match b {
                 crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
                     Some(*end)
@@ -2338,6 +2347,8 @@ impl Environment {
         }
         self.branch_stack.truncate(frame_base);
         self.current_fn_name = caller_fn_name;
+        // pop the call stack frame for )SI
+        self.call_stack.pop();
         let explicit_result: Option<ValueP> =
             f.result.as_ref().and_then(|rn| self.vars.get(rn).cloned());
         for (name, old) in shadowed {
@@ -2459,9 +2470,14 @@ impl Environment {
         let mut pc = 0usize;
         self.branch_stack.push(None); // frame sentinel
         let frame_base = self.branch_stack.len() - 1;
+        // push this frame onto the call stack for )SI
+        self.call_stack
+            .push((name.to_string(), 0 /* current line, 1-based */));
+        let cs_top = self.call_stack.len() - 1;
         while pc < body.len() {
             // structured control blocks: delegate to the same machinery
             // run_lines uses, but keep tracking `last`/branch state here
+            self.call_stack[cs_top].1 = pc + 1; // update current line (1-based)
             let block_end = f.control.iter().find_map(|b| match b {
                 crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
                     Some(*end)
@@ -2510,6 +2526,9 @@ impl Environment {
 
         // restore current function name to the caller's
         self.current_fn_name = caller_fn_name;
+
+        // pop the call stack frame for )SI
+        self.call_stack.pop();
 
         // capture explicit result var BEFORE restoring shadowed names
         let explicit_result: Option<ValueP> =

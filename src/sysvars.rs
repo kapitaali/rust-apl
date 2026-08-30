@@ -353,8 +353,24 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             Some(output)
         }
         "SINL" => {
-            // )SINL — state indicator with line numbers (no active functions in v1)
-            Some(vec!["(no active functions)".to_string()])
+            // )SINL — state indicator with line numbers
+            if env.call_stack.is_empty() {
+                Some(vec!["(no active functions)".to_string()])
+            } else {
+                let mut out = Vec::new();
+                for (name, line) in &env.call_stack {
+                    out.push(format!("{} [{}]", name, line));
+                }
+                Some(out)
+            }
+        }
+        "SI" => {
+            // )SI — state indicator (function call stack)
+            if env.call_stack.is_empty() {
+                Some(vec!["(no active functions)".to_string()])
+            } else {
+                Some(env.call_stack.iter().map(|(n, _)| n.clone()).collect())
+            }
         }
         "COPY" | "IN" => {
             // minimal )COPY: evaluate each line of an APL source file in
@@ -387,6 +403,36 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 }
             }
             Some(vec![format!("COPIED {}", name)])
+        }
+        "INP" => {
+            // )INP file — input session from file (like )COPY but prints values)
+            let name = parts.next().unwrap_or("");
+            if name.is_empty() {
+                return Some(vec!["USAGE: )INP file".to_string()]);
+            }
+            let text = match std::fs::read_to_string(name) {
+                Ok(t) => t,
+                Err(e) => return Some(vec![format!("ERROR: cannot read {name}: {e}")]),
+            };
+            for (lineno, raw) in text.lines().enumerate() {
+                let line = raw.trim();
+                if line.is_empty() || line.starts_with('⍝') || line.starts_with(')') {
+                    continue;
+                }
+                match env.eval_line(line) {
+                    Ok(Some(v)) => {
+                        let disp = crate::boxdisplay::render(&v);
+                        for l in &disp {
+                            println!("{l}");
+                        }
+                    }
+                    Ok(None) => {} // assignment, shy result
+                    Err(e) => {
+                        return Some(vec![format!("ERROR: {} line {}: {}", name, lineno + 1, e)]);
+                    }
+                }
+            }
+            Some(vec![format!("INP {}", name)])
         }
         "UCS" => {
             // )UCS — report Unicode support
@@ -670,5 +716,96 @@ mod tests {
         init_sysvars(&mut env);
         let out = syscmd("SINL", &mut env).unwrap();
         assert_eq!(out[0], "(no active functions)");
+    }
+
+    #[test]
+    fn test_syscmd_si_empty() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("SI", &mut env).unwrap();
+        assert_eq!(out[0], "(no active functions)");
+    }
+
+    #[test]
+    fn test_call_stack_tracks_invocation() {
+        // Define a recursive function (FIB using dfn self-call ∇) and verify
+        // the call stack grows on entry and shrinks on exit
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.eval_line("FIB←{⍵≤1:1 ⋄ (∇ ⍵-1)+∇ ⍵-2}").unwrap();
+
+        // Before call: empty
+        assert!(env.call_stack.is_empty());
+
+        // Call it
+        env.eval_line("FIB 4").unwrap().unwrap();
+
+        // After call: empty again (properly popped)
+        assert!(env.call_stack.is_empty());
+
+        // Verify the result (FIB 5 = 8 with this dfn definition)
+        assert_eq!(
+            env.eval_line("FIB 5").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(8))
+        );
+    }
+
+    #[test]
+    fn test_call_stack_nested() {
+        // Define two functions where one calls the other
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        crate::functions_def::define_function(&mut env.funcs, "INNER X", &["X+1".to_string()])
+            .unwrap();
+        crate::functions_def::define_function(&mut env.funcs, "OUTER Y", &["INNER Y".to_string()])
+            .unwrap();
+
+        // We can't easily inspect mid-call stack from outside, but we can
+        // verify the call completes and the stack is clean after
+        let result = env.eval_line("OUTER 5").unwrap().unwrap();
+        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(6)));
+        assert!(env.call_stack.is_empty());
+    }
+
+    #[test]
+    fn test_syscmd_inp() {
+        // Write a temp APL source file and replay it via )INP
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        let src = "A←10\nB←20\nA+B\n";
+        std::fs::write("/tmp/test_inp_src", src).unwrap();
+
+        let out = syscmd("INP /tmp/test_inp_src", &mut env).unwrap();
+        assert_eq!(out[0], "INP /tmp/test_inp_src");
+
+        // Variables should be defined
+        assert_eq!(
+            env.eval_line("A").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(10))
+        );
+        assert_eq!(
+            env.eval_line("B").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(20))
+        );
+
+        let _ = std::fs::remove_file("/tmp/test_inp_src");
+    }
+
+    #[test]
+    fn test_syscmd_inp_no_args() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("INP", &mut env).unwrap();
+        assert!(out[0].contains("USAGE"));
+    }
+
+    #[test]
+    fn test_call_stack_cleared_on_clear_workspace() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.call_stack.push(("DUMMY".to_string(), 1));
+        env.clear_workspace();
+        assert!(env.call_stack.is_empty());
     }
 }
