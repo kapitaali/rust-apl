@@ -309,8 +309,8 @@ pub fn quad_rl(b: &ValueP) -> AplResult<ValueP> {
 //   integer scalar: 1=uppercase, 2=lowercase, 3=titlecase
 //   char vector/matrix: convert each character
 //
-// Monadic: returns current case setting (default 0).
-// Dyadic: B[0] is the case setting, B[1..] is the text.
+// Monadic: returns current case setting (default 1 = upper).
+// Dyadic: B[0] is the case setting (1=upper, 2=lower, 3=title), B[1..] is the text.
 
 pub fn quad_cc(b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
