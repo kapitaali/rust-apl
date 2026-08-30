@@ -50,6 +50,9 @@ pub mod value;
 pub mod workspace;
 pub mod xml_archive;
 
+// GNU APL XML format (Phase 8)
+pub mod gnu_xml;
+
 // Plugin system (Phase 6)
 pub mod plugin_system;
 pub mod plugins;
