@@ -233,16 +233,16 @@ These are the most-used system functions. Many are simple; a few need external c
 ## Phase 8 — Full GNU APL XML Compatibility
 
 ### 8.1 Value Elements
-- `flg`, `vid`, `parent`, `rk` attributes
-- `sh-N` shape attributes
+- `flg`, `vid`, `parent`, `rk` attributes | ✅ Done
+- `sh-N` shape attributes | ✅ Done
 
 ### 8.2 Ravel Elements
-- Packed ravel with `bytes` attribute (hex)
-- Normal ravel with Unicode padding
+- Packed ravel with `bytes` attribute (hex) | 🔲 Not started
+- Normal ravel with Unicode padding | ✅ Done
 
 ### 8.3 Function Elements
-- `fid`, `creation-time`, `exec-properties`, `tag`
-- `Canonical` and `Source` sub-elements
+- `fid`, `creation-time`, `exec-properties`, `tag` | ✅ Done
+- `Canonical` and `Source` sub-elements | 🔲 Not started
 
 ---
 

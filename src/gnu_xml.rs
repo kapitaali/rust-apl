@@ -65,10 +65,44 @@ fn generate_gnu_xml(env: &Environment) -> Result<String, String> {
     for name in env.funcs.names() {
         if let Some(func) = env.funcs.get(&name) {
             if let Some(dfu) = func.interpreted() {
+                let fid = name.as_str().as_ptr() as usize;
                 out.push_str(&format!(
-                    "  <Function fid=\"0x{:X}\" tag=\"0x43080907\"/>\n",
-                    name.as_str().as_ptr() as usize
+                    "  <Function fid=\"0x{:X}\" tag=\"0x43080907\">\n",
+                    fid
                 ));
+
+                // Canonical form: function header + source lines
+                let mut canonical = String::new();
+                if let Some(result) = &dfu.result {
+                    canonical.push_str(result);
+                    canonical.push('←');
+                }
+                canonical.push_str(&name);
+                if let Some(right) = &dfu.arg_right {
+                    canonical.push(' ');
+                    canonical.push_str(right);
+                }
+                if let Some(left) = &dfu.arg_left {
+                    canonical.push(' ');
+                    canonical.push_str(left);
+                }
+                for src in &dfu.source {
+                    canonical.push('\n');
+                    canonical.push_str(src);
+                }
+                out.push_str(&format!(
+                    "    <Canonical>{}</Canonical>\n",
+                    xml_escape(&canonical)
+                ));
+
+                // Source form: raw source lines as UCS
+                out.push_str("    <Source>\n");
+                for src in &dfu.source {
+                    out.push_str(&format!("      <UCS uni=\"{}\"/>\n", xml_escape(src)));
+                }
+                out.push_str("    </Source>\n");
+
+                out.push_str("  </Function>\n");
             }
         }
     }
@@ -183,13 +217,26 @@ fn emit_gnu_cells(out: &mut String, cells: &[Cell]) {
 }
 
 fn parse_gnu_xml(env: &mut Environment, text: &str) -> Result<(), String> {
-    // Parse Function elements
+    // Parse Function elements (with Canonical/Source children)
     for func_elem in extract_elements(text, "Function") {
         let attrs = parse_attrs(&func_elem);
-        let _fid = attrs.get("fid").cloned().unwrap_or_default();
-        // Functions are referenced by fid; we'd need a mapping to restore them
-        // For now, skip function restoration from GNU XML
-        let _ = func_elem;
+        if let Some(_fid) = attrs.get("fid") {
+            // Try to get function from Canonical child
+            if let Some(canonical) = extract_element(func_elem, "Canonical") {
+                let canonical = canonical.trim();
+                // Parse the canonical form: [result←]name [right] [left]\nsource...
+                let mut lines = canonical.lines();
+                if let Some(header) = lines.next() {
+                    let source: Vec<String> = lines.map(|s| s.to_string()).collect();
+                    if !source.is_empty() {
+                        match crate::functions_def::define_function(&mut env.funcs, header, &source) {
+                            Ok(()) => {},
+                            Err(e) => return Err(format!("error loading function {}: {}", header, e)),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Parse Value elements to get shape info
@@ -532,5 +579,30 @@ mod tests {
         let attrs = parse_attrs(elem);
         assert_eq!(attrs.get("vid"), Some(&"42".to_string()));
         assert_eq!(attrs.get("name"), Some(&"X".to_string()));
+    }
+
+    #[test]
+    fn test_extract_element() {
+        let text = "<Root><Item>hello</Item></Root>";
+        let item = extract_element(text, "Item");
+        assert_eq!(item, Some("hello"));
+    }
+
+    #[test]
+    fn test_parse_gnu_xml_roundtrip() {
+        use crate::cell::Cell;
+        use crate::parser::Environment;
+        use crate::sysvars;
+
+        let mut env = Environment::new();
+        sysvars::init_sysvars(&mut env);
+
+        env.eval_line("X←42").unwrap();
+        env.eval_line("S←'HELLO'").unwrap();
+
+        let xml = generate_gnu_xml(&env).unwrap();
+        assert!(xml.contains("Workspace"));
+        assert!(xml.contains("X"));
+        assert!(xml.contains("S"));
     }
 }
