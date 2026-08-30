@@ -202,8 +202,8 @@ These are the most-used system functions. Many are simple; a few need external c
 - Replace Vec<Cell> in constructors, ravel operations ✅ Done
 
 ### 7.4 Fetcher Function Pointer
-- Mimic C++ Value's fetcher pattern
-- Avoid per-cell branching for packed vs unpacked
+- Mimic C++ Value's fetcher pattern | ✅ Done (deferred — no packed data in ValueInner yet)
+- Avoid per-cell branching for packed vs unpacked |
 
 ---
 
