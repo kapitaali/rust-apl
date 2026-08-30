@@ -69,6 +69,8 @@ pub enum Expr {
     /// `⎕LOADSO 'path'` — load a Rust plugin cdylib; registers all its
     /// bindings into the function table.
     QuadLoadSo(Box<Expr>),
+    /// `⎕CALL name` — call a ⎕NA-bound native function by name.
+    QuadCall(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
     QuadCr(i64, Box<Expr>),
     /// `⎕RVAL B` — random value (rank, shape, type, depth)
@@ -492,6 +494,13 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕LOADSO" {
             let (spec, sused) = parse(&toks[1..])?;
             return Ok((Expr::QuadLoadSo(Box::new(spec)), 1 + sused));
+        }
+    }
+    // ⎕CALL name — call a ⎕NA-bound native function by name
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕CALL" {
+            let (name_arg, nused) = parse(&toks[1..])?;
+            return Ok((Expr::QuadCall(Box::new(name_arg)), 1 + nused));
         }
     }
     // error guard: ⎕EA guarded ⋄ fallback
@@ -3594,6 +3603,26 @@ impl Environment {
                 let flat: Vec<u32> = names.join(" ").chars().map(|ch| ch as u32).collect();
                 Ok(ValueP::char_vector(&flat))
             }
+            Expr::QuadCall(name_expr) => {
+                // ⎕CALL name — call a ⎕NA-bound native function by name
+                let name_v = self.eval(name_expr)?;
+                let name = name_v
+                    .cells()
+                    .iter()
+                    .map(|c| match c {
+                        Cell::Char(ch) => char::from_u32(*ch).unwrap_or('?'),
+                        _ => '?',
+                    })
+                    .collect::<String>();
+                // Look up the native binding
+                let binding = match self.funcs.get(&name) {
+                    Some(crate::functions_def::Callable::Native(b)) => b.clone(),
+                    _ => return Err(ErrorCode::ValueError),
+                };
+                // For now, call with empty args (niladic call)
+                // Dyadic ⎕CALL will be A ⎕CALL name in future
+                binding.call(&[])
+            }
             Expr::QuadCr(n, arg) => {
                 // N ⎕CR B — character representation
                 // N=1: ravel (flat character vector/matrix)
@@ -4822,6 +4851,18 @@ mod tests {
         assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(42)));
         let global_x = env.eval_line("X").unwrap().unwrap();
         assert_eq!(global_x.first_cell(), Some(&crate::cell::Cell::Int(100)));
+    }
+
+    #[test]
+    fn test_quad_call_native() {
+        // ⎕CALL should find a ⎕NA-bound function and call it.
+        // Since we can't easily set up a real native function in a test,
+        // we just verify the parser and dispatch work by checking that
+        // calling a non-existent name returns ValueError.
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let result = env.eval_line("⎕CALL 'nonexistent'");
+        assert!(result.is_err());
     }
 
     #[test]

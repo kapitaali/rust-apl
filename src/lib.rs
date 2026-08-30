@@ -4,6 +4,7 @@
 //! See REWRITE_STRATEGY.md in the repository root for design rationale.
 
 pub mod ap;
+pub mod ascii_plot;
 pub mod boxdisplay;
 pub mod cell;
 pub mod comma;
@@ -25,7 +26,6 @@ pub mod interval_index;
 pub mod not_match;
 pub mod operators;
 pub mod outer;
-pub mod ascii_plot;
 pub mod packed_bool;
 pub mod packed_int;
 pub mod parser;

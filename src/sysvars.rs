@@ -692,7 +692,10 @@ mod tests {
 
         // )CONTINUE returns None (signals exit) on save success
         let result = syscmd("CONTINUE", &mut env);
-        assert!(result.is_none(), "CONTINUE should return None to signal exit");
+        assert!(
+            result.is_none(),
+            "CONTINUE should return None to signal exit"
+        );
 
         // Verify CONTINUE.xml was created
         assert!(std::path::Path::new("CONTINUE.xml").exists());
