@@ -5,12 +5,15 @@
 
 use crate::cell::Cell;
 use crate::shape::Shape;
-use crate::value::ValueP;
 use crate::types::ErrorCode;
+use crate::value::ValueP;
 use std::sync::Arc;
 
 /// Create a vector from a SmallVec-backed ravel (avoids heap allocation for ≤8 elements).
-pub fn vector_from_smallvec(len: i64, ravel: smallvec::SmallVec<[Cell; 8]>) -> Result<ValueP, ErrorCode> {
+pub fn vector_from_smallvec(
+    len: i64,
+    ravel: smallvec::SmallVec<[Cell; 8]>,
+) -> Result<ValueP, ErrorCode> {
     let want = len as usize;
     if want != ravel.len() {
         return Err(ErrorCode::LengthError);
@@ -42,7 +45,10 @@ pub fn small_vector(ravel: smallvec::SmallVec<[Cell; 8]>) -> Result<ValueP, Erro
 }
 
 /// Create a value from shape and SmallVec ravel.
-pub fn from_smallvec(shape: Shape, ravel: smallvec::SmallVec<[Cell; 8]>) -> Result<ValueP, ErrorCode> {
+pub fn from_smallvec(
+    shape: Shape,
+    ravel: smallvec::SmallVec<[Cell; 8]>,
+) -> Result<ValueP, ErrorCode> {
     let want = shape.get_volume();
     if want < 0 || want as usize != ravel.len() {
         return Err(ErrorCode::LengthError);
@@ -54,7 +60,10 @@ pub fn from_smallvec(shape: Shape, ravel: smallvec::SmallVec<[Cell; 8]>) -> Resu
 
 /// Append a cell to a SmallVec-backed vector, returning either the same SmallVec
 /// (if it fits) or a heap-allocated Vec.
-pub fn append_cell(mut ravel: smallvec::SmallVec<[Cell; 8]>, cell: Cell) -> smallvec::SmallVec<[Cell; 8]> {
+pub fn append_cell(
+    mut ravel: smallvec::SmallVec<[Cell; 8]>,
+    cell: Cell,
+) -> smallvec::SmallVec<[Cell; 8]> {
     ravel.push(cell);
     ravel
 }

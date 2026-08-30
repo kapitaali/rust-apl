@@ -117,10 +117,8 @@ mod tests {
         }
 
         fn register(&self, reg: &mut PluginRegistrar) -> AplResult<()> {
-            reg.sysvars.insert(
-                "⎕TESTVAR".into(),
-                ValueP::scalar_from(Cell::Int(42)),
-            );
+            reg.sysvars
+                .insert("⎕TESTVAR".into(), ValueP::scalar_from(Cell::Int(42)));
             Ok(())
         }
     }
@@ -172,8 +170,14 @@ mod tests {
 /// Initialize the plugin system with all static plugins.
 /// Called once at interpreter startup.
 #[allow(dead_code)]
-pub fn init_plugins(func_table: &mut FunctionTable, sysvars: &mut HashMap<String, ValueP>) -> AplResult<()> {
-    let mut reg = PluginRegistrar { func_table, sysvars };
+pub fn init_plugins(
+    func_table: &mut FunctionTable,
+    sysvars: &mut HashMap<String, ValueP>,
+) -> AplResult<()> {
+    let mut reg = PluginRegistrar {
+        func_table,
+        sysvars,
+    };
 
     // Register static plugins based on compile-time features
     #[cfg(feature = "plugin-plot")]

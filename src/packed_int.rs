@@ -94,16 +94,26 @@ impl PackedInt {
         }
     }
 
-    pub fn len(&self) -> usize { self.len }
-    pub fn is_empty(&self) -> bool { self.len == 0 }
-    pub fn bit_width(&self) -> u8 { self.bit_width }
-    pub fn is_signed(&self) -> bool { self.signed }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn bit_width(&self) -> u8 {
+        self.bit_width
+    }
+    pub fn is_signed(&self) -> bool {
+        self.signed
+    }
 
     pub fn get(&self, i: usize) -> i64 {
         if i >= self.len {
             panic!("PackedInt index out of bounds: {} >= {}", i, self.len);
         }
-        if self.bit_width == 0 { return 0; }
+        if self.bit_width == 0 {
+            return 0;
+        }
 
         // Special case: 64-bit values stored one per word
         if self.bit_width == 64 {
@@ -133,7 +143,9 @@ impl PackedInt {
         if i >= self.len {
             panic!("PackedInt index out of bounds: {} >= {}", i, self.len);
         }
-        if self.bit_width == 0 { return; }
+        if self.bit_width == 0 {
+            return;
+        }
 
         // Special case: 64-bit values stored one per word
         if self.bit_width == 64 {
@@ -188,7 +200,9 @@ mod tests {
         let pi = PackedInt::from_values(&[0, 0, 0, 0]);
         assert_eq!(pi.len(), 4);
         assert_eq!(pi.bit_width(), 0);
-        for i in 0..4 { assert_eq!(pi.get(i), 0); }
+        for i in 0..4 {
+            assert_eq!(pi.get(i), 0);
+        }
     }
 
     #[test]

@@ -43,14 +43,10 @@ impl AplPlugin for PlotPlugin {
         );
 
         // Register ⎕PLOT.WIDTH and ⎕PLOT.HEIGHT
-        reg.sysvars.insert(
-            "⎕PLOT.WIDTH".into(),
-            ValueP::scalar_from(Cell::Int(800)),
-        );
-        reg.sysvars.insert(
-            "⎕PLOT.HEIGHT".into(),
-            ValueP::scalar_from(Cell::Int(600)),
-        );
+        reg.sysvars
+            .insert("⎕PLOT.WIDTH".into(), ValueP::scalar_from(Cell::Int(800)));
+        reg.sysvars
+            .insert("⎕PLOT.HEIGHT".into(), ValueP::scalar_from(Cell::Int(600)));
 
         Ok(())
     }

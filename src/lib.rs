@@ -60,9 +60,9 @@ pub mod key;
 pub mod over;
 
 #[cfg(test)]
-pub mod parallel_tests;
-#[cfg(test)]
 pub mod parallel_phase7_tests;
+#[cfg(test)]
+pub mod parallel_tests;
 
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;
