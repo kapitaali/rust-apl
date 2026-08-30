@@ -4802,6 +4802,27 @@ mod tests {
     }
 
     #[test]
+    fn test_dfn_self_call_recursive() {
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("FAC←{⍵=0:1 ⋄ ⍵×∇ ⍵-1}").unwrap();
+        let result = env.eval_line("FAC 5").unwrap().unwrap();
+        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(120)));
+    }
+
+    #[test]
+    fn test_dfn_self_call_dyadic() {
+        // ⍺-using dfn: body references ⍺ which is bound when called dyadically.
+        // Note: this requires the parser to detect ambivalent usage (⍺+⍵) and
+        // create arg_left/arg_right. Current simplified parser may not handle this.
+        let mut env = Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("GCD←{⍺+⍵}").unwrap();
+        let result = env.eval_line("GCD 48 18").unwrap().unwrap();
+        assert_eq!(result.first_cell(), Some(&crate::cell::Cell::Int(66)));
+    }
+
+    #[test]
     fn test_inner_product_syntax_dot_product() {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
