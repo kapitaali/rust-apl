@@ -34,10 +34,10 @@ fn generate_xml(env: &Environment) -> Result<String, String> {
     // Variables
     out.push_str("  <Variables>\n");
     for name in env.var_names() {
-        if name.starts_with('⎕') {
+        if name.starts_with('\u{2395}') {
             continue;
         }
-        let val = env.get_var(&name).unwrap();
+        let val = env.get(&name).cloned().unwrap();
         out.push_str(&format!(
             "    <Variable name=\"{}\" kind=\"{}\" rank=\"{}\"",
             xml_escape(&name),

@@ -2127,9 +2127,24 @@ impl Environment {
         }
     }
 
-    /// all variable names (including system ⎕ vars), with namespace prefix
+    /// all variable names (including system ⎕ vars), with namespace prefix stripped
     pub fn var_names(&self) -> Vec<String> {
         self.vars.keys().map(|k| self.ns_shorten(k)).collect()
+    }
+
+    /// variable names in the CURRENT namespace only (for XML persistence)
+    pub fn var_names_current_ns(&self) -> Vec<String> {
+        self.vars
+            .keys()
+            .filter(|k| {
+                if self.current_ns.is_empty() {
+                    !k.contains("::")
+                } else {
+                    k.starts_with(&format!("{}::", self.current_ns))
+                }
+            })
+            .map(|k| self.ns_shorten(k))
+            .collect()
     }
 
     /// Wipe all variables and functions (system command )CLEAR)

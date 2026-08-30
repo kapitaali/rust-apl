@@ -23,6 +23,7 @@ pub const IO_VAR: &str = "⎕IO";
 pub const CT_VAR: &str = "⎕CT";
 pub const PP_VAR: &str = "⎕PP";
 pub const BOXING_VAR: &str = "⎕BOXING";
+pub const SEC_VAR: &str = "⎕SEC";
 
 /// Initialize default system variables in a fresh Environment.
 pub fn init_sysvars(env: &mut crate::parser::Environment) {
@@ -34,6 +35,7 @@ pub fn init_sysvars(env: &mut crate::parser::Environment) {
     env.set(CT_VAR, ValueP { inner: ct });
     env.set(PP_VAR, ValueP::scalar_from(crate::cell::Cell::Int(10)));
     env.set(BOXING_VAR, ValueP::scalar_from(crate::cell::Cell::Int(1)));
+    env.set(SEC_VAR, ValueP::scalar_from(crate::cell::Cell::Int(0)));
 }
 
 /// read ⎕BOXING (1 = nested arrays print boxed, 0 = plain)
@@ -44,6 +46,17 @@ pub fn get_boxing(env: &crate::parser::Environment) -> bool {
             _ => true, // default: boxing on
         },
         None => true, // default: boxing on
+    }
+}
+
+/// read ⎕SEC security level (0=normal, 1=restricted, 2=locked down)
+pub fn get_sec(env: &crate::parser::Environment) -> i64 {
+    match env.get(SEC_VAR) {
+        Some(v) => match v.first_cell().unwrap() {
+            crate::cell::Cell::Int(i) => *i,
+            _ => 0,
+        },
+        None => 0,
     }
 }
 
@@ -102,7 +115,7 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             names.sort();
             // Filter out ⎕-vars from )VARS (they have their own commands)
             let user_names: Vec<String> =
-                names.into_iter().filter(|n| !n.starts_with('⎕')).collect();
+                names.into_iter().filter(|n| !n.starts_with('\u{2395}')).collect();
             Some(vec![user_names.join("  ")])
         }
         "FNS" => {
@@ -110,26 +123,20 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             Some(vec![names.join("  ")])
         }
         "LIB" => {
-            // )LIB — list workspace names with details
+            // )LIB — list saved workspace files (.xml) in current directory
             let mut output = Vec::new();
-            let mut names = env.var_names();
-            names.sort();
-            for name in names {
-                if let Some(v) = env.get(&name) {
-                    let shape_str = if v.is_scalar() {
-                        "scalar".to_string()
-                    } else {
-                        format!("shape {}", v.shape())
-                    };
-                    output.push(format!("{}: {}", name, shape_str));
+            if let Ok(entries) = std::env::current_dir().and_then(|d| std::fs::read_dir(d)) {
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        if name.ends_with(".xml") && !name.starts_with('.') {
+                            output.push(name.to_string());
+                        }
+                    }
                 }
             }
-            let fns = env.funcs.names();
-            for name in fns {
-                output.push(format!("{}: function", name));
-            }
+            output.sort();
             if output.is_empty() {
-                output.push("(empty workspace)".to_string());
+                output.push("(no saved workspaces)".to_string());
             }
             Some(output)
         }
@@ -563,6 +570,33 @@ mod tests {
         // turn on
         env.set(BOXING_VAR, ValueP::scalar_from(Cell::Int(1)));
         assert!(get_boxing(&env));
+    }
+
+    #[test]
+    fn test_syscmd_lib_empty() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        let out = syscmd("LIB", &mut env).unwrap();
+        // Either lists .xml files or reports none found
+        assert!(out[0].contains(".xml") || out[0].contains("no saved"));
+    }
+
+    #[test]
+    fn test_quad_sec_default() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        assert_eq!(get_sec(&env), 0);
+        // ⎕SEC is readable as a name
+        let v = env.get("⎕SEC").unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(0)));
+    }
+
+    #[test]
+    fn test_quad_sec_writable() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        env.set(SEC_VAR, ValueP::scalar_from(crate::cell::Cell::Int(2)));
+        assert_eq!(get_sec(&env), 2);
     }
 
     #[test]
