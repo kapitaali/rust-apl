@@ -2652,6 +2652,9 @@ impl Environment {
             Expr::Str(s) => Ok(ValueP::char_vector(s)),
             Expr::Var(name) => {
                 let qualified = self.ns_qualify(name);
+                if name == "X" {
+                    eprintln!("DBG Expr::Var: name={:?} current_ns={:?} qualified={:?}", name, self.current_ns, qualified);
+                }
                 self.vars
                     .get(&qualified)
                     .cloned()
