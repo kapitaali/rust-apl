@@ -25,6 +25,7 @@ pub mod interval_index;
 pub mod not_match;
 pub mod operators;
 pub mod outer;
+pub mod ascii_plot;
 pub mod packed_bool;
 pub mod packed_int;
 pub mod parser;

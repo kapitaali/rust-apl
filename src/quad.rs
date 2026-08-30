@@ -1537,7 +1537,6 @@ pub fn quad_svs(_b: &ValueP) -> AplResult<ValueP> {
     Err(ErrorCode::DomainError)
 }
 
-
 #[cfg(test)]
 mod sv_tests {
     use super::*;
