@@ -3,6 +3,7 @@
 //! A rewrite of the GNU APL interpreter (ISO/IEC 13751) in Rust.
 //! See REWRITE_STRATEGY.md in the repository root for design rationale.
 
+pub mod ap;
 pub mod boxdisplay;
 pub mod cell;
 pub mod comma;
@@ -24,17 +25,17 @@ pub mod interval_index;
 pub mod not_match;
 pub mod operators;
 pub mod outer;
-#[cfg(test)]
-pub mod parallel_tests;
-#[cfg(test)]
-pub mod parallel_phase7_tests;
+pub mod packed_bool;
+pub mod packed_int;
 pub mod parser;
 pub mod partition;
 pub mod pick;
+pub mod quad;
 pub mod rank;
 pub mod replicate;
 pub mod rotate;
 pub mod shape;
+pub mod smallvec_ops;
 pub mod sort;
 pub mod squad;
 pub mod sysvars;
@@ -46,17 +47,17 @@ pub mod union;
 pub mod unparse;
 pub mod value;
 pub mod workspace;
+pub mod xml_archive;
 
 #[cfg(feature = "unofficial-ext")]
 pub mod key;
 #[cfg(feature = "unofficial-ext")]
 pub mod over;
 
-pub mod ap;
-pub mod packed_bool;
-pub mod packed_int;
-pub mod quad;
-pub mod xml_archive;
+#[cfg(test)]
+pub mod parallel_tests;
+#[cfg(test)]
+pub mod parallel_phase7_tests;
 
 // Re-export AplError for use in main.rs and elsewhere
 pub use types::AplError;
