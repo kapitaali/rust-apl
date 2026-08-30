@@ -198,8 +198,8 @@ These are the most-used system functions. Many are simple; a few need external c
 - Extend beyond outer product and reduce/scan ✅ Done
 
 ### 7.3 SmallVec Throughout
-- Wire SmallVec<[Cell; 8]> into hot paths
-- Replace Vec<Cell> in constructors, ravel operations
+- Wire SmallVec<[Cell; 8]> into hot paths ✅ Done
+- Replace Vec<Cell> in constructors, ravel operations ✅ Done
 
 ### 7.4 Fetcher Function Pointer
 - Mimic C++ Value's fetcher pattern
