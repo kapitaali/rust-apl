@@ -1503,3 +1503,72 @@ pub fn quad_re(b: &ValueP) -> AplResult<ValueP> {
         _ => Err(ErrorCode::DomainError),
     }
 }
+
+// ---------------------------------------------------------------------------
+// ⎕SVx — shared variables (Phase 6, stubs)
+// ---------------------------------------------------------------------------
+//
+// Shared variables are not yet supported in this port.
+// These stubs return domain errors for dyadic operations and
+// empty results for monadic queries.
+
+/// ⎕SVC — shared variable control (list).
+pub fn quad_svc() -> AplResult<ValueP> {
+    Ok(ValueP::char_vector(&[]))
+}
+
+/// ⎕SVO B — shared variable off (close).
+pub fn quad_svo(_b: &ValueP) -> AplResult<ValueP> {
+    Err(ErrorCode::DomainError)
+}
+
+/// ⎕SVQ B — shared variable query.
+pub fn quad_svq(_b: &ValueP) -> AplResult<ValueP> {
+    Err(ErrorCode::DomainError)
+}
+
+/// ⎕SVR B — shared variable read.
+pub fn quad_svr(_b: &ValueP) -> AplResult<ValueP> {
+    Err(ErrorCode::DomainError)
+}
+
+/// ⎕SVS B — shared variable set.
+pub fn quad_svs(_b: &ValueP) -> AplResult<ValueP> {
+    Err(ErrorCode::DomainError)
+}
+
+
+#[cfg(test)]
+mod sv_tests {
+    use super::*;
+
+    #[test]
+    fn test_quad_svc_empty() {
+        let result = quad_svc().unwrap();
+        assert_eq!(result.element_count(), 0);
+    }
+
+    #[test]
+    fn test_quad_svo_err() {
+        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
+        assert!(quad_svo(&v).is_err());
+    }
+
+    #[test]
+    fn test_quad_svq_err() {
+        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
+        assert!(quad_svq(&v).is_err());
+    }
+
+    #[test]
+    fn test_quad_svr_err() {
+        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
+        assert!(quad_svr(&v).is_err());
+    }
+
+    #[test]
+    fn test_quad_svs_err() {
+        let v = ValueP::int_vector(&[1, 2]);
+        assert!(quad_svs(&v).is_err());
+    }
+}
