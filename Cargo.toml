@@ -18,6 +18,7 @@ rand = "0.8"
 plotters = "0.3"
 image = "0.25"
 rustfft = "6.2"
+rusqlite = "0.31"
 apl-ext = { path = "crates/apl-ext" }
 apl-unofficial = { path = "crates/apl-unofficial", optional = true }
 
