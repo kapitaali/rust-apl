@@ -194,8 +194,8 @@ These are the most-used system functions. Many are simple; a few need external c
 - Bit-width selection based on range ✅ Done
 
 ### 7.2 Parallel Scalar Operations
-- Parallelize all scalar operations on long vectors
-- Extend beyond outer product and reduce/scan
+- Parallelize all scalar operations on long vectors ✅ Done
+- Extend beyond outer product and reduce/scan ✅ Done
 
 ### 7.3 SmallVec Throughout
 - Wire SmallVec<[Cell; 8]> into hot paths

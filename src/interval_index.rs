@@ -19,24 +19,46 @@ pub fn interval_index(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
     let ac = a.cells();
     let bc = b.cells();
     let n = ac.len();
-    let mut out = Vec::with_capacity(bc.len());
+    let use_parallel = bc.len() >= crate::functions::PARALLEL_THRESHOLD;
 
-    for cb in bc.iter() {
-        let val = cb.get_real_value()?;
-        // Binary search for the interval
-        let mut lo = 0usize;
-        let mut hi = n;
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            let mid_val = ac[mid].get_real_value()?;
-            if val < mid_val {
-                hi = mid;
-            } else {
-                lo = mid + 1;
+    let out: Vec<Cell> = if use_parallel {
+        use rayon::prelude::*;
+        bc.par_iter()
+            .map(|cb| {
+                let val = cb.get_real_value()?;
+                let mut lo = 0usize;
+                let mut hi = n;
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    let mid_val = ac[mid].get_real_value()?;
+                    if val < mid_val {
+                        hi = mid;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+                Ok(Cell::Int(lo as i64))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(bc.len());
+        for cb in bc.iter() {
+            let val = cb.get_real_value()?;
+            let mut lo = 0usize;
+            let mut hi = n;
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                let mid_val = ac[mid].get_real_value()?;
+                if val < mid_val {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
             }
+            out.push(Cell::Int(lo as i64));
         }
-        out.push(Cell::Int(lo as i64));
-    }
+        out
+    };
 
     let shape = if b.rank() == 0 {
         Shape::vector(1)

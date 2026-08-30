@@ -26,6 +26,8 @@ pub mod operators;
 pub mod outer;
 #[cfg(test)]
 pub mod parallel_tests;
+#[cfg(test)]
+pub mod parallel_phase7_tests;
 pub mod parser;
 pub mod partition;
 pub mod pick;
@@ -52,6 +54,7 @@ pub mod over;
 
 pub mod ap;
 pub mod packed_bool;
+pub mod packed_int;
 pub mod quad;
 pub mod xml_archive;
 

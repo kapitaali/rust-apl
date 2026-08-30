@@ -26,18 +26,37 @@ pub fn index_of_io(a: &ValueP, b: &ValueP, io: i64) -> AplResult<ValueP> {
 
     let cells_a = a.cells();
     let len_a = cells_a.len() as i64;
-    let mut out = Vec::with_capacity(b.element_count() as usize);
+    let use_parallel = b.element_count() as usize >= crate::functions::PARALLEL_THRESHOLD;
 
-    for cb in b.cells() {
-        let mut found = len_a + io; // "not found" sentinel, IO-shifted
-        for (i, ca) in cells_a.iter().enumerate() {
-            if cell_eq(ca, cb) {
-                found = i as i64 + io;
-                break;
+    let out: Vec<Cell> = if use_parallel {
+        use rayon::prelude::*;
+        b.cells()
+            .par_iter()
+            .map(|cb| {
+                let mut found = len_a + io;
+                for (i, ca) in cells_a.iter().enumerate() {
+                    if cell_eq(ca, cb) {
+                        found = i as i64 + io;
+                        break;
+                    }
+                }
+                Ok(Cell::Int(found))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut out = Vec::with_capacity(b.element_count() as usize);
+        for cb in b.cells() {
+            let mut found = len_a + io;
+            for (i, ca) in cells_a.iter().enumerate() {
+                if cell_eq(ca, cb) {
+                    found = i as i64 + io;
+                    break;
+                }
             }
+            out.push(Cell::Int(found));
         }
-        out.push(Cell::Int(found));
-    }
+        out
+    };
 
     // result shape follows B; ravel length == volume holds by construction
     ValueP::from_parts(*b.shape(), out).map_err(|_| ErrorCode::LengthError)
