@@ -24,3 +24,14 @@ impl AplPlugin for CdrPlugin {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cdr_plugin_info() {
+        let plugin = CdrPlugin;
+        let info = plugin.info();
+        assert_eq!(info.name, "cdr");
+    }
+}
