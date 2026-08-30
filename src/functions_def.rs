@@ -113,6 +113,8 @@ pub enum Callable {
     Interpreted(DefinedFunction),
     Native(crate::ffi::cabi::CAbiBinding),
     Plugin(crate::ffi::plugin::PluginBinding),
+    /// Plugin-provided function (closure-based)
+    PluginFn(String), // plugin name, actual dispatch handled by plugin system
 }
 
 impl Callable {

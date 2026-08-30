@@ -97,6 +97,20 @@ pub enum Expr {
     QuadNs(Box<Expr>),
     /// `⎕CS name` — switch current namespace
     QuadCs(Box<Expr>),
+    /// `⎕PLOT B` — plot data
+    QuadPlot(Box<Expr>),
+    /// `⎕PNG B` — PNG image I/O
+    QuadPng(Box<Expr>),
+    /// `⎕SQL B` — SQL database query
+    QuadSql(Box<Expr>),
+    /// `⎕FFT B` — FFT
+    QuadFft(Box<Expr>),
+    /// `⎕PYTHON B` — Python pipe
+    QuadPython(Box<Expr>),
+    /// `⎕GTK B` — GTK GUI
+    QuadGtk(Box<Expr>),
+    /// `⎕CDR B` — CDR binary interchange
+    QuadCdr(Box<Expr>),
     /// `⎕UCS B` — Unicode character set conversion
     QuadUcs(Box<Expr>),
     /// `⎕AV` — APL character vector
@@ -1169,6 +1183,55 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕CS" {
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadCs(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕PLOT — plot data (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕PLOT" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadPlot(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕PNG — PNG image I/O (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕PNG" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadPng(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕SQL — SQL database query (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕SQL" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadSql(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕FFT — FFT (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕FFT" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadFft(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕PYTHON — Python pipe (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕PYTHON" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadPython(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕GTK — GTK GUI (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕GTK" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadGtk(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕CDR — CDR binary interchange (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕CDR" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadCdr(Box::new(arg)), 1 + used));
         }
     }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
@@ -3636,6 +3699,41 @@ impl Environment {
             Expr::QuadCs(arg) => {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_cs(self, &bv)
+            }
+            Expr::QuadPlot(arg) => {
+                let bv = self.eval(arg)?;
+                #[cfg(feature = "plugin-plot")]
+                {
+                    crate::quad_plot::quad_plot(&bv)
+                }
+                #[cfg(not(feature = "plugin-plot"))]
+                {
+                    Err(ErrorCode::DomainError)
+                }
+            }
+            Expr::QuadPng(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::png::quad_png(&bv)
+            }
+            Expr::QuadSql(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::sql::quad_sql(&bv)
+            }
+            Expr::QuadFft(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::fft::quad_fft(&bv)
+            }
+            Expr::QuadPython(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::python::quad_python(&bv)
+            }
+            Expr::QuadGtk(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::gtk::quad_gtk(&bv)
+            }
+            Expr::QuadCdr(arg) => {
+                let bv = self.eval(arg)?;
+                crate::plugins::cdr::quad_cdr(&bv)
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
