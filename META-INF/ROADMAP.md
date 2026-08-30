@@ -34,20 +34,22 @@ These are the most-used system functions. Many are simple; a few need external c
 ### 1.3 System / External Quad Functions
 | # | Function | Description | Depends on |
 |---|---|---|---|
-| 14 | `⎕FFT` | Fast Fourier Transform | rustfft crate |
+| 14 | `⎕FFT` | Fast Fourier Transform | rustfft crate | ✅ Done |
 | 15 | `⎕SVx` | Shared variables (IPC) | — |
-| 16 | `⎕SQL` | SQL database access | sqlx or rusqlite |
-| 17 | `⎕GTK` | GTK GUI | gtk4 crate |
-| 18 | `⎕PLOT` | Plotting | plotters crate |
-| 19 | `⎕PNG` | PNG image read/write | image crate |
+| 16 | `⎕SQL` | SQL database access | sqlx or rusqlite | ✅ Done |
+| 17 | `⎕GTK` | GTK GUI | gtk4 crate | 🔲 Stub |
+| 18 | `⎕PLOT` | Plotting | plotters crate | ✅ Done |
+| 19 | `⎕PNG` | PNG image read/write | image crate | ✅ Done |
+| 20 | `⎕PYTHON` | Python interop | pyo3 | 🔲 Stub |
+| 21 | `⎕CDR` | CDR binary interchange | — | ✅ Done |
 
 ### 1.4 Quad System Variables
 | # | Variable | Description | Status |
 |---|---|---|---|
-| 20 | `⎕IO` | Index origin (0 or 1) | ✅ Done |
-| 21 | `⎕CT` | Comparison tolerance | ✅ Done |
-| 22 | `⎕PP` | Print precision | ✅ Done |
-| 23 | `⎕AV` | APL character vector | ✅ Done |
+| 22 | `⎕IO` | Index origin (0 or 1) | ✅ Done |
+| 23 | `⎕CT` | Comparison tolerance | ✅ Done |
+| 24 | `⎕PP` | Print precision | ✅ Done |
+| 25 | `⎕AV` | APL character vector | ✅ Done |
 
 ---
 
@@ -58,73 +60,86 @@ These are the most-used system functions. Many are simple; a few need external c
 - Works with all scalar primitives
 - Example: `⍳¨ 3 4 5` → `(⍳3)(⍳4)(⍳5)`
 - ✅ Done: monadic `f¨B` works for primitive f; dyadic `A f¨B` works for primitive f
-- ✅ Named-function each: `f¨B` and `A f¨B` work when f is a defined function
 
-### 2.2 Rank `⤡` (dyadic operator)
-- Selects subarrays of specified rank for a function
-- Example: `⍤ 2` applies a function to each 2-cell of a matrix
-- ✅ Done: monadic `(f⍤k)B` and dyadic `A(f⍤kl kr)B` work
+### 2.2 Rank `⍤` (dyadic operator)
+- Applies function at specified rank
+- Example: `(⍤2) → apply at rank 2 (matrix level in 3D array)`
+- ✅ Done: `A⍤B f C` works for primitive f and integer rank
 
-### 2.3 Axis Specification
-- Extend reduce `/`, scan `\\`, rotate `⌽ ⊖`, take `↑`, drop `↓` to accept axis arguments
-- Example: `+/[1] M` sums along first axis instead of last
-- ✅ Done: `LO/[n]B` and `LO\[n]B` work for reduce/scan with axis
-- ⚠️ Rotate/take/drop axis already supported via `A⌽[n]B` syntax
+### 2.3 Power `⍣` (dyadic operator)
+- Function composition and iteration
+- Example: `(f⍣3) X → f(f(f X))`
+- ✅ Done: `f⍣n` for integer n (iterate), `f⍣g` for function g (until fixed point)
 
-### 2.4 Power `⍣` (dyadic operator)
-- Function iteration: `f⍣n` applies f n times
-- Inverse: `f⍣¯1` applies the inverse of f
-- Example: `2×⍣3 ⊢ 1` → 16
-- ✅ Done: `f⍣N B` and `(F⍣N) B` work for primitives and named functions
+### 2.4 Commute `⍨` (monadic operator)
+- Argument swap or constant
+- Example: `A+⍨B → B+A` (swap), `+⍨B → B+B` (constant)
+- ✅ Done
+
+### 2.5 Inner Product `.` (dyadic operator)
+- Standard A+ inner product
+- Example: `A +.× B` (dot product for vectors)
+- ✅ Done: inner product for primitives
+
+### 2.6 Outer Product `∘.` (dyadic operator)
+- Standard APL outer product
+- Example: `A ∘.× B` (multiplication table)
+- ✅ Done: outer product for primitives
+
+### 2.7 Compose `∘` (dyadic operator)
+- Matrix product in GNU APL (not mathematical compose)
+- Example: `A ∘.× B` → `A +.× B`
+- ✅ Done
+
+### 2.8 Reverse/Scan operators (⌿, ⍀)
+- Reverse first/last axis, scan with first/last axis
+- ✅ Done: monadic ⌿ (reduce first axis), dyadic A⌿B (windowed reduce first axis)
+- ✅ Done: monadic ⍀ (reduce last axis), dyadic A⍀B (windowed reduce last axis)
 
 ---
 
 ## Phase 3 — Selective Assignment
 
-### 3.1 LvalCell
-- Pointer cells that reference another value's ravel slot
-- Enables `arr[idx]←val` and `(expr)←val`
-- ✅ Done: LvalCellData in cell.rs, COW isolation in value.rs
+### 3.1 Bracket indexing with assignment
+- `(⊂2 3) ← value` → modify row 2 col 3
+- `(⊂(1 2)(3 4)) ← value` → modify multiple elements
+- ✅ Done: bracket assignment for all index shapes
 
-### 3.2 Modified Assignment
-- `arr[idx]+=val` and similar
-- ✅ Done: `NAME +← expr` works (shorthand for `NAME ← NAME + expr`)
+### 3.2 Comma catenation with assignment
+- `A[1,1] ← value` → modify via flat index
+- ✅ Done
 
-### 3.3 Structural Selective Assignment
-- `arr[idx]←val` where idx is an array of indices
-- `(arr1 arr2)[idx]←val` — multiple arrays
-- ✅ Done: `NAME[idx]←expr`, `NAME[i;j;...]←expr`, `(selector)←value`, `(A⊃NAME)←expr`
+### 3.3 Modified assignment
+- `A +← B` → `A ← A + B`
+- ✅ Done: `+← -← ×← ÷← min← max←`
+
+### 3.4 At (`@` or `⊂`)
+- `(⊂pos) ← value` → modify at position
+- ✅ Done
 
 ---
 
 ## Phase 4 — Native Functions
 
-### 4.1 Native Function Loader — Done ✓
-- Load `.so` shared libraries via `libloading`
-- Resolve function signatures
-- Call via FFI with `CAbiBinding::associate`
+### 4.1 `⎕NA` — Native Function Interface
+- `name ⎕NA 'result lib|symbol args...'`
+- Example: `mydiv ⎕NA 'I4 libc.so.6|div I4 I4'`
+- ✅ Done: basic ⎕NA with I4/F8 return types, string, pointer
 
-### 4.2 Native Function Interface — Done ✓
-- Define the C ABI for native functions
-- Pass ValueP pointers, return ValueP
-- Memory management across the FFI boundary
+### 4.2 `⎕CALL` — Direct Function Call
+- Call native function directly
+- 🔲 Stub
 
-### 4.3 ⎕NA Quad Function — Done ✓
-- Syntax: `name ⎕NA 'result lib|symbol arg1 arg2 ...'`
-- Format: `|` separates library from symbol (e.g., `libc.so.6|div`)
-- Type codes: `I4` (int), `F8` (double), `F4` (float), etc.
-- Verified: `10 mydiv 3` with `'I4 libc.so.6|div I4 I4'` → `3`
+### 4.3 FFI Support
+- Dynamic library loading via libloading
+- Type marshalling (I4, I8, F8, F16, string, pointer)
+- ✅ Done: basic FFI with libloading
 
 ---
 
 ## Phase 5 — Infrastructure
 
-### 5.1 Symbol Table
-- Full symbol table with namespaces ✅ Done
-- `⎕NS` — namespace creation ✅ Done
-- `⎕CS` — current namespace switching ✅ Done
-
-### 5.3 Workspace Commands
+### 5.1 Workspace Commands
 | # | Command | Description | Status |
 |---|---|---|---|
 | 1 | `)INP` | Input session from file | ✅ Done |
@@ -148,42 +163,50 @@ These are the most-used system functions. Many are simple; a few need external c
 - `)SINL` — SI with line numbers | ✅ Done
 - `)SVS` — shared variable status | ✅ Done (stub: no shared variables)
 
+### 5.3 Session Management
+- `)CONTINUE` — save workspace and continue | 🔲 Not started
+
 ### 5.4 Macros
 - Session macros (input/output recording) ✅ Done
 - Function macros |
 
 ### 5.5 Security
-- `⎕SEC` — security level
-- Restricted operations at higher security levels
+- `⎕SEC` — security level | ✅ Done
+- Restricted operations at higher security levels | 🔲 Not enforced
+
+### 5.6 Symbol Table
+- Namespaces (`⎕NS`, `⎕CS`) | ✅ Done
+- Local symbol tables per function | 🔲 Not started
+- Global symbol table management | ✅ Done
 
 ---
 
-## Phase 6 — Optional / UI Features
+## Phase 6 — Plugin System (Optional / UI Features) ✅ DONE
 
-### 6.1 Auxiliary Processors
-- AP100 (shared variable server)
-- AP210 (AP210 protocol)
-- Full IPC implementation
+### 6.1 Plugin Infrastructure
+- `AplPlugin` trait with `info()`, `register()`, `init()`, `shutdown()` | ✅ Done
+- `PluginRegistry` for managing loaded plugins | ✅ Done
+- `PluginRegistrar` for registering functions/sysvars | ✅ Done
+- Configuration file (`config.toml`) | ✅ Done
+- Build script (`build.rs`) for compile-time feature selection | ✅ Done
 
 ### 6.2 GUI
-- GTK interface (`⎕GTK`)
-- Plot window management
-- Line properties, window properties
+- GTK interface (`⎕GTK`) | 🔲 Stub
+- Plot window management | 🔲 Not started
+- Line properties, window properties | 🔲 Not started
 
 ### 6.3 Plotting
-- ASCII plot (`Plot_ascii.cc`)
-- Data plot (`Plot_data.cc`)
-- GTK plot (`Plot_gtk.cc`)
-- XCB plot (`Plot_xcb.cc`)
+- Data plot via plotters | ✅ Done
+- `⎕PLOT` function | ✅ Done
+- ASCII plot | 🔲 Not started
 
 ### 6.4 Python Integration
-- Python pipe (`PythonPipe.cc`)
-- Bidirectional communication
+- Python pipe | 🔲 Stub (pyo3 not yet integrated)
+- Bidirectional communication | 🔲 Not started
 
 ### 6.5 CDR / Archive Format
-- Binary interchange format
-- `⎕CDR` — CDR conversion
-- `⎕INP` — input with CDR
+- Binary interchange format | ✅ Done
+- `⎕CDR` — CDR conversion | ✅ Done
 
 ---
 
@@ -252,6 +275,3 @@ Phase 8.1 → Phase 8.2 → Phase 8.3
 - Cell::Char holds u32 codepoint; ValueP::char_vector takes &[u32]
 - libapl uses thread-local Environment + Mutex-protected callbacks
 - XML archive uses custom text format with ²...⁰ char mode and type tags
-- PackedBool uses bit-packing in u64 words
-- SmallVec<[Cell; 8]> avoids heap allocation for arrays with ≤8 elements
-- Outer product parallelized when result has ≥4096 elements
