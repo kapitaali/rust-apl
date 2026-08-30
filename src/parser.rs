@@ -2111,17 +2111,11 @@ impl Environment {
 
     /// Qualify a name with the current namespace (if not already qualified)
     fn ns_qualify(&self, name: &str) -> String {
-        let result =
-            if self.current_ns.is_empty() || name.contains("::") || name.starts_with('\u{2395}') {
-                name.to_string()
-            } else {
-                format!("{}::{}", self.current_ns, name)
-            };
-        eprintln!(
-            "ns_qualify: name={:?} current_ns={:?} result={:?}",
-            name, self.current_ns, result
-        );
-        result
+        if self.current_ns.is_empty() || name.contains("::") || name.starts_with('\u{2395}') {
+            name.to_string()
+        } else {
+            format!("{}::{}", self.current_ns, name)
+        }
     }
 
     /// Strip namespace prefix from a qualified name for display
@@ -2652,9 +2646,6 @@ impl Environment {
             Expr::Str(s) => Ok(ValueP::char_vector(s)),
             Expr::Var(name) => {
                 let qualified = self.ns_qualify(name);
-                if name == "X" {
-                    eprintln!("DBG Expr::Var: name={:?} current_ns={:?} qualified={:?}", name, self.current_ns, qualified);
-                }
                 self.vars
                     .get(&qualified)
                     .cloned()
@@ -2785,7 +2776,7 @@ impl Environment {
                 // the Session-29 var-in-fn-position fix that unblocks the
                 // JAVA.APLWS wrapper layer.
                 if self.funcs.get(name).is_none() && arg.is_some() {
-                    if let Some(v) = self.vars.get(name).cloned() {
+                    if let Some(v) = self.get(name).cloned() {
                         let inner = arg.as_deref().unwrap();
                         if let Expr::FuncCallMono(iname, iarg) = inner {
                             let iright = match iarg {
@@ -2843,7 +2834,7 @@ impl Environment {
                     return self.call_function(name, None, right);
                 }
                 match (arg, right) {
-                    (None, _) => self.vars.get(name).cloned().ok_or(ErrorCode::ValueError),
+                    (None, _) => self.get(name).cloned().ok_or(ErrorCode::ValueError),
                     (Some(_), r) => self.call_function(name, None, r),
                 }
             }
