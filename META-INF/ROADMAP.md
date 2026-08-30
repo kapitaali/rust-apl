@@ -120,9 +120,9 @@ These are the most-used system functions. Many are simple; a few need external c
 ## Phase 5 — Infrastructure
 
 ### 5.1 Symbol Table
-- Full symbol table with namespaces
-- `⎕NS` — namespace creation
-- `⎕CS` — current namespace switching
+- Full symbol table with namespaces ✅ Done
+- `⎕NS` — namespace creation ✅ Done
+- `⎕CS` — current namespace switching ✅ Done
 
 ### 5.3 Workspace Commands
 | # | Command | Description | Status |
