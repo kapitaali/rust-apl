@@ -808,4 +808,238 @@ mod tests {
         env.clear_workspace();
         assert!(env.call_stack.is_empty());
     }
+
+    // ---------------------------------------------------------------------------
+    // Namespace (⎕NS / ⎕CS) tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_quad_ns_creates_namespace() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Create a namespace
+        let result = env.eval_line("⎕NS 'myns'").unwrap().unwrap();
+        let name: String = result
+            .cells()
+            .iter()
+            .filter_map(|c| c.get_char_value().ok())
+            .map(|cp| std::char::from_u32(cp).unwrap())
+            .collect();
+        assert_eq!(name, "myns");
+
+        // Verify namespace was registered
+        assert!(env.namespaces.contains("myns"));
+    }
+
+    #[test]
+    fn test_quad_ns_empty_name_errors() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        assert!(env.eval_line("⎕NS ''").is_err());
+    }
+
+    #[test]
+    fn test_quad_cs_switches_namespace() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Create namespace
+        env.eval_line("⎕NS 'foo'").unwrap();
+
+        // Switch to it — returns previous (empty = root)
+        let result = env.eval_line("⎕CS 'foo'").unwrap().unwrap();
+        assert_eq!(result.element_count(), 0); // previous was root (empty string)
+        assert_eq!(env.current_ns, "foo");
+
+        // Switch back to root — returns previous ('foo')
+        let result = env.eval_line("⎕CS ''").unwrap().unwrap();
+        assert_eq!(result.element_count(), 3);
+        assert_eq!(env.current_ns, "");
+    }
+
+    #[test]
+    fn test_quad_cs_unknown_namespace_errors() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        assert!(env.eval_line("⎕CS 'nonexistent'").is_err());
+    }
+
+    #[test]
+    fn test_ns_variable_scoping() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Create a variable in root
+        env.eval_line("X←100").unwrap();
+
+        // Create a namespace and switch to it
+        env.eval_line("⎕NS 'ns1'").unwrap();
+        env.eval_line("⎕CS 'ns1'").unwrap();
+
+        // Set a variable in the namespace
+        env.eval_line("X←200").unwrap();
+
+        // Get X from namespace should be 200
+        let v = env.eval_line("X").unwrap().unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(200)));
+
+        // Switch back to root
+        env.eval_line("⎕CS ''").unwrap();
+
+        // Get X from root should still be 100
+        let v = env.eval_line("X").unwrap().unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(100)));
+    }
+
+    #[test]
+    fn test_ns_vars_stored_qualified() {
+        // Verify variables are stored with namespace prefix internally
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        env.eval_line("⎕NS 'ns1'").unwrap();
+        env.eval_line("⎕CS 'ns1'").unwrap();
+        env.eval_line("Y←42").unwrap();
+
+        // Internally stored as ns1::Y
+        assert!(env.get_var("ns1::Y").is_some());
+        // But accessible as just Y
+        assert!(env.get("Y").is_some());
+        // var_names should show just "Y"
+        assert!(env.var_names().contains(&"Y".to_string()));
+    }
+
+    #[test]
+    fn test_ns_clear_workspace_resets() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        env.eval_line("⎕NS 'myns'").unwrap();
+        env.eval_line("⎕CS 'myns'").unwrap();
+        env.clear_workspace();
+
+        assert!(env.current_ns.is_empty());
+        assert!(env.namespaces.is_empty());
+    }
+
+    #[test]
+    fn test_ns_simple_scoping() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Initially in root
+        assert_eq!(env.current_ns, "");
+
+        // Set X in root
+        env.eval_line("X←100").unwrap();
+        let v = env.get_var("X").unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(100)));
+
+        // Create namespace
+        env.eval_line("⎕NS 'ns1'").unwrap();
+        assert!(env.namespaces.contains("ns1"));
+
+        // Switch to namespace
+        env.eval_line("⎕CS 'ns1'").unwrap();
+        assert_eq!(env.current_ns, "ns1");
+
+        // Set X in namespace
+        env.eval_line("X←200").unwrap();
+
+        // Verify it's stored with namespace prefix
+        let ns_x = env.get_var("ns1::X");
+        assert!(
+            ns_x.is_some(),
+            "ns1::X should exist, vars: {:?}",
+            env.var_names()
+        );
+        assert_eq!(
+            ns_x.unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(200))
+        );
+
+        // Get X should return 200
+        let v = env.eval_line("X").unwrap().unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(200)));
+
+        // Switch back to root
+        env.eval_line("⎕CS ''").unwrap();
+        assert_eq!(env.current_ns, "");
+
+        // Get X from root should be 100
+        let v = env.eval_line("X").unwrap().unwrap();
+        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(100)));
+    }
+
+    #[test]
+    fn test_ns_debug_lookup() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Set X in root
+        env.eval_line("X←100").unwrap();
+        assert_eq!(
+            env.get("X").unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(100))
+        );
+
+        // Create and switch to namespace
+        env.eval_line("⎕NS 'ns1'").unwrap();
+        env.eval_line("⎕CS 'ns1'").unwrap();
+        assert_eq!(env.current_ns, "ns1");
+
+        // Set X in namespace
+        env.eval_line("X←200").unwrap();
+
+        // Verify storage is correct
+        assert!(env.get_var("ns1::X").is_some(), "ns1::X should exist");
+        assert_eq!(
+            env.get_var("ns1::X").unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(200))
+        );
+
+        // Verify get() with namespace qualification works
+        assert_eq!(
+            env.get("X").unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(200))
+        );
+    }
+
+    #[test]
+    fn test_ns_qualified_names_not_colliding() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+
+        // Two variables with same short name in different namespaces
+        env.eval_line("VAL←1").unwrap();
+
+        env.eval_line("⎕NS 'a'").unwrap();
+        env.eval_line("⎕CS 'a'").unwrap();
+        env.eval_line("VAL←2").unwrap();
+
+        env.eval_line("⎕NS 'b'").unwrap();
+        env.eval_line("⎕CS 'b'").unwrap();
+        env.eval_line("VAL←3").unwrap();
+
+        // Each namespace has its own VAL
+        env.eval_line("⎕CS 'a'").unwrap();
+        assert_eq!(
+            env.eval_line("VAL").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(2))
+        );
+
+        env.eval_line("⎕CS 'b'").unwrap();
+        assert_eq!(
+            env.eval_line("VAL").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(3))
+        );
+
+        // Root still has original
+        env.eval_line("⎕CS ''").unwrap();
+        assert_eq!(
+            env.eval_line("VAL").unwrap().unwrap().first_cell(),
+            Some(&crate::cell::Cell::Int(1))
+        );
+    }
 }

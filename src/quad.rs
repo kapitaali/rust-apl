@@ -1350,3 +1350,82 @@ mod tests {
         assert!(result.element_count() > 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// ⎕NS — Namespace creation
+// ---------------------------------------------------------------------------
+
+/// ⎕NS name — create a namespace (or retrieve existing one).
+/// The name can be a character vector (string) or a nested array of names.
+/// Returns the namespace name.
+pub fn quad_ns(env: &mut crate::parser::Environment, b: &ValueP) -> AplResult<ValueP> {
+    let name = if b.element_count() == 0 {
+        return Err(ErrorCode::DomainError);
+    } else if b.is_vector()
+        && b.cells()
+            .iter()
+            .all(|c| matches!(c, crate::cell::Cell::Char(_)))
+    {
+        // Char vector → treat as a string name
+        let chars: Vec<u32> = b
+            .cells()
+            .iter()
+            .map(|c| c.get_char_value())
+            .collect::<Result<Vec<_>, _>>()?;
+        chars
+            .iter()
+            .map(|&cp| std::char::from_u32(cp).ok_or(ErrorCode::DomainError))
+            .collect::<Result<String, _>>()?
+    } else {
+        return Err(ErrorCode::DomainError);
+    };
+
+    // Validate: namespace names must be valid APL identifiers
+    if name.is_empty() || name.starts_with('⎕') || name.starts_with('{') {
+        return Err(ErrorCode::DomainError);
+    }
+
+    // Add to known namespaces
+    env.namespaces.insert(name.clone());
+
+    Ok(ValueP::char_vector(
+        &name.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
+}
+
+/// ⎕CS name — switch current namespace.
+/// The name must be an existing namespace (or '' for root).
+/// Returns the previous namespace name.
+pub fn quad_cs(env: &mut crate::parser::Environment, b: &ValueP) -> AplResult<ValueP> {
+    let name = if b.element_count() == 0 {
+        String::new() // root
+    } else if b.is_vector()
+        && b.cells()
+            .iter()
+            .all(|c| matches!(c, crate::cell::Cell::Char(_)))
+    {
+        let chars: Vec<u32> = b
+            .cells()
+            .iter()
+            .map(|c| c.get_char_value())
+            .collect::<Result<Vec<_>, _>>()?;
+        chars
+            .iter()
+            .map(|&cp| std::char::from_u32(cp).ok_or(ErrorCode::DomainError))
+            .collect::<Result<String, _>>()?
+    } else {
+        return Err(ErrorCode::DomainError);
+    };
+
+    // Validate: must be empty (root) or a known namespace
+    if !name.is_empty() && !env.namespaces.contains(&name) {
+        return Err(ErrorCode::DomainError);
+    }
+
+    let prev = env.current_ns.clone();
+    env.current_ns = name;
+
+    Ok(ValueP::char_vector(
+        &prev.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
+}

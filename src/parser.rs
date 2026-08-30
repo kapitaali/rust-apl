@@ -93,6 +93,10 @@ pub enum Expr {
     QuadJson(Box<Expr>),
     /// `⎕XML B` — XML parse/serialize
     QuadXml(Box<Expr>),
+    /// `⎕NS name` — create/retrieve a namespace; returns the namespace name
+    QuadNs(Box<Expr>),
+    /// `⎕CS name` — switch current namespace
+    QuadCs(Box<Expr>),
     /// `⎕UCS B` — Unicode character set conversion
     QuadUcs(Box<Expr>),
     /// `⎕AV` — APL character vector
@@ -1153,6 +1157,20 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             return Ok((Expr::QuadXml(Box::new(arg)), 1 + used));
         }
     }
+    // ⎕NS — namespace creation/retrieval
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕NS" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadNs(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕CS — current namespace switching
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕CS" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadCs(Box::new(arg)), 1 + used));
+        }
+    }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
         Tok::LBrace => {
             // dfn: `{ BODY }` — body is one or more expressions separated by
@@ -2045,6 +2063,11 @@ pub struct Environment {
     pub(crate) execute_was_shy: bool,
     /// call stack tracking: (function-name, current-line-1-based) for )SI
     pub(crate) call_stack: Vec<(String, usize)>,
+    /// current namespace (empty string = root). Names in a namespace are stored
+    /// as `ns::name` in vars/funcs; root names stored as `name`.
+    pub(crate) current_ns: String,
+    /// set of known namespace names (created via ⎕NS or ⎕CS)
+    pub(crate) namespaces: std::collections::HashSet<String>,
 }
 
 impl Environment {
@@ -2061,6 +2084,8 @@ impl Environment {
             execute_depth: 0,
             execute_was_shy: false,
             call_stack: Vec::new(),
+            current_ns: String::new(),
+            namespaces: std::collections::HashSet::new(),
         }
     }
 
@@ -2075,23 +2100,51 @@ impl Environment {
     }
 
     pub fn get(&self, name: &str) -> Option<&ValueP> {
-        self.vars.get(name)
+        let qualified = self.ns_qualify(name);
+        self.vars.get(&qualified)
     }
 
     pub fn set(&mut self, name: &str, val: ValueP) {
-        self.vars.insert(name.to_string(), val);
+        let qualified = self.ns_qualify(name);
+        self.vars.insert(qualified, val);
     }
 
-    /// all variable names (including system ⎕ vars)
+    /// Qualify a name with the current namespace (if not already qualified)
+    fn ns_qualify(&self, name: &str) -> String {
+        let result =
+            if self.current_ns.is_empty() || name.contains("::") || name.starts_with('\u{2395}') {
+                name.to_string()
+            } else {
+                format!("{}::{}", self.current_ns, name)
+            };
+        eprintln!(
+            "ns_qualify: name={:?} current_ns={:?} result={:?}",
+            name, self.current_ns, result
+        );
+        result
+    }
+
+    /// Strip namespace prefix from a qualified name for display
+    fn ns_shorten(&self, name: &str) -> String {
+        if let Some(pos) = name.rfind("::") {
+            name[pos + 2..].to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// all variable names (including system ⎕ vars), with namespace prefix
     pub fn var_names(&self) -> Vec<String> {
-        self.vars.keys().cloned().collect()
+        self.vars.keys().map(|k| self.ns_shorten(k)).collect()
     }
 
-    /// wipe all variables and functions (system command )CLEAR)
+    /// Wipe all variables and functions (system command )CLEAR)
     pub fn clear_workspace(&mut self) {
         self.vars.clear();
         self.funcs.clear();
         self.call_stack.clear();
+        self.current_ns = String::new();
+        self.namespaces.clear();
     }
 
     /// erase a single variable (used by )ERASE)
@@ -2597,7 +2650,13 @@ impl Environment {
                 ))
             }
             Expr::Str(s) => Ok(ValueP::char_vector(s)),
-            Expr::Var(name) => self.vars.get(name).cloned().ok_or(ErrorCode::ValueError),
+            Expr::Var(name) => {
+                let qualified = self.ns_qualify(name);
+                self.vars
+                    .get(&qualified)
+                    .cloned()
+                    .ok_or(ErrorCode::ValueError)
+            }
             Expr::Alpha => self.vars.get("⍺").cloned().ok_or(ErrorCode::ValueError),
             Expr::Omega => self.vars.get("⍵").cloned().ok_or(ErrorCode::ValueError),
             Expr::Dfn(body) => {
@@ -2822,19 +2881,15 @@ impl Environment {
             }
             Expr::Assign(name, rhs) => {
                 let v = self.eval(rhs)?;
-                self.vars.insert(name.clone(), v.clone());
+                self.set(name, v.clone());
                 Ok(v)
             }
             Expr::ModifiedAssign(name, p, rhs) => {
                 // NAME +← expr is shorthand for NAME ← NAME + expr
                 let rv = self.eval(rhs)?;
-                let lv = self
-                    .vars
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(ValueP::int_vector(&[0]));
+                let lv = self.get(name).cloned().unwrap_or(ValueP::int_vector(&[0]));
                 let result = p.eval_dyadic(&lv, &rv)?;
-                self.vars.insert(name.clone(), result.clone());
+                self.set(name, result.clone());
                 Ok(result)
             }
             Expr::AssignIndexed(name, idx, rhs) => {
@@ -3544,6 +3599,14 @@ impl Environment {
             Expr::QuadXml(arg) => {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_xml(&bv)
+            }
+            Expr::QuadNs(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_ns(self, &bv)
+            }
+            Expr::QuadCs(arg) => {
+                let bv = self.eval(arg)?;
+                crate::quad::quad_cs(self, &bv)
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;
