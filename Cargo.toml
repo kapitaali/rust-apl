@@ -15,21 +15,19 @@ smallvec = { version = "1.13", features = ["union"] }
 libloading = "0.8"
 libc = "0.2"
 rand = "0.8"
+plotters = "0.3"
+image = "0.25"
+rustfft = "6.2"
 apl-ext = { path = "crates/apl-ext" }
 apl-unofficial = { path = "crates/apl-unofficial", optional = true }
-
-# Phase 6 plugin dependencies (all optional)
-plotters = { version = "0.3", optional = true }
-image = { version = "0.25", optional = true }
-rustfft = { version = "6.2", optional = true }
 
 [features]
 default = []
 unofficial-ext = ["dep:apl-unofficial"]
-plugin-plot = ["dep:plotters"]
-plugin-png = ["dep:image"]
+plugin-plot = []
+plugin-png = []
 plugin-sql = []
-plugin-fft = ["dep:rustfft"]
+plugin-fft = []
 plugin-python = []
 plugin-gtk = []
 plugin-cdr = []
