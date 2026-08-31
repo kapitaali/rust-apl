@@ -316,6 +316,7 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 while i < chars.len()
                     && (chars[i].is_alphanumeric()
                         || chars[i] == '_'
+                        || chars[i] == '.'
                         || chars[i] == '∆'
                         || chars[i] == '⍙')
                 {
@@ -330,6 +331,7 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 while i < chars.len()
                     && (chars[i].is_alphanumeric()
                         || chars[i] == '_'
+                        || chars[i] == '.'
                         || chars[i] == '∆'
                         || chars[i] == '⍙')
                 {

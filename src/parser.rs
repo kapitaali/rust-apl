@@ -115,6 +115,8 @@ pub enum Expr {
     QuadPython(Box<Expr>),
     /// `⎕GTK B` — GTK GUI
     QuadGtk(Box<Expr>),
+    /// `⎕GTK.WAIT` — wait for all GTK windows to close
+    QuadGtkWait,
     /// `⎕CDR B` — CDR binary interchange
     QuadCdr(Box<Expr>),
     /// `⎕APLOT B` — ASCII plot
@@ -1260,6 +1262,9 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕GTK" {
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadGtk(Box::new(arg)), 1 + used));
+        }
+        if n == "⎕GTK.WAIT" {
+            return Ok((Expr::QuadGtkWait, 1));
         }
     }
     // ⎕CDR — CDR binary interchange (Phase 6 plugin)
@@ -3860,6 +3865,17 @@ impl Environment {
                 #[cfg(feature = "plugin-gtk")]
                 {
                     crate::plugins::gtk::quad_gtk(&bv)
+                }
+                #[cfg(not(feature = "plugin-gtk"))]
+                {
+                    Err(ErrorCode::DomainError)
+                }
+            }
+            Expr::QuadGtkWait => {
+                #[cfg(feature = "plugin-gtk")]
+                {
+                    crate::plugins::gtk::quad_gtk_wait();
+                    Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))
                 }
                 #[cfg(not(feature = "plugin-gtk"))]
                 {

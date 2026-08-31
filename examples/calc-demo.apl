@@ -4,6 +4,7 @@
 ⍝
 ⍝ This demo shows apl + GTK integration with:
 ⍝ - ⎕GTK GUI window
+⍝ - ⎕GTK.WAIT (keeps window open until user closes it)
 ⍝ - ⍎ execute (evaluate strings as APL)
 ⍝ - → branch (conditional jumps)
 ⍝ - Recursive functions
@@ -13,31 +14,31 @@
 ⍝ ──────────────────────────────────────────
 
 ⎕GTK 'text ╔═══════════════════════════════╗'
-⎕GTK 'text ║    APL Calculator (GTK)       ║'
-⎕GTK 'text ╠═══════════════════════════════╣'
-⎕GTK 'text ║  APL + GTK4 Integration Demo  ║'
-⎕GTK 'text ╚═══════════════════════════════╝'
-⎕GTK 'text '
+⎕GTK 'append ║    APL Calculator (GTK)       ║'
+⎕GTK 'append ╠═══════════════════════════════╣'
+⎕GTK 'append ║  APL + GTK4 Integration Demo  ║'
+⎕GTK 'append ╚═══════════════════════════════╝'
+⎕GTK 'append '
 
 ⍝ Basic arithmetic
-⎕GTK 'text Basic arithmetic:'
-⎕GTK 'text 2 + 3 × 4 = ',⍕2+3×4
-⎕GTK 'text (10 - 4) ÷ 3 = ',⍕(10-4)÷3
-⎕GTK 'text 2 * 10 = ',⍕2*10
-⎕GTK 'text '
+⎕GTK 'append Basic arithmetic:'
+⎕GTK 'append 2 + 3 × 4 = ',⍕2+3×4
+⎕GTK 'append (10 - 4) ÷ 3 = ',⍕(10-4)÷3
+⎕GTK 'append 2 * 10 = ',⍕2*10
+⎕GTK 'append '
 
 ⍝ ⍎ Execute demo
-⎕GTK 'text Execute (⍎) - evaluate strings as APL:'
-⎕GTK 'text ⍎''6 × 7'' = ',⍕⍎'6 × 7'
-⎕GTK 'text ⍎''2 + 3'' = ',⍕⍎'2 + 3'
-⎕GTK 'text ⍎''⍳10'' = ',⍕⍎'⍳10'
-⎕GTK 'text '
+⎕GTK 'append Execute (⍎) - evaluate strings as APL:'
+⎕GTK 'append ⍎''6 × 7'' = ',⍕⍎'6 × 7'
+⎕GTK 'append ⍎''2 + 3'' = ',⍕⍎'2 + 3'
+⎕GTK 'append ⍎''⍳10'' = ',⍕⍎'⍳10'
+⎕GTK 'append '
 
 ⍝ → Branch demo
-⎕GTK 'text Branch (→) - conditional jumps:'
-⎕GTK 'text →(1=0)/skip → 1+1 = ',⍕(→(1=0)/0) + 1+1
-⎕GTK 'text →(1=1)/skip → 2+2 = ',⍕(→(1=1)/0) + 2+2
-⎕GTK 'text '
+⎕GTK 'append Branch (→) - conditional jumps:'
+⎕GTK 'append →(1=0)/skip → 1+1 = ',⍕(→(1=0)/0) + 1+1
+⎕GTK 'append →(1=1)/skip → 2+2 = ',⍕(→(1=1)/0) + 2+2
+⎕GTK 'append '
 
 ⍝ Recursive factorial (using line numbers)
 ∇r ← fact n
@@ -47,14 +48,16 @@ r ← n × fact n-1
 r ← 1
 ∇
 
-⎕GTK 'text Recursive factorial:'
-⎕GTK 'text fact 0 = ',⍕fact 0
-⎕GTK 'text fact 1 = ',⍕fact 1
-⎕GTK 'text fact 5 = ',⍕fact 5
-⎕GTK 'text fact 10 = ',⍕fact 10
-⎕GTK 'text '
+⎕GTK 'append Recursive factorial:'
+⎕GTK 'append fact 0 = ',⍕fact 0
+⎕GTK 'append fact 1 = ',⍕fact 1
+⎕GTK 'append fact 5 = ',⍕fact 5
+⎕GTK 'append fact 10 = ',⍕fact 10
+⎕GTK 'append '
 
 ⍝ Close
-⎕GTK 'text ─────────────────────────────────'
-⎕GTK 'text Close window with ⎕GTK ''close'''
-⎕GTK 'close'
+⎕GTK 'append ─────────────────────────────────'
+⎕GTK 'append Close the window to exit'
+
+⍝ ⎕GTK.WAIT blocks until all GTK windows are closed
+⎕GTK.WAIT

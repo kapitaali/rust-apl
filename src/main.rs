@@ -282,4 +282,11 @@ fn main() {
             }
         }
     }
+
+    // After REPL loop ends, wait for any GTK windows to close
+    // This prevents the main thread from killing the GTK thread prematurely
+    #[cfg(feature = "plugin-gtk")]
+    {
+        apl::plugins::gtk::gtk_wait_timeout(u64::MAX);
+    }
 }

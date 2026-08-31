@@ -1,26 +1,45 @@
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
+use gtk4 as gtk;
 use gtk::glib::value::ToValue;
 use gtk::prelude::*;
-use gtk4 as gtk;
 
 use crate::cell::Cell;
 use crate::plugin_system::{AplPlugin, PluginInfo, PluginRegistrar};
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
+static GTK_WINDOW_COUNT: AtomicU32 = AtomicU32::new(0);
+
+pub fn gtk_wait_timeout(ms: u64) -> bool {
+    // Give GTK thread time to initialize and show window
+    thread::sleep(Duration::from_millis(500));
+    let start = Instant::now();
+    let timeout = Duration::from_millis(ms);
+    while GTK_WINDOW_COUNT.load(Ordering::SeqCst) > 0 {
+        if start.elapsed() > timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
 #[derive(Debug, Clone)]
 pub enum GtkMessage {
     ShowText(String),
+    AppendText(String),
     ShowPlot(String),
     ShowTable(Vec<Vec<String>>),
     Close,
+    Wait(u64),
 }
 
 pub struct GtkHandle {
@@ -46,6 +65,8 @@ fn ensure_gtk_initialized() -> AplResult<Rc<GtkHandle>> {
         let (tx, rx): (Sender<GtkMessage>, Receiver<GtkMessage>) = mpsc::channel();
         let rx = Arc::new(Mutex::new(rx));
 
+        GTK_WINDOW_COUNT.fetch_add(1, Ordering::SeqCst);
+
         thread::spawn(move || {
             gtk::init().expect("Failed to initialize GTK");
 
@@ -62,66 +83,127 @@ fn ensure_gtk_initialized() -> AplResult<Rc<GtkHandle>> {
             vbox.append(&status_label);
 
             window.set_child(Some(&vbox));
+
+            let main_loop = Rc::new(gtk::glib::MainLoop::new(None, false));
+
+            {
+                let ml = main_loop.clone();
+                window.connect_close_request(move |_| {
+                    GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
+                    ml.quit();
+                    gtk::glib::Propagation::Stop
+                });
+            }
+
             window.show();
 
             let window = Rc::new(window);
             let notebook = Rc::new(notebook);
             let status_label = Rc::new(status_label);
 
-            gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-                let guard = rx.lock().expect("GTK channel lock poisoned");
-                match guard.try_recv() {
-                    Ok(GtkMessage::ShowText(text)) => {
-                        show_text(&notebook, &status_label, &text);
-                        gtk::glib::ControlFlow::Continue
+            {
+                let ml = main_loop.clone();
+                gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+                    let guard = rx.lock().expect("GTK channel lock poisoned");
+                    match guard.try_recv() {
+                        Ok(GtkMessage::ShowText(text)) => {
+                            show_text(&notebook, &status_label, &text);
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Ok(GtkMessage::AppendText(text)) => {
+                            append_text(&notebook, &status_label, &text);
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Ok(GtkMessage::ShowPlot(path)) => {
+                            show_plot(&notebook, &status_label, &path);
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Ok(GtkMessage::ShowTable(table)) => {
+                            show_table(&notebook, &status_label, &table);
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Ok(GtkMessage::Close) => {
+                            window.close();
+                            GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
+                            ml.quit();
+                            gtk::glib::ControlFlow::Break
+                        }
+                        Ok(GtkMessage::Wait(ms)) => {
+                            thread::sleep(Duration::from_millis(ms));
+                            gtk::glib::ControlFlow::Continue
+                        }
+                        Err(_) => gtk::glib::ControlFlow::Continue,
                     }
-                    Ok(GtkMessage::ShowPlot(path)) => {
-                        show_plot(&notebook, &status_label, &path);
-                        gtk::glib::ControlFlow::Continue
-                    }
-                    Ok(GtkMessage::ShowTable(table)) => {
-                        show_table(&notebook, &status_label, &table);
-                        gtk::glib::ControlFlow::Continue
-                    }
-                    Ok(GtkMessage::Close) => {
-                        window.close();
-                        gtk::glib::ControlFlow::Break
-                    }
-                    Err(_) => gtk::glib::ControlFlow::Continue,
-                }
-            });
+                });
+            }
 
-            let main_loop = gtk::glib::MainLoop::new(None, false);
             main_loop.run();
         });
 
         let rc_handle = Rc::new(GtkHandle { tx });
         *handle.borrow_mut() = Some(rc_handle.clone());
+        // Give the GTK thread time to initialize and show the window
+        thread::sleep(Duration::from_millis(500));
         Ok(rc_handle)
     })
 }
 
+fn get_label_text(notebook: &gtk::Notebook) -> Option<String> {
+    if notebook.n_pages() > 0 {
+        if let Some(child) = notebook.nth_page(Some(0)) {
+            if let Some(scrolled) = child.downcast_ref::<gtk::ScrolledWindow>() {
+                if let Some(label) = scrolled.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
+                    return Some(label.label().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn show_text(notebook: &gtk::Notebook, status: &gtk::Label, text: &str) {
+    while notebook.n_pages() > 0 {
+        notebook.remove_page(Some(0));
+    }
+
     let label = gtk::Label::new(Some(text));
     label.set_margin_top(10);
     label.set_margin_bottom(10);
     label.set_margin_start(10);
     label.set_margin_end(10);
     label.set_selectable(true);
+    label.set_xalign(0.0);
+    label.set_halign(gtk::Align::Start);
+    label.set_wrap(true);
 
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&label));
+    scroll.set_vexpand(true);
 
-    let tab_label = gtk::Label::new(Some("Text"));
+    let tab_label = gtk::Label::new(Some("Output"));
     let _page = notebook.append_page(&scroll, Some(&tab_label));
-    status.set_text("Text displayed");
+    status.set_text("Ready");
+}
+
+fn append_text(notebook: &gtk::Notebook, status: &gtk::Label, text: &str) {
+    let new_text = if let Some(current) = get_label_text(notebook) {
+        format!("{}\n{}", current, text)
+    } else {
+        text.to_string()
+    };
+    show_text(notebook, status, &new_text);
 }
 
 fn show_plot(notebook: &gtk::Notebook, status: &gtk::Label, path: &str) {
+    while notebook.n_pages() > 0 {
+        notebook.remove_page(Some(0));
+    }
+
     let picture = gtk::Picture::for_filename(path);
 
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&picture));
+    scroll.set_vexpand(true);
 
     let tab_label = gtk::Label::new(Some("Plot"));
     let _page = notebook.append_page(&scroll, Some(&tab_label));
@@ -133,14 +215,17 @@ fn show_table(notebook: &gtk::Notebook, status: &gtk::Label, table: &[Vec<String
         return;
     }
 
+    while notebook.n_pages() > 0 {
+        notebook.remove_page(Some(0));
+    }
+
     let cols = table[0].len();
     let rows = table.len();
 
-    // Build column types vector (dynamic)
     let column_types: Vec<gtk::glib::types::Type> =
         (0..cols).map(|_| gtk::glib::types::Type::STRING).collect();
 
-    let list_store = gtk::ListStore::new(&column_types[..]);
+    let list_store = gtk::ListStore::new(&column_types);
 
     for row in table {
         let iter = list_store.append();
@@ -165,6 +250,7 @@ fn show_table(notebook: &gtk::Notebook, status: &gtk::Label, table: &[Vec<String
 
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&tree_view));
+    scroll.set_vexpand(true);
 
     let tab_label = gtk::Label::new(Some("Table"));
     let _page = notebook.append_page(&scroll, Some(&tab_label));
@@ -196,15 +282,25 @@ pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
         handle.send(GtkMessage::Close)?;
     } else if let Some(text) = cmd.strip_prefix("text ") {
         handle.send(GtkMessage::ShowText(text.to_string()))?;
+    } else if let Some(text) = cmd.strip_prefix("append ") {
+        handle.send(GtkMessage::AppendText(text.to_string()))?;
     } else if let Some(path) = cmd.strip_prefix("plot ") {
         handle.send(GtkMessage::ShowPlot(path.to_string()))?;
+    } else if let Some(ms_str) = cmd.strip_prefix("wait ") {
+        let ms: u64 = ms_str.parse().map_err(|_| ErrorCode::DomainError)?;
+        handle.send(GtkMessage::Wait(ms))?;
+        gtk_wait_timeout(ms);
     } else {
-        handle.send(GtkMessage::ShowText(cmd.to_string()))?;
+        handle.send(GtkMessage::AppendText(cmd.to_string()))?;
     }
 
     Ok(ValueP::char_vector(
         &"gtk window".chars().map(|c| c as u32).collect::<Vec<_>>(),
     ))
+}
+
+pub fn quad_gtk_wait() {
+    gtk_wait_timeout(u64::MAX);
 }
 
 pub struct GtkPlugin;
