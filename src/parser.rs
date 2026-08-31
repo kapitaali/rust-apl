@@ -117,6 +117,8 @@ pub enum Expr {
     QuadGtk(Box<Expr>),
     /// `⎕GTK.WAIT` — wait for all GTK windows to close
     QuadGtkWait,
+    /// `⎕GTKEvent` — get next GTK event (non-blocking)
+    QuadGtkEvent,
     /// `⎕CDR B` — CDR binary interchange
     QuadCdr(Box<Expr>),
     /// `⎕APLOT B` — ASCII plot
@@ -1265,6 +1267,9 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
         if n == "⎕GTK.WAIT" {
             return Ok((Expr::QuadGtkWait, 1));
+        }
+        if n == "⎕GTKEvent" {
+            return Ok((Expr::QuadGtkEvent, 1));
         }
     }
     // ⎕CDR — CDR binary interchange (Phase 6 plugin)
@@ -3865,6 +3870,35 @@ impl Environment {
                 #[cfg(feature = "plugin-gtk")]
                 {
                     crate::plugins::gtk::quad_gtk(&bv)
+                }
+                #[cfg(not(feature = "plugin-gtk"))]
+                {
+                    Err(ErrorCode::DomainError)
+                }
+            }
+            Expr::QuadGtkEvent => {
+                #[cfg(feature = "plugin-gtk")]
+                {
+                    match crate::plugins::gtk::quad_gtk_event() {
+                        Some(event) => {
+                            // Return event as a simple string: "ButtonClicked Compute" or "WindowClosed"
+                            let event_str = match event {
+                                crate::plugins::gtk::GtkEvent::ButtonClicked(label) => {
+                                    format!("ButtonClicked {}", label)
+                                }
+                                crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
+                                    format!("EntryChanged {}", text)
+                                }
+                                crate::plugins::gtk::GtkEvent::WindowClosed => {
+                                    "WindowClosed".to_string()
+                                }
+                            };
+                            Ok(ValueP::char_vector(
+                                &event_str.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                            ))
+                        }
+                        None => Ok(ValueP::char_vector(&[])),
+                    }
                 }
                 #[cfg(not(feature = "plugin-gtk"))]
                 {

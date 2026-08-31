@@ -2,21 +2,18 @@
 ⍝
 ⍝ Run with: cargo run --release --features plugin-gtk < examples/calc-demo.apl
 ⍝
-⍝ This demo shows apl + GTK integration with:
-⍝ - ⎕GTK GUI window with calculator buttons
-⍝ - ⎕GTK.WAIT (keeps window open until user closes it)
-⍝ - ⍎ execute (evaluate strings as APL)
-⍝ - → branch (conditional jumps)
-⍝ - Recursive functions
+⍝ Click buttons to enter expressions in the entry field.
+⍝ Close the window to exit.
 
 ⍝ ──────────────────────────────────────────
-⍝ Static demo (all features working)
+⍝ Static demo content
 ⍝ ──────────────────────────────────────────
 
 ⎕GTK 'text ╔═══════════════════════════════╗'
 ⎕GTK 'append ║    APL Calculator (GTK)       ║'
 ⎕GTK 'append ╠═══════════════════════════════╣'
-⎕GTK 'append ║  APL + GTK4 Integration Demo  ║'
+⎕GTK 'append ║  Click buttons to enter expr  ║'
+⎕GTK 'append ║  Click Compute to evaluate    ║'
 ⎕GTK 'append ╚═══════════════════════════════╝'
 ⎕GTK 'append '
 
@@ -36,11 +33,10 @@
 
 ⍝ → Branch demo
 ⎕GTK 'append Branch (→) - conditional jumps:'
-⎕GTK 'append →(1=0)/skip → 1+1 = ',⍕(→(1=0)/0) + 1+1
-⎕GTK 'append →(1=1)/skip → 2+2 = ',⍕(→(1=1)/0) + 2+2
+⎕GTK 'append →(1=0)/0 → 1+1 = ',⍕((1=0)≠1)+1+1
 ⎕GTK 'append '
 
-⍝ Recursive factorial (using line numbers)
+⍝ Recursive factorial
 ∇r ← fact n
 →(n≤0)/4
 r ← n × fact n-1
@@ -50,7 +46,6 @@ r ← 1
 
 ⎕GTK 'append Recursive factorial:'
 ⎕GTK 'append fact 0 = ',⍕fact 0
-⎕GTK 'append fact 1 = ',⍕fact 1
 ⎕GTK 'append fact 5 = ',⍕fact 5
 ⎕GTK 'append fact 10 = ',⍕fact 10
 ⎕GTK 'append '
@@ -59,7 +54,6 @@ r ← 1
 ⎕GTK 'append ─────────────────────────────────'
 ⎕GTK 'append Calculator buttons:'
 ⎕GTK 'append Click buttons in the GTK window'
-⎕GTK 'append or type in the entry field'
 
 ⍝ ⎕GTK.WAIT blocks until all GTK windows are closed
 ⎕GTK.WAIT

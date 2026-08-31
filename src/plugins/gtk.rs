@@ -71,6 +71,7 @@ pub enum GtkMessage {
     Wait(u64),
     CreateCalculator,
     SetEntryText(String),
+    GetEntryText(Sender<String>),
 }
 
 #[derive(Clone)]
@@ -86,6 +87,17 @@ impl GtkHandle {
             .map_err(|_| ErrorCode::DomainError)?;
         ack_rx.recv().map_err(|_| ErrorCode::DomainError)?;
         Ok(())
+    }
+
+    /// Get the current text from the GTK entry field
+    pub fn get_entry_text(&self) -> AplResult<String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send((GtkMessage::GetEntryText(reply_tx), ack_tx))
+            .map_err(|_| ErrorCode::DomainError)?;
+        ack_rx.recv().map_err(|_| ErrorCode::DomainError)?;
+        reply_rx.recv().map_err(|_| ErrorCode::DomainError)
     }
 }
 
@@ -150,9 +162,11 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
 
             {
                 let ml = main_loop.clone();
-                window.connect_close_request(move |_| {
+                window.connect_close_request(move |w| {
                     GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
                     send_event(GtkEvent::WindowClosed);
+                    // Let GTK destroy the window, then quit the main loop
+                    w.destroy();
                     ml.quit();
                     gtk::glib::Propagation::Stop
                 });
@@ -243,6 +257,10 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                         GtkMessage::SetEntryText(text) => {
                             entry_clone2.set_text(&text);
                         }
+                        GtkMessage::GetEntryText(reply_tx) => {
+                            let text = entry_clone2.text().to_string();
+                            let _ = reply_tx.send(text);
+                        }
                     }
                     let _ = ack_tx.send(());
                 }
@@ -292,6 +310,12 @@ pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
         handle.send(GtkMessage::AppendText(text.to_string()))?;
     } else if let Some(text) = cmd.strip_prefix("entry ") {
         handle.send(GtkMessage::SetEntryText(text.to_string()))?;
+    } else if cmd == "getentry" {
+        // Return the current entry field content
+        let text = handle.get_entry_text()?;
+        return Ok(ValueP::char_vector(
+            &text.chars().map(|c| c as u32).collect::<Vec<_>>(),
+        ));
     } else if let Some(ms_str) = cmd.strip_prefix("wait ") {
         let ms: u64 = ms_str.parse().map_err(|_| ErrorCode::DomainError)?;
         handle.send(GtkMessage::Wait(ms))?;
@@ -311,7 +335,8 @@ pub fn quad_gtk_wait() {
 pub fn quad_gtk_event() -> Option<GtkEvent> {
     if let Some(rx) = get_event_receiver() {
         if let Ok(guard) = rx.lock() {
-            guard.try_recv().ok()
+            // Block with timeout to avoid tight loop
+            guard.recv_timeout(Duration::from_millis(100)).ok()
         } else {
             None
         }
