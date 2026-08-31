@@ -115,6 +115,8 @@ pub enum Expr {
     QuadGtk(Box<Expr>),
     /// `⎕CDR B` — CDR binary interchange
     QuadCdr(Box<Expr>),
+    /// `⎕APLOT B` — ASCII plot
+    QuadAplot(Box<Expr>),
     /// `⎕UCS B` — Unicode character set conversion
     QuadUcs(Box<Expr>),
     /// `⎕AV` — APL character vector
@@ -1250,6 +1252,13 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if n == "⎕CDR" {
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadCdr(Box::new(arg)), 1 + used));
+        }
+    }
+    // ⎕APLOT — ASCII plot (Phase 6 plugin)
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕APLOT" {
+            let (arg, used) = parse(&toks[1..])?;
+            return Ok((Expr::QuadAplot(Box::new(arg)), 1 + used));
         }
     }
     match toks.first().ok_or(ErrorCode::SyntaxError)? {
@@ -3776,6 +3785,10 @@ impl Environment {
             Expr::QuadCdr(arg) => {
                 let bv = self.eval(arg)?;
                 crate::plugins::cdr::quad_cdr(&bv)
+            }
+            Expr::QuadAplot(arg) => {
+                let bv = self.eval(arg)?;
+                crate::ascii_plot::quad_aplot(&bv)
             }
             Expr::DyadicAxis(p, a, axis, b) => {
                 let av = self.eval(a)?;

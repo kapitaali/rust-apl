@@ -16,11 +16,39 @@ pub struct ValueP {
     pub(crate) inner: Arc<ValueInner>,
 }
 
+/// Storage for the ravel — either materialized (Vec<Cell>) or computed
+/// on-the-fly via a fetcher function pointer (Phase 7.4).
+#[derive(Clone)]
+pub enum CellStorage {
+    Materialized(Vec<Cell>),
+    /// Lazy array: compute cell at index `i` via `fetcher(i)`.
+    /// `cached` is populated on first access (via `OnceLock::get_or_init`).
+    /// `proto` is the element type for empty-value / over-take semantics.
+    Fetched {
+        fetcher: std::sync::Arc<dyn Fn(usize) -> Cell + Send + Sync>,
+        cached: std::sync::OnceLock<Vec<Cell>>,
+        proto: Cell,
+    },
+}
+
+impl CellStorage {
+    /// Access the ravel as a slice. For `Fetched` variants, this
+    /// materializes via the cached cell vector on first call.
+    fn ravel(&self, volume: usize) -> &[Cell] {
+        match self {
+            CellStorage::Materialized(v) => v,
+            CellStorage::Fetched {
+                fetcher, cached, ..
+            } => cached.get_or_init(|| (0..volume).map(|i| fetcher(i)).collect()),
+        }
+    }
+}
+
 /// The actual value data.
 #[derive(Clone)]
 pub struct ValueInner {
     shape: Shape,
-    ravel: Vec<Cell>,
+    storage: CellStorage,
     /// prototype cell: type of the elements (Int(0), Char(' '), Float(0),
     /// Pointer(...)). Used for over-take padding and empty-value prototypes
     /// (mirrors C++ `Value::get_cproto()`).
@@ -35,7 +63,7 @@ impl ValueInner {
             .unwrap_or_else(|| crate::cell::Cell::int(0));
         ValueInner {
             shape,
-            ravel,
+            storage: CellStorage::Materialized(ravel),
             proto,
         }
     }
@@ -43,7 +71,7 @@ impl ValueInner {
     pub fn new_with_proto(shape: Shape, ravel: Vec<Cell>, proto: Cell) -> ValueInner {
         ValueInner {
             shape,
-            ravel,
+            storage: CellStorage::Materialized(ravel),
             proto,
         }
     }
@@ -56,7 +84,23 @@ impl ValueInner {
             .unwrap_or_else(|| crate::cell::Cell::int(0));
         ValueInner {
             shape,
-            ravel: ravel.into_vec(),
+            storage: CellStorage::Materialized(ravel.into_vec()),
+            proto,
+        }
+    }
+
+    /// Create a lazy (fetcher-based) ValueInner — cells are computed on demand.
+    pub fn new_fetched<F>(shape: Shape, fetcher: F, proto: Cell) -> ValueInner
+    where
+        F: Fn(usize) -> Cell + Send + Sync + 'static,
+    {
+        ValueInner {
+            shape,
+            storage: CellStorage::Fetched {
+                fetcher: std::sync::Arc::new(fetcher),
+                cached: std::sync::OnceLock::new(),
+                proto: proto.clone(),
+            },
             proto,
         }
     }
@@ -66,14 +110,37 @@ impl ValueInner {
         &self.proto
     }
 
-    /// mutable access to the ravel (for selective assignment)
+    /// mutable access to the ravel (for selective assignment).
+    /// Materializes a `Fetched` storage before returning a mutable slice.
     pub fn ravel_mut(&mut self) -> &mut Vec<Cell> {
-        &mut self.ravel
+        if let CellStorage::Fetched {
+            fetcher, cached, ..
+        } = &self.storage
+        {
+            let n = self.shape.get_volume() as usize;
+            let ravel: Vec<Cell> = (0..n).map(|i| fetcher(i)).collect();
+            let _ = cached.set(ravel.clone());
+            self.storage = CellStorage::Materialized(ravel);
+        }
+        match &mut self.storage {
+            CellStorage::Materialized(v) => v,
+            _ => unreachable!(),
+        }
     }
 
-    /// read-only access to the ravel
+    /// read-only access to the ravel. Returns a slice; if the storage is
+    /// `Fetched`, it materializes via the cached cell vector.
     pub fn cells(&self) -> &[Cell] {
-        &self.ravel
+        let volume = self.shape.get_volume() as usize;
+        self.storage.ravel(volume)
+    }
+
+    /// get a single cell at an index — works for both Materialized and Fetched.
+    pub fn cell_at(&self, index: usize) -> Option<Cell> {
+        match &self.storage {
+            CellStorage::Materialized(v) => v.get(index).cloned(),
+            CellStorage::Fetched { fetcher, .. } => Some(fetcher(index)),
+        }
     }
 
     /// the shape of this value
@@ -190,8 +257,7 @@ impl ValueP {
         self.is_scalar()
             && self
                 .inner
-                .ravel
-                .first()
+                .cell_at(0)
                 .map_or(false, |c| !c.is_pointer_cell())
     }
 
@@ -210,7 +276,8 @@ impl ValueP {
     pub fn is_zilde(&self) -> bool {
         self.is_vector()
             && self.inner.shape.get_cols() == 0
-            && matches!(self.inner.ravel.first(), Some(Cell::Int(_)))
+            && self.inner.element_count() == 0
+            && matches!(self.inner.proto(), Cell::Int(_))
     }
 
     /// true iff this value ≡ '' (empty char vector)
@@ -218,7 +285,8 @@ impl ValueP {
     pub fn is_str0(&self) -> bool {
         self.is_vector()
             && self.inner.shape.get_cols() == 0
-            && matches!(self.inner.ravel.first(), Some(Cell::Char(_)))
+            && self.inner.element_count() == 0
+            && matches!(self.inner.proto(), Cell::Char(_))
     }
 
     /// clone the shared inner (used by ffi/plugin code to nest values
@@ -253,12 +321,12 @@ impl ValueP {
 
     #[inline]
     pub fn cells(&self) -> &[Cell] {
-        &self.inner.ravel
+        self.inner.cells()
     }
 
     #[inline]
     pub fn first_cell(&self) -> Option<&Cell> {
-        self.inner.ravel.first()
+        self.inner.cells().first()
     }
 
     // -----------------------------------------------------------------------
@@ -282,7 +350,7 @@ impl ValueP {
         if !self.is_unique() {
             self.inner = Arc::new(ValueInner::new_with_proto(
                 self.inner.shape,
-                self.inner.ravel.clone(),
+                self.inner.cells().to_vec(),
                 self.inner.proto.clone(),
             ));
         }
@@ -342,6 +410,20 @@ impl ValueP {
         }
         Ok(ValueP {
             inner: Arc::new(ValueInner::new(shape, ravel.into_vec())),
+        })
+    }
+
+    /// build a lazy (fetcher-based) value — cells are computed on demand.
+    pub fn from_fetcher<F>(shape: Shape, fetcher: F, proto: Cell) -> Result<ValueP, ErrorCode>
+    where
+        F: Fn(usize) -> Cell + Send + Sync + 'static,
+    {
+        let count = shape.get_volume();
+        if count < 0 {
+            return Err(ErrorCode::LengthError);
+        }
+        Ok(ValueP {
+            inner: Arc::new(ValueInner::new_fetched(shape, fetcher, proto)),
         })
     }
 
@@ -449,6 +531,97 @@ mod tests {
     fn test_zilde() {
         let z = ValueP::char_vector(&[]);
         assert!(z.is_empty());
+    }
+
+    #[test]
+    fn test_from_fetcher() {
+        // Create a lazy value: cells are computed as i*2
+        let shape = Shape::vector(5);
+        let v = ValueP::from_fetcher(shape, |i| Cell::int(i as i64 * 2), Cell::int(0)).unwrap();
+
+        // Element count should be correct before materialization
+        assert_eq!(v.element_count(), 5);
+
+        // cells() should materialize and return correct values
+        assert_eq!(v.cells()[0], Cell::int(0));
+        assert_eq!(v.cells()[1], Cell::int(2));
+        assert_eq!(v.cells()[2], Cell::int(4));
+        assert_eq!(v.cells()[3], Cell::int(6));
+        assert_eq!(v.cells()[4], Cell::int(8));
+
+        // After materialization, first_cell should work
+        assert_eq!(v.first_cell(), Some(&Cell::int(0)));
+    }
+
+    #[test]
+    fn test_from_fetcher_matrix() {
+        // Create a lazy 3x3 matrix
+        let shape = Shape::matrix(3, 3);
+        let v = ValueP::from_fetcher(shape, |i| Cell::int(i as i64), Cell::int(0)).unwrap();
+
+        assert_eq!(v.rank(), 2);
+        assert_eq!(v.element_count(), 9);
+        assert_eq!(v.cells()[0], Cell::int(0));
+        assert_eq!(v.cells()[8], Cell::int(8));
+    }
+
+    #[test]
+    fn test_fetcher_caching() {
+        // Verify that the fetcher is called only once per cell via caching
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let call_count = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = call_count.clone();
+
+        let shape = Shape::vector(4);
+        let v = ValueP::from_fetcher(
+            shape,
+            move |i| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Cell::int(i as i64 * 3)
+            },
+            Cell::int(0),
+        )
+        .unwrap();
+
+        // First access
+        assert_eq!(v.cells()[0], Cell::int(0));
+        assert_eq!(v.cells()[3], Cell::int(9));
+
+        // After materialization, the cached version should be used
+        assert_eq!(v.cells()[0], Cell::int(0));
+
+        // The fetcher was called 4 times (once per element during materialization)
+        assert_eq!(call_count.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn test_fetcher_materialize() {
+        // Test that ravel_mut materializes the fetcher
+        let shape = Shape::vector(3);
+        let mut v =
+            ValueP::from_fetcher(shape, |i| Cell::int(i as i64 + 10), Cell::int(0)).unwrap();
+
+        // ravel_mut should materialize
+        let ravel = v.make_mut().ravel_mut();
+        assert_eq!(ravel[0], Cell::int(10));
+        assert_eq!(ravel[1], Cell::int(11));
+        assert_eq!(ravel[2], Cell::int(12));
+    }
+
+    #[test]
+    fn test_fetcher_with_proto() {
+        // Test that proto is preserved for empty values
+        let shape = Shape::vector(3);
+        let v = ValueP::from_fetcher(
+            shape,
+            |i| Cell::char('a' as u32 + i as u32),
+            Cell::char(' ' as u32),
+        )
+        .unwrap();
+
+        assert_eq!(v.cells()[0], Cell::char('a' as u32));
+        assert_eq!(v.cells()[1], Cell::char('b' as u32));
+        assert_eq!(v.cells()[2], Cell::char('c' as u32));
     }
 
     #[test]
