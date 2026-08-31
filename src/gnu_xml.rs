@@ -692,7 +692,7 @@ mod tests {
     fn test_unpack_bytes_roundtrip() {
         let cells = vec![
             Cell::Int(42),
-            Cell::Float(3.14),
+            Cell::Float(std::f64::consts::PI),
             Cell::Char('X' as u32),
             Cell::complex(1.0, 2.0),
         ];

@@ -133,8 +133,10 @@ pub enum Expr {
     QuadDm,
     /// `⎕EN` — error number
     QuadEn,
-    /// `(F⍣N) B` — power operator: apply F N times to B
+    /// `A F⍣N B` — power operator: apply F N times to B
     PowerOp(PowerFn, i64, Box<Expr>),
+    /// `→(cond)/label` — conditional branch
+    BranchCond(Box<Expr>, Box<Expr>),
     /// `⍬` — zilde: the empty numeric vector
     Zilde,
     /// `reJ im` — complex number literal (e.g. `1J2`)
@@ -1411,9 +1413,39 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
         Tok::Prim(p) => {
             let p = *p;
-            // branch arrow consumes the WHOLE expression to its right
-            // (like reduce/scan operators): →A×B is →(A×B)
+            // branch arrow: →expr or →(cond)/label
             if p == crate::functions::Prim::Branch {
+                // Check for conditional branch: →(condition)/label
+                if matches!(toks.get(1), Some(Tok::LParen)) {
+                    // Find matching close paren
+                    let mut depth = 0;
+                    let mut close_idx = None;
+                    for (i, t) in toks[1..].iter().enumerate() {
+                        match t {
+                            Tok::LParen => depth += 1,
+                            Tok::RParen => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    close_idx = Some(i + 1);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(close_idx) = close_idx {
+                        if matches!(toks.get(close_idx + 1), Some(Tok::Prim(Prim::Divide))) {
+                            // Parse condition inside parens (skip LParen at index 1)
+                            let (cond, _) = parse(&toks[2..close_idx])?;
+                            let (label_expr, label_used) = parse_simple(&toks[close_idx + 2..])?;
+                            return Ok((
+                                Expr::BranchCond(Box::new(cond), Box::new(label_expr)),
+                                close_idx + 2 + label_used,
+                            ));
+                        }
+                    }
+                }
+                // Unconditional branch: →expr
                 let (operand, used) = parse_simple(&toks[1..])?;
                 return Ok((Expr::Monadic(p, Box::new(operand)), used + 1));
             }
@@ -2337,7 +2369,7 @@ impl Environment {
                     .push(Some(crate::functions_def::LEAVE_SENTINEL));
                 return Ok(());
             }
-            // find a control block starting at this line; capture its end
+            let prev_branch_depth = self.branch_stack.len();
             let block_end = f.control.iter().find_map(|b| match b {
                 crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
                     Some(*end)
@@ -2380,7 +2412,6 @@ impl Environment {
                             break;
                         }
                         self.run_lines(f, start + 1, block_end - 1)?;
-                        // :Leave inside the body → exit this loop
                         if self.consume_leave()? {
                             break;
                         }
@@ -2393,24 +2424,30 @@ impl Environment {
                     } => loop {
                         let stop = until_pos.unwrap_or(block_end - 1);
                         self.run_lines(f, start + 1, stop)?;
-                        // :Leave inside the body → exit this loop
-                        // (before :Until is checked)
                         if self.consume_leave()? {
                             break;
                         }
                         if let Some(uc) = until_cond {
                             let c = self.eval(uc)?;
-                            // :Until cond → repeat while cond is FALSE
                             if c.first_cell().unwrap().get_int_value()? != 0 {
                                 break;
                             }
                         }
                     },
                 }
-                pc = block_end; // jump past this block
+                pc = block_end;
+                // Check if a branch/leave was signaled during the block
+                if self.branch_stack.len() > prev_branch_depth {
+                    return Ok(());
+                }
                 continue;
             }
             self.eval(&f.body[pc])?;
+            // Check if a branch was pushed (→N). If so, return so the
+            // outer call_function loop can handle the jump.
+            if self.branch_stack.len() > prev_branch_depth {
+                return Ok(());
+            }
             pc += 1;
         }
         Ok(())
@@ -2491,6 +2528,17 @@ impl Environment {
             .push((name.to_string(), 0 /* current line, 1-based */));
         let cs_top = self.call_stack.len() - 1;
         while pc < f.body.len() {
+            // Check for pending branch (→N) before anything else
+            if self.branch_stack.len() > frame_base + 1 {
+                if let Some(Some(t)) = self.branch_stack.pop() {
+                    if t == 0 {
+                        self.branch_stack.truncate(frame_base);
+                        break;
+                    }
+                    pc = (t - 1) as usize;
+                    continue;
+                }
+            }
             self.call_stack[cs_top].1 = pc + 1; // update current line (1-based)
             let block_end = f.control.iter().find_map(|b| match b {
                 crate::functions_def::ControlBlock::If { start, end, .. } if *start == pc => {
@@ -2511,16 +2559,6 @@ impl Environment {
             }
             match self.eval(&f.body[pc]) {
                 Ok(v) => {
-                    if self.branch_stack.len() > frame_base + 1 {
-                        if let Some(Some(t)) = self.branch_stack.pop() {
-                            if t == 0 {
-                                self.branch_stack.truncate(frame_base);
-                                break;
-                            }
-                            pc = (t - 1) as usize;
-                            continue;
-                        }
-                    }
                     last = Some(v);
                 }
                 Err(e) => {
@@ -2660,6 +2698,17 @@ impl Environment {
             .push((name.to_string(), 0 /* current line, 1-based */));
         let cs_top = self.call_stack.len() - 1;
         while pc < body.len() {
+            // Check for pending branch (→N) before anything else
+            if self.branch_stack.len() > frame_base + 1 {
+                if let Some(Some(t)) = self.branch_stack.pop() {
+                    if t == 0 {
+                        self.branch_stack.truncate(frame_base);
+                        break;
+                    }
+                    pc = (t - 1) as usize;
+                    continue;
+                }
+            }
             // structured control blocks: delegate to the same machinery
             // run_lines uses, but keep tracking `last`/branch state here
             self.call_stack[cs_top].1 = pc + 1; // update current line (1-based)
@@ -2682,21 +2731,6 @@ impl Environment {
             }
             match self.eval(&body[pc]) {
                 Ok(v) => {
-                    // consume any targets this line pushed (inner calls may
-                    // have pushed+consumed their own already)
-                    if self.branch_stack.len() > frame_base + 1 {
-                        // a target pushed by OUR line (not an inner call —
-                        // inner calls pop their own). Take the top one.
-                        if let Some(Some(t)) = self.branch_stack.pop() {
-                            if t == 0 {
-                                // →0 exits THIS frame: drop the sentinel
-                                self.branch_stack.truncate(frame_base);
-                                break;
-                            }
-                            pc = (t - 1) as usize; // 1-based → 0-based
-                            continue;
-                        }
-                    }
                     last = Some(v);
                 }
                 Err(e) => {
@@ -3351,6 +3385,24 @@ impl Environment {
                     return self.execute_value(&bv);
                 }
                 p.eval_monadic(&bv)
+            }
+            Expr::BranchCond(cond, label_expr) => {
+                // →(cond)/label — if cond is true, jump to label
+                let cv = self.eval(cond)?;
+                let truthy = cv.first_cell().unwrap().get_int_value()? != 0;
+                if truthy {
+                    let lv = self.eval(label_expr)?;
+                    match lv.first_cell() {
+                        None => self.branch_stack.push(None),
+                        Some(c) => {
+                            let t = c.get_near_int()?;
+                            self.branch_stack.push(Some(t));
+                        }
+                    }
+                } else {
+                    self.branch_stack.push(None); // no jump
+                }
+                Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))
             }
             Expr::ReduceOp(p, b) => {
                 let bv = self.eval(b)?;
