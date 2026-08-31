@@ -3881,13 +3881,11 @@ impl Environment {
                 {
                     match crate::plugins::gtk::quad_gtk_event() {
                         Some(event) => {
-                            // Return event as a simple string: "ButtonClicked Compute" or "WindowClosed"
+                            // Return simple event string
                             let event_str = match event {
-                                crate::plugins::gtk::GtkEvent::ButtonClicked(label) => {
-                                    format!("ButtonClicked {}", label)
-                                }
+                                crate::plugins::gtk::GtkEvent::ButtonClicked(label) => label,
                                 crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
-                                    format!("EntryChanged {}", text)
+                                    format!("Entry:{}", text)
                                 }
                                 crate::plugins::gtk::GtkEvent::WindowClosed => {
                                     "WindowClosed".to_string()
