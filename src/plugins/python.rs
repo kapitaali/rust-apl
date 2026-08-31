@@ -14,10 +14,7 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
         return Err(ErrorCode::DomainError);
     }
 
-    // Build the Python code string
     let code = cells_to_string(cells)?;
-
-    // Execute Python via shell
     let output = std::process::Command::new("python3")
         .arg("-c")
         .arg(&code)
@@ -40,7 +37,6 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
         return Ok(ValueP::int_vector(&[]));
     }
 
-    // Try to parse as JSON first
     if stdout.starts_with('[') {
         match parse_json_array(stdout) {
             Ok(v) => return Ok(v),
@@ -48,7 +44,6 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
         }
     }
 
-    // Try to parse as a single number
     if let Ok(n) = stdout.parse::<i64>() {
         return Ok(ValueP::scalar_from(Cell::Int(n)));
     }
@@ -56,7 +51,6 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
         return Ok(ValueP::scalar_from(Cell::Float(f)));
     }
 
-    // Otherwise return as character vector
     Ok(ValueP::char_vector(
         &stdout.chars().map(|c| c as u32).collect::<Vec<_>>(),
     ))
@@ -92,7 +86,7 @@ impl AplPlugin for PythonPlugin {
         );
         reg.sysvars.insert(
             "⎕PYTHON.BACKEND".into(),
-            ValueP::scalar_from(Cell::Char('s' as u32)), // 's'hell-out
+            ValueP::scalar_from(Cell::Char('s' as u32)),
         );
         Ok(())
     }
@@ -138,7 +132,6 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
         return Ok(ValueP::int_vector(&[]));
     }
 
-    // Check if nested (2D)
     if inner.contains('[') {
         let mut rows = Vec::new();
         let mut depth = 0;
@@ -173,7 +166,6 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
         );
     }
 
-    // Parse flat array
     let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
 
     let mut ints = Vec::new();
@@ -243,10 +235,7 @@ mod tests {
     #[test]
     fn test_quad_python_string_output() {
         let code = ValueP::char_vector(
-            &"print('hello')"
-                .chars()
-                .map(|c| c as u32)
-                .collect::<Vec<_>>(),
+            &"print('hello')".chars().map(|c| c as u32).collect::<Vec<_>>(),
         );
         let result = quad_python(&code);
         assert!(result.is_ok());
