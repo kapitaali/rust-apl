@@ -103,6 +103,8 @@ pub enum Expr {
     QuadCs(Box<Expr>),
     /// `⎕PLOT B` — plot data
     QuadPlot(Box<Expr>),
+    /// `config ⎕PLOT B` — plot data with configuration
+    QuadPlotDyad(Box<Expr>, Box<Expr>),
     /// `⎕PNG B` — PNG image I/O
     QuadPng(Box<Expr>),
     /// `⎕SQL B` — SQL database query
@@ -1027,6 +1029,16 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     ));
                 }
             }
+        }
+    }
+
+    // dyadic quad call: A ⎕PLOT B — must be checked BEFORE the generic
+    // FuncCallDyad arm below (which would otherwise catch ⎕PLOT as a name)
+    if let Some(Tok::Name(qname)) = toks.get(used) {
+        if qname == "⎕PLOT" {
+            let (rhs, rused) = parse_simple(&toks[used + 1..])?;
+            used += 1 + rused;
+            return Ok((Expr::QuadPlotDyad(Box::new(lhs), Box::new(rhs)), used));
         }
     }
 
@@ -3756,6 +3768,18 @@ impl Environment {
                 #[cfg(feature = "plugin-plot")]
                 {
                     crate::quad_plot::quad_plot(&bv)
+                }
+                #[cfg(not(feature = "plugin-plot"))]
+                {
+                    Err(ErrorCode::DomainError)
+                }
+            }
+            Expr::QuadPlotDyad(config_arg, data_arg) => {
+                let cv = self.eval(config_arg)?;
+                let dv = self.eval(data_arg)?;
+                #[cfg(feature = "plugin-plot")]
+                {
+                    crate::quad_plot::quad_plot_dyad(&cv, &dv)
                 }
                 #[cfg(not(feature = "plugin-plot"))]
                 {
