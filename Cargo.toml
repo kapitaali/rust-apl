@@ -21,6 +21,9 @@ image = "0.25"
 rustfft = "6.2"
 rusqlite = "0.31"
 hex = "0.4"
+gtk4 = { version = "0.11", optional = true }
+glib = { version = "0.20", optional = true }
+pango = { version = "0.20", optional = true }
 apl-ext = { path = "crates/apl-ext" }
 apl-unofficial = { path = "crates/apl-unofficial", optional = true }
 
@@ -32,7 +35,7 @@ plugin-png = []
 plugin-sql = []
 plugin-fft = []
 plugin-python = []
-plugin-gtk = []
+plugin-gtk = ["dep:gtk4", "dep:glib", "dep:pango"]
 plugin-cdr = []
 plugins = ["plugin-plot", "plugin-png", "plugin-sql", "plugin-fft", "plugin-python", "plugin-gtk", "plugin-cdr"]
 

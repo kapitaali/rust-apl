@@ -1253,6 +1253,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
     }
     // ⎕GTK — GTK GUI (Phase 6 plugin)
+    #[cfg(feature = "plugin-gtk")]
     if let Some(Tok::Name(n)) = toks.first() {
         if n == "⎕GTK" {
             let (arg, used) = parse(&toks[1..])?;
@@ -3804,7 +3805,14 @@ impl Environment {
             }
             Expr::QuadGtk(arg) => {
                 let bv = self.eval(arg)?;
-                crate::plugins::gtk::quad_gtk(&bv)
+                #[cfg(feature = "plugin-gtk")]
+                {
+                    crate::plugins::gtk::quad_gtk(&bv)
+                }
+                #[cfg(not(feature = "plugin-gtk"))]
+                {
+                    Err(ErrorCode::DomainError)
+                }
             }
             Expr::QuadCdr(arg) => {
                 let bv = self.eval(arg)?;
