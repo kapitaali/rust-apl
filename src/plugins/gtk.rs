@@ -1,6 +1,4 @@
-use std::borrow::BorrowMut;
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -8,7 +6,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gtk4 as gtk;
-use gtk::glib::value::ToValue;
 use gtk::prelude::*;
 
 use crate::cell::Cell;
@@ -18,8 +15,41 @@ use crate::value::ValueP;
 
 static GTK_WINDOW_COUNT: AtomicU32 = AtomicU32::new(0);
 
+#[derive(Debug, Clone)]
+pub enum GtkEvent {
+    ButtonClicked(String),
+    EntryChanged(String),
+    WindowClosed,
+}
+
+static GTK_EVENT_TX: Mutex<Option<Sender<GtkEvent>>> = Mutex::new(None);
+static GTK_EVENT_RX: Mutex<Option<Arc<Mutex<Receiver<GtkEvent>>>>> = Mutex::new(None);
+
+fn init_event_channel() {
+    let mut tx_guard = GTK_EVENT_TX.lock().unwrap();
+    let mut rx_guard = GTK_EVENT_RX.lock().unwrap();
+    if tx_guard.is_none() {
+        let (event_tx, event_rx) = mpsc::channel();
+        *tx_guard = Some(event_tx);
+        *rx_guard = Some(Arc::new(Mutex::new(event_rx)));
+    }
+}
+
+fn get_event_sender() -> Option<Sender<GtkEvent>> {
+    GTK_EVENT_TX.lock().unwrap().clone()
+}
+
+fn get_event_receiver() -> Option<Arc<Mutex<Receiver<GtkEvent>>>> {
+    GTK_EVENT_RX.lock().unwrap().clone()
+}
+
+fn send_event(event: GtkEvent) {
+    if let Some(tx) = get_event_sender() {
+        let _ = tx.send(event);
+    }
+}
+
 pub fn gtk_wait_timeout(ms: u64) -> bool {
-    // Give GTK thread time to initialize and show window
     thread::sleep(Duration::from_millis(500));
     let start = Instant::now();
     let timeout = Duration::from_millis(ms);
@@ -36,34 +66,45 @@ pub fn gtk_wait_timeout(ms: u64) -> bool {
 pub enum GtkMessage {
     ShowText(String),
     AppendText(String),
-    ShowPlot(String),
-    ShowTable(Vec<Vec<String>>),
+    Clear,
     Close,
     Wait(u64),
+    CreateCalculator,
+    SetEntryText(String),
 }
 
+#[derive(Clone)]
 pub struct GtkHandle {
-    tx: Sender<GtkMessage>,
+    tx: Sender<(GtkMessage, Sender<()>)>,
 }
 
 impl GtkHandle {
     pub fn send(&self, msg: GtkMessage) -> AplResult<()> {
-        self.tx.send(msg).map_err(|_| ErrorCode::DomainError)
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.tx
+            .send((msg, ack_tx))
+            .map_err(|_| ErrorCode::DomainError)?;
+        ack_rx.recv().map_err(|_| ErrorCode::DomainError)?;
+        Ok(())
     }
 }
 
 thread_local! {
-    static GTK_HANDLE: RefCell<Option<Rc<GtkHandle>>> = RefCell::new(None);
+    static GTK_HANDLE: RefCell<Option<GtkHandle>> = RefCell::new(None);
 }
 
-fn ensure_gtk_initialized() -> AplResult<Rc<GtkHandle>> {
+fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
     GTK_HANDLE.with(|handle| {
         if let Some(h) = handle.borrow().as_ref() {
             return Ok(h.clone());
         }
 
-        let (tx, rx): (Sender<GtkMessage>, Receiver<GtkMessage>) = mpsc::channel();
-        let rx = Arc::new(Mutex::new(rx));
+        init_event_channel();
+
+        let (tx, rx): (
+            Sender<(GtkMessage, Sender<()>)>,
+            Receiver<(GtkMessage, Sender<()>)>,
+        ) = mpsc::channel();
 
         GTK_WINDOW_COUNT.fetch_add(1, Ordering::SeqCst);
 
@@ -76,20 +117,42 @@ fn ensure_gtk_initialized() -> AplResult<Rc<GtkHandle>> {
 
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 5);
 
-            let notebook = gtk::Notebook::new();
-            vbox.append(&notebook);
+            let text_view = gtk::TextView::new();
+            text_view.set_editable(false);
+            text_view.set_monospace(true);
+            text_view.set_wrap_mode(gtk::WrapMode::WordChar);
+
+            let scroll = gtk::ScrolledWindow::new();
+            scroll.set_child(Some(&text_view));
+            scroll.set_vexpand(true);
+            vbox.append(&scroll);
 
             let status_label = gtk::Label::new(Some("⎕GTK ready"));
             vbox.append(&status_label);
 
+            let entry = gtk::Entry::new();
+            entry.set_placeholder_text(Some("Enter expression..."));
+            entry.set_margin_start(5);
+            entry.set_margin_end(5);
+            vbox.append(&entry);
+
+            let grid = gtk::Grid::new();
+            grid.set_row_spacing(5);
+            grid.set_column_spacing(5);
+            grid.set_margin_start(5);
+            grid.set_margin_end(5);
+            grid.set_margin_bottom(5);
+            vbox.append(&grid);
+
             window.set_child(Some(&vbox));
 
-            let main_loop = Rc::new(gtk::glib::MainLoop::new(None, false));
+            let main_loop = gtk::glib::MainLoop::new(None, false);
 
             {
                 let ml = main_loop.clone();
                 window.connect_close_request(move |_| {
                     GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
+                    send_event(GtkEvent::WindowClosed);
                     ml.quit();
                     gtk::glib::Propagation::Stop
                 });
@@ -97,164 +160,103 @@ fn ensure_gtk_initialized() -> AplResult<Rc<GtkHandle>> {
 
             window.show();
 
-            let window = Rc::new(window);
-            let notebook = Rc::new(notebook);
-            let status_label = Rc::new(status_label);
+            let buttons: Vec<(&str, i32, i32, i32)> = vec![
+                ("7", 0, 0, 1), ("8", 1, 0, 1), ("9", 2, 0, 1), ("÷", 3, 0, 1),
+                ("4", 0, 1, 1), ("5", 1, 1, 1), ("6", 2, 1, 1), ("×", 3, 1, 1),
+                ("1", 0, 2, 1), ("2", 1, 2, 1), ("3", 2, 2, 1), ("-", 3, 2, 1),
+                ("0", 0, 3, 1), (".", 1, 3, 1), ("=", 2, 3, 1), ("+", 3, 3, 1),
+                ("C", 0, 4, 1), ("CE", 1, 4, 2), ("(", 3, 4, 1),
+                (")", 0, 5, 1), ("Compute", 1, 5, 2), ("Plot", 3, 5, 1),
+            ];
 
-            {
-                let ml = main_loop.clone();
-                gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
-                    let guard = rx.lock().expect("GTK channel lock poisoned");
-                    match guard.try_recv() {
-                        Ok(GtkMessage::ShowText(text)) => {
-                            show_text(&notebook, &status_label, &text);
-                            gtk::glib::ControlFlow::Continue
+            for (label, col, row_idx, width) in &buttons {
+                let btn = gtk::Button::with_label(label);
+                btn.set_hexpand(true);
+
+                let entry_clone = entry.clone();
+                let label_str = label.to_string();
+
+                btn.connect_clicked(move |_| {
+                    let current = entry_clone.text().to_string();
+                    match label_str.as_str() {
+                        "C" | "CE" => {
+                            entry_clone.set_text("");
                         }
-                        Ok(GtkMessage::AppendText(text)) => {
-                            append_text(&notebook, &status_label, &text);
-                            gtk::glib::ControlFlow::Continue
+                        "Compute" => {
+                            send_event(GtkEvent::ButtonClicked("Compute".to_string()));
                         }
-                        Ok(GtkMessage::ShowPlot(path)) => {
-                            show_plot(&notebook, &status_label, &path);
-                            gtk::glib::ControlFlow::Continue
+                        "Plot" => {
+                            send_event(GtkEvent::ButtonClicked("Plot".to_string()));
                         }
-                        Ok(GtkMessage::ShowTable(table)) => {
-                            show_table(&notebook, &status_label, &table);
-                            gtk::glib::ControlFlow::Continue
+                        "=" => {
+                            entry_clone.set_text(&format!("{}{}", current, label_str));
+                            send_event(GtkEvent::ButtonClicked("=".to_string()));
                         }
-                        Ok(GtkMessage::Close) => {
-                            window.close();
-                            GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
-                            ml.quit();
-                            gtk::glib::ControlFlow::Break
+                        _ => {
+                            entry_clone.set_text(&format!("{}{}", current, label_str));
+                            send_event(GtkEvent::ButtonClicked(label_str.clone()));
                         }
-                        Ok(GtkMessage::Wait(ms)) => {
-                            thread::sleep(Duration::from_millis(ms));
-                            gtk::glib::ControlFlow::Continue
-                        }
-                        Err(_) => gtk::glib::ControlFlow::Continue,
                     }
                 });
+
+                grid.attach(&btn, *col, *row_idx, *width, 1);
             }
+
+            let text_view_clone = text_view.clone();
+            let status_label_clone = status_label.clone();
+            let entry_clone2 = entry.clone();
+            let rx = Arc::new(rx);
+
+            gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
+                if let Ok((msg, ack_tx)) = rx.try_recv() {
+                    let buffer = text_view_clone.buffer();
+                    match msg {
+                        GtkMessage::ShowText(text) => {
+                            buffer.set_text(&text);
+                            status_label_clone.set_text("Ready");
+                        }
+                        GtkMessage::AppendText(text) => {
+                            let current =
+                                buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+                            let new_text = if current.is_empty() {
+                                text
+                            } else {
+                                format!("{}\n{}", current, text)
+                            };
+                            buffer.set_text(&new_text);
+                            status_label_clone.set_text("Updated");
+                        }
+                        GtkMessage::Clear => {
+                            buffer.set_text("");
+                            status_label_clone.set_text("Cleared");
+                        }
+                        GtkMessage::Close => {
+                            window.close();
+                            GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        GtkMessage::Wait(ms) => {
+                            thread::sleep(Duration::from_millis(ms));
+                        }
+                        GtkMessage::CreateCalculator => {
+                            status_label_clone.set_text("Calculator ready");
+                        }
+                        GtkMessage::SetEntryText(text) => {
+                            entry_clone2.set_text(&text);
+                        }
+                    }
+                    let _ = ack_tx.send(());
+                }
+                gtk::glib::ControlFlow::Continue
+            });
 
             main_loop.run();
         });
 
-        let rc_handle = Rc::new(GtkHandle { tx });
-        *handle.borrow_mut() = Some(rc_handle.clone());
-        // Give the GTK thread time to initialize and show the window
+        let new_handle = GtkHandle { tx };
+        *handle.borrow_mut() = Some(new_handle.clone());
         thread::sleep(Duration::from_millis(500));
-        Ok(rc_handle)
+        Ok(new_handle)
     })
-}
-
-fn get_label_text(notebook: &gtk::Notebook) -> Option<String> {
-    if notebook.n_pages() > 0 {
-        if let Some(child) = notebook.nth_page(Some(0)) {
-            if let Some(scrolled) = child.downcast_ref::<gtk::ScrolledWindow>() {
-                if let Some(label) = scrolled.child().and_then(|c| c.downcast::<gtk::Label>().ok()) {
-                    return Some(label.label().to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn show_text(notebook: &gtk::Notebook, status: &gtk::Label, text: &str) {
-    while notebook.n_pages() > 0 {
-        notebook.remove_page(Some(0));
-    }
-
-    let label = gtk::Label::new(Some(text));
-    label.set_margin_top(10);
-    label.set_margin_bottom(10);
-    label.set_margin_start(10);
-    label.set_margin_end(10);
-    label.set_selectable(true);
-    label.set_xalign(0.0);
-    label.set_halign(gtk::Align::Start);
-    label.set_wrap(true);
-
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_child(Some(&label));
-    scroll.set_vexpand(true);
-
-    let tab_label = gtk::Label::new(Some("Output"));
-    let _page = notebook.append_page(&scroll, Some(&tab_label));
-    status.set_text("Ready");
-}
-
-fn append_text(notebook: &gtk::Notebook, status: &gtk::Label, text: &str) {
-    let new_text = if let Some(current) = get_label_text(notebook) {
-        format!("{}\n{}", current, text)
-    } else {
-        text.to_string()
-    };
-    show_text(notebook, status, &new_text);
-}
-
-fn show_plot(notebook: &gtk::Notebook, status: &gtk::Label, path: &str) {
-    while notebook.n_pages() > 0 {
-        notebook.remove_page(Some(0));
-    }
-
-    let picture = gtk::Picture::for_filename(path);
-
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_child(Some(&picture));
-    scroll.set_vexpand(true);
-
-    let tab_label = gtk::Label::new(Some("Plot"));
-    let _page = notebook.append_page(&scroll, Some(&tab_label));
-    status.set_text(&format!("Plot: {}", path));
-}
-
-fn show_table(notebook: &gtk::Notebook, status: &gtk::Label, table: &[Vec<String>]) {
-    if table.is_empty() || table[0].is_empty() {
-        return;
-    }
-
-    while notebook.n_pages() > 0 {
-        notebook.remove_page(Some(0));
-    }
-
-    let cols = table[0].len();
-    let rows = table.len();
-
-    let column_types: Vec<gtk::glib::types::Type> =
-        (0..cols).map(|_| gtk::glib::types::Type::STRING).collect();
-
-    let list_store = gtk::ListStore::new(&column_types);
-
-    for row in table {
-        let iter = list_store.append();
-        for (col_idx, cell) in row.iter().enumerate().take(cols) {
-            list_store.set_value(&iter, col_idx as u32, &cell.to_value());
-        }
-    }
-
-    let tree_view = gtk::TreeView::new();
-    tree_view.set_model(Some(&list_store));
-
-    for (i, cell) in table[0].iter().enumerate() {
-        let column = gtk::TreeViewColumn::new();
-        column.set_title(cell);
-
-        let renderer = gtk::CellRendererText::new();
-        column.pack_start(&renderer, true);
-        column.add_attribute(&renderer, "text", i as i32);
-
-        tree_view.append_column(&column);
-    }
-
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_child(Some(&tree_view));
-    scroll.set_vexpand(true);
-
-    let tab_label = gtk::Label::new(Some("Table"));
-    let _page = notebook.append_page(&scroll, Some(&tab_label));
-    status.set_text(&format!("Table: {}×{}", rows, cols));
 }
 
 pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
@@ -280,16 +282,19 @@ pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
     let cmd = cmd.trim();
     if cmd == "close" {
         handle.send(GtkMessage::Close)?;
+    } else if cmd == "clear" {
+        handle.send(GtkMessage::Clear)?;
+    } else if cmd == "calc" || cmd == "calculator" {
+        handle.send(GtkMessage::CreateCalculator)?;
     } else if let Some(text) = cmd.strip_prefix("text ") {
         handle.send(GtkMessage::ShowText(text.to_string()))?;
     } else if let Some(text) = cmd.strip_prefix("append ") {
         handle.send(GtkMessage::AppendText(text.to_string()))?;
-    } else if let Some(path) = cmd.strip_prefix("plot ") {
-        handle.send(GtkMessage::ShowPlot(path.to_string()))?;
+    } else if let Some(text) = cmd.strip_prefix("entry ") {
+        handle.send(GtkMessage::SetEntryText(text.to_string()))?;
     } else if let Some(ms_str) = cmd.strip_prefix("wait ") {
         let ms: u64 = ms_str.parse().map_err(|_| ErrorCode::DomainError)?;
         handle.send(GtkMessage::Wait(ms))?;
-        gtk_wait_timeout(ms);
     } else {
         handle.send(GtkMessage::AppendText(cmd.to_string()))?;
     }
@@ -301,6 +306,18 @@ pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
 
 pub fn quad_gtk_wait() {
     gtk_wait_timeout(u64::MAX);
+}
+
+pub fn quad_gtk_event() -> Option<GtkEvent> {
+    if let Some(rx) = get_event_receiver() {
+        if let Ok(guard) = rx.lock() {
+            guard.try_recv().ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 pub struct GtkPlugin;

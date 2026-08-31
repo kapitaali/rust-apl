@@ -3,7 +3,7 @@
 ⍝ Run with: cargo run --release --features plugin-gtk < examples/calc-demo.apl
 ⍝
 ⍝ This demo shows apl + GTK integration with:
-⍝ - ⎕GTK GUI window
+⍝ - ⎕GTK GUI window with calculator buttons
 ⍝ - ⎕GTK.WAIT (keeps window open until user closes it)
 ⍝ - ⍎ execute (evaluate strings as APL)
 ⍝ - → branch (conditional jumps)
@@ -55,9 +55,11 @@ r ← 1
 ⎕GTK 'append fact 10 = ',⍕fact 10
 ⎕GTK 'append '
 
-⍝ Close
+⍝ Calculator buttons
 ⎕GTK 'append ─────────────────────────────────'
-⎕GTK 'append Close the window to exit'
+⎕GTK 'append Calculator buttons:'
+⎕GTK 'append Click buttons in the GTK window'
+⎕GTK 'append or type in the entry field'
 
 ⍝ ⎕GTK.WAIT blocks until all GTK windows are closed
 ⎕GTK.WAIT
