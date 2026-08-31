@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 
-use gtk4 as gtk;
-use gtk::prelude::*;
 use gtk::glib::value::ToValue;
+use gtk::prelude::*;
+use gtk4 as gtk;
 
 use crate::cell::Cell;
 use crate::plugin_system::{AplPlugin, PluginInfo, PluginRegistrar};

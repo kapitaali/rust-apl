@@ -235,7 +235,10 @@ mod tests {
     #[test]
     fn test_quad_python_string_output() {
         let code = ValueP::char_vector(
-            &"print('hello')".chars().map(|c| c as u32).collect::<Vec<_>>(),
+            &"print('hello')"
+                .chars()
+                .map(|c| c as u32)
+                .collect::<Vec<_>>(),
         );
         let result = quad_python(&code);
         assert!(result.is_ok());
