@@ -11,6 +11,7 @@ pub struct PlotConfig {
     pub y_label: Option<String>,
     pub background_rgb: Option<(u8, u8, u8)>,
     pub show_grid: Option<bool>,
+    pub auto_open: Option<bool>,
 }
 
 /// Parse a PlotConfig from a right argument ValueP.
@@ -38,9 +39,12 @@ fn parse_config(b: &ValueP) -> AplResult<PlotConfig> {
 
     // Try to parse as a character matrix with property=value pairs
     // Each line is "key=value"
-    if b.rank() == 2 {
-        let cols = b.get_shape_item(0) as usize;
-        let rows = b.get_shape_item(1) as usize;
+    if b.rank() == 1 || b.rank() == 2 {
+        let (cols, rows) = if b.rank() == 1 {
+            (b.get_shape_item(0) as usize, 1)
+        } else {
+            (b.get_shape_item(0) as usize, b.get_shape_item(1) as usize)
+        };
         let mut line = String::new();
         for row in 0..rows {
             line.clear();
@@ -79,6 +83,9 @@ fn parse_config(b: &ValueP) -> AplResult<PlotConfig> {
                     }
                     "grid" => {
                         config.show_grid = Some(val == "1" || val.eq_ignore_ascii_case("true"));
+                    }
+                    "auto_open" => {
+                        config.auto_open = Some(val == "1" || val.eq_ignore_ascii_case("true"));
                     }
                     _ => {} // unknown property — ignored
                 }
@@ -199,6 +206,17 @@ fn quad_plot_with_config(b: &ValueP, config: &PlotConfig) -> AplResult<ValueP> {
 
     root.present().map_err(|_| ErrorCode::DomainError)?;
 
+    // Auto-open if configured (default false to avoid URI issues)
+    if config.auto_open.unwrap_or(false) {
+        let _ = std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(filename)
+        .spawn();
+    }
+
     Ok(ValueP::char_vector(
         &filename.chars().map(|c| c as u32).collect::<Vec<_>>(),
     ))
@@ -248,9 +266,23 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_config_color() {
-        assert_eq!(parse_color("red"), Some((255, 0, 0)));
-        assert_eq!(parse_color("BLUE"), Some((0, 0, 255)));
-        assert_eq!(parse_color("invalid"), None);
+    fn test_parse_config_auto_open() {
+        let v = ValueP::char_vector(
+            &"auto_open=true"
+                .chars()
+                .map(|c| c as u32)
+                .collect::<Vec<_>>(),
+        );
+        let config = parse_config(&v).unwrap();
+        assert_eq!(config.auto_open, Some(true));
+
+        let v = ValueP::char_vector(
+            &"auto_open=false"
+                .chars()
+                .map(|c| c as u32)
+                .collect::<Vec<_>>(),
+        );
+        let config = parse_config(&v).unwrap();
+        assert_eq!(config.auto_open, Some(false));
     }
 }

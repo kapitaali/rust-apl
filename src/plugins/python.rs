@@ -3,11 +3,11 @@ use crate::plugin_system::{AplPlugin, PluginInfo, PluginRegistrar};
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
-/// ⎕PYTHON B — Python pipe (shell-out approach).
+/// ⎕PYTHON B — Python pipe (shell-out approach with JSON interchange).
 ///
 /// B is a character vector (Python code).
 /// The code is executed via `python3 -c {code}`.
-/// Stdout from Python is parsed and converted to a ValueP.
+/// Stdout from Python is parsed and converted to APL values.
 pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
     if cells.is_empty() {
@@ -37,13 +37,11 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
     let stdout = stdout.trim();
 
     if stdout.is_empty() {
-        // Return zilde
         return Ok(ValueP::int_vector(&[]));
     }
 
     // Try to parse as JSON first
     if stdout.starts_with('[') {
-        // Try JSON array parsing
         match parse_json_array(stdout) {
             Ok(v) => return Ok(v),
             Err(_) => {}
@@ -52,10 +50,10 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
 
     // Try to parse as a single number
     if let Ok(n) = stdout.parse::<i64>() {
-        return Ok(ValueP::scalar_from(crate::cell::Cell::Int(n)));
+        return Ok(ValueP::scalar_from(Cell::Int(n)));
     }
     if let Ok(f) = stdout.parse::<f64>() {
-        return Ok(ValueP::scalar_from(crate::cell::Cell::Float(f)));
+        return Ok(ValueP::scalar_from(Cell::Float(f)));
     }
 
     // Otherwise return as character vector
@@ -128,8 +126,6 @@ fn cells_to_string(cells: &[crate::cell::Cell]) -> Result<String, ErrorCode> {
 }
 
 fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
-    // Simple JSON array parser (no external deps)
-    // Handles: [1, 2, 3], [1.5, 2.5], [[1,2],[3,4]]
     let trimmed = s.trim();
     if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
         return Err(ErrorCode::DomainError);
@@ -144,7 +140,6 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
 
     // Check if nested (2D)
     if inner.contains('[') {
-        // Parse as nested array
         let mut rows = Vec::new();
         let mut depth = 0;
         let mut start = 0;
@@ -166,10 +161,9 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
                 _ => {}
             }
         }
-        // Nest each row
         let mut all_cells = Vec::new();
         for row in &rows {
-            all_cells.push(crate::cell::Cell::Pointer(crate::cell::PointerCellData {
+            all_cells.push(Cell::Pointer(crate::cell::PointerCellData {
                 value: row.clone_inner_arc(),
             }));
         }
@@ -182,12 +176,11 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
     // Parse flat array
     let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
 
-    // Try to parse as integers first
     let mut ints = Vec::new();
     let mut all_ints = true;
     for part in &parts {
         if let Ok(n) = part.parse::<i64>() {
-            ints.push(crate::cell::Cell::Int(n));
+            ints.push(Cell::Int(n));
         } else {
             all_ints = false;
             break;
@@ -201,11 +194,10 @@ fn parse_json_array(s: &str) -> Result<ValueP, ErrorCode> {
         );
     }
 
-    // Try as floats
     let mut floats = Vec::new();
     for part in &parts {
         if let Ok(f) = part.parse::<f64>() {
-            floats.push(crate::cell::Cell::Float(f));
+            floats.push(Cell::Float(f));
         } else {
             return Err(ErrorCode::DomainError);
         }
@@ -228,7 +220,7 @@ mod tests {
         let result = quad_python(&code);
         assert!(result.is_ok());
         let v = result.unwrap();
-        assert_eq!(v.first_cell(), Some(&crate::cell::Cell::Int(42)));
+        assert_eq!(v.first_cell(), Some(&Cell::Int(42)));
     }
 
     #[test]
@@ -243,9 +235,9 @@ mod tests {
         assert!(result.is_ok());
         let v = result.unwrap();
         assert_eq!(v.element_count(), 3);
-        assert_eq!(v.cells()[0], crate::cell::Cell::Int(1));
-        assert_eq!(v.cells()[1], crate::cell::Cell::Int(2));
-        assert_eq!(v.cells()[2], crate::cell::Cell::Int(3));
+        assert_eq!(v.cells()[0], Cell::Int(1));
+        assert_eq!(v.cells()[1], Cell::Int(2));
+        assert_eq!(v.cells()[2], Cell::Int(3));
     }
 
     #[test]
@@ -259,8 +251,8 @@ mod tests {
         let result = quad_python(&code);
         assert!(result.is_ok());
         let v = result.unwrap();
-        assert_eq!(v.cells()[0], crate::cell::Cell::Char('h' as u32));
-        assert_eq!(v.cells()[4], crate::cell::Cell::Char('o' as u32));
+        assert_eq!(v.cells()[0], Cell::Char('h' as u32));
+        assert_eq!(v.cells()[4], Cell::Char('o' as u32));
     }
 
     #[test]
