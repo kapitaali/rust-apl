@@ -10,7 +10,14 @@
       →0
     :EndIf
     :If evt≡'Quit'
+      ⎕GTK 'close'
       →0
+    :EndIf
+    :If evt≡'Clear'
+      ⎕GTK 'clear'
+    :EndIf
+    :If evt≡'History'
+      ⎕GTK 'clearhistory'
     :EndIf
     :If evt≡'Compute'
       expr ← ⎕GTK 'getentry'
@@ -31,9 +38,6 @@
         result ← ⎕PLOT data
         ⎕GTK 'append Plot saved to plot.png'
       :EndIf
-    :EndIf
-    :If evt≡'History'
-      ⎕GTK 'clearhistory'
     :EndIf
   :EndWhile
 ∇
