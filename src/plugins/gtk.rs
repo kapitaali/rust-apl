@@ -129,7 +129,7 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
             }
 
             let window = gtk::Window::new();
-            window.set_title(Some("⎕GTK — APL Window"));
+            window.set_title(Some("APL Calc"));
             window.set_default_size(800, 600);
 
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 5);
