@@ -43,11 +43,22 @@ Enable with `--features unofficial-ext`:
 
 ## Quick Start
 
+To build the system, use cargo:
+
 ```sh
 cargo build --release
 ./target/release/apl
 ```
+Because rust-apl reads input from standard input stream, to give an .apl source file as argument, you have to add `<`:
 
+```sh
+./target/release/apl <my-apl.file.apl
+```
+You can also pipe stuff (-q skips the REPL greeting):
+```sh
+echo "{ →(⍵≤0)/0 ⋄ ⍵×2 } 5" | ./target/release/apl -q
+```
+Demo session:
 ```
 GNU APL 2.0 (Rust) — experimental REPL
 Enter APL expressions, or )OFF to exit.
