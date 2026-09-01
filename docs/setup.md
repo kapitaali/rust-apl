@@ -8,7 +8,37 @@ This document describes how to build, configure, and run the Rust APL interprete
 - **Cargo** package manager
 - **Linux** (primary target; tested on Debian 13)
 
-Optional dependencies for plugins:
+### System Dependencies
+
+Install these with `apt-get` before building:
+
+```sh
+sudo apt-get install -y \
+  libfontconfig1 \
+  libfreetype6 \
+  libexpat1 \
+  zlib1g \
+  libbz2-1.0 \
+  libpng16-16 \
+  libbrotli1
+```
+
+For the GTK calculator (`--features plugin-gtk`):
+
+```sh
+sudo apt-get install -y \
+  libgtk-4-dev \
+  libglib2.0-dev \
+  libpango1.0-dev
+```
+
+For SQL support (`--features plugin-sql`):
+
+```sh
+sudo apt-get install -y libsqlite3-dev
+```
+
+### Optional dependencies for plugins:
 
 | Feature | Depends on | Install |
 |---|---|---|
