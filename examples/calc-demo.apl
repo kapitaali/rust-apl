@@ -9,6 +9,9 @@
     :If evt≡'WindowClosed'
       →0
     :EndIf
+    :If evt≡'Quit'
+      →0
+    :EndIf
     :If evt≡'Compute'
       expr ← ⎕GTK 'getentry'
       :If 0=≢expr
