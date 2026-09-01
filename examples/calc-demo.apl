@@ -26,7 +26,7 @@
         data ← ⍎expr
         ⎕GTK 'append Plotting...'
         result ← ⎕PLOT data
-        ⎕GTK 'append Plot created'
+        ⎕GTK 'append Plot saved to plot.png'
       :EndIf
     :EndIf
     :If evt≡'History'

@@ -206,14 +206,17 @@ fn quad_plot_with_config(b: &ValueP, config: &PlotConfig) -> AplResult<ValueP> {
 
     root.present().map_err(|_| ErrorCode::DomainError)?;
 
-    // Auto-open if configured (default false to avoid URI issues)
-    if config.auto_open.unwrap_or(false) {
+    // Auto-open if configured (default true for interactive use)
+    if config.auto_open.unwrap_or(true) {
+        let path =
+            std::fs::canonicalize(filename).unwrap_or_else(|_| std::path::PathBuf::from(filename));
+        let uri = format!("file://{}", path.display());
         let _ = std::process::Command::new(if cfg!(target_os = "macos") {
             "open"
         } else {
             "xdg-open"
         })
-        .arg(filename)
+        .arg(&uri)
         .spawn();
     }
 
