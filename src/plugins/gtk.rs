@@ -223,7 +223,9 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                         }
                         "⌫" => {
                             if !current.is_empty() {
-                                let new_text = current[..current.len() - 1].to_string();
+                                let mut chars: Vec<char> = current.chars().collect();
+                                chars.pop();
+                                let new_text: String = chars.into_iter().collect();
                                 entry_clone.set_text(&new_text);
                             }
                         }
