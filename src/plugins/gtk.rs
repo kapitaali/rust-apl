@@ -224,27 +224,32 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
             let status_label_clone = status_label.clone();
             let entry_clone2 = entry.clone();
             let rx = Arc::new(rx);
+            // Track display text locally to avoid GTK buffer.text() returning
+            // stale/empty results on subsequent reads.
+            let display_text = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
 
             gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
                 if let Ok((msg, ack_tx)) = rx.try_recv() {
                     let buffer = text_view_clone.buffer();
                     match msg {
                         GtkMessage::ShowText(text) => {
+                            *display_text.borrow_mut() = text.clone();
                             buffer.set_text(&text);
                             status_label_clone.set_text("Ready");
                         }
                         GtkMessage::AppendText(text) => {
-                            let current =
-                                buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-                            let new_text = if current.is_empty() {
-                                text
+                            let mut acc = display_text.borrow_mut();
+                            if acc.is_empty() {
+                                *acc = text;
                             } else {
-                                format!("{}\n{}", current, text)
-                            };
-                            buffer.set_text(&new_text);
+                                acc.push('\n');
+                                acc.push_str(&text);
+                            }
+                            buffer.set_text(&acc);
                             status_label_clone.set_text("Updated");
                         }
                         GtkMessage::Clear => {
+                            *display_text.borrow_mut() = String::new();
                             buffer.set_text("");
                             status_label_clone.set_text("Cleared");
                         }
