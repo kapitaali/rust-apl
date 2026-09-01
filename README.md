@@ -2,7 +2,7 @@
 
 An experimental rewrite of the [GNU APL](https://www.gnu.org/software/apl/) interpreter in Rust. A from-scratch reimplementation of the C++ interpreter that powers GNU APL 1.7+ (ISO/IEC 13751), following a phased migration of the original class hierarchy into idiomatic Rust.
 
-Phase 1–9 of the migration are substantially complete: a working REPL with **564 tests passing**, clippy clean, release build verified. Unofficial extensions (⌸ Key, ⍥ Over) available via `--features unofficial-ext`.
+Phases 1–9 of the migration are substantially complete: a working REPL with **746 tests passing**, clippy clean, release build verified. Unofficial extensions (⌸ Key, ⍥ Over) available via `--features unofficial-ext`. GTK4 GUI available via `--features plugin-gtk`.
 
 ## What works
 
@@ -30,11 +30,37 @@ $ ./target/release/apl
       ∇
       FINDSTOP 4
 10
+      ∇R←FACT N              ⍝ recursive dfn with :If + → branch
+      :If N≤0
+        R←1
+        →0
+      :EndIf
+      R←N×FACT N-1
+      ∇
+      FACT 5
+120
+      {⍵≤0:1 ⋄ ⍵×∇ ⍵-1} 6     ⍝ inline dfn with guards + self-call
+720
       )SAVE myws             ⍝ workspace persistence
       )LOAD myws
 ```
 
-Supported primitives: `+ - × ÷ ⋆ ○ ! ⌈ ⌊ ∣ ⍳ ⍴ ↑ ↓ ⌽ ⍉ ⍋ ⍒ ∈ ⊂ ⊃ ≡ ≤ < = ≥ > ≠ → ⌹ ∧ ∨` (monadic and/or dyadic where meaningful), operators reduce `/`, scan `\`, each `¨`, outer product `∘.`, inner product `f.g`, commute `⍨`, axis-specified `F[n]`, defined functions `∇` with `:If/:Else/:While/:Repeat/:Until/:Leave` control structures and `→` branching, system commands `)VARS )FNS )CLEAR )SAVE )LOAD )OFF`, bracket indexing `B[i]` honoring `⎕IO`, and workspace persistence.
+### GTK Calculator
+
+```sh
+cargo build --features plugin-gtk
+./target/debug/apl < examples/calc-demo.apl
+```
+
+Opens a GTK4 window with buttons, entry field, and results display. Type an expression and click Compute — the result appends to the display. Supports nested `:If`/`:While`/`:Repeat` control blocks and `→` branches inside the APL event loop.
+
+### Supported primitives
+
+`+ - × ÷ ⋆ ○ ! ⌈ ⌊ ∣ ⍳ ⍴ ↑ ↓ ⌽ ⍉ ⍋ ⍒ ∈ ⊂ ⊃ ≡ ≤ < = ≥ > ≠ → ⌹ ∧ ∨` (monadic and/or dyadic where meaningful), operators reduce `/`, scan `\`, each `¨`, outer product `∘.`, inner product `f.g`, commute `⍨`, axis-specified `F[n]`, defined functions `∇` and inline dfns `{}` with `:If/:Else/:While/:Repeat/:Until/:Leave` control structures and `→` branching, system commands `)VARS )FNS )CLEAR )SAVE )LOAD )OFF`, bracket indexing `B[i]` honoring `⎕IO`, and workspace persistence.
+
+### Quad functions
+
+`⎕IO ⎕CT ⎕PP ⎕CR ⎕UCS ⎕AV ⎕TS ⎕WA ⎕TC ⎕DM ⎕EN ⎕RVAL ⎕RL ⎕CC ⎕DLX ⎕TF ⎕FX ⎕MAP ⎕MX ⎕FIO ⎕JSON ⎕XML ⎕RE ⎕NS ⎕CS ⎕CDR ⎕APLOT ⎕GTK ⎕GTK.WAIT ⎕GTKEvent ⎕PLOT ⎕PNG ⎕SQL ⎕FFT ⎕PYTHON`
 
 ### Unofficial extensions (Dyalog-compatible)
 
@@ -63,13 +89,23 @@ These primitives live in `src/key.rs` and `src/over.rs`, gated by `#[cfg(feature
 ## Building
 
 ```sh
-cargo build --release    # optimized build
-cargo test               # 200 unit + integration tests
-cargo clippy             # lint (clean)
-./target/release/apl     # start the REPL
+cargo build --release                    # optimized build
+cargo test                               # 746 unit + integration tests
+cargo clippy                             # lint (clean)
+./target/release/apl                     # start the REPL
+
+# With GTK calculator:
+cargo build --release --features plugin-gtk
+./target/release/apl < examples/calc-demo.apl
+
+# With unofficial extensions:
+cargo build --release --features unofficial-ext
+
+# Both:
+cargo build --release --features "plugin-gtk unofficial-ext"
 ```
 
-Rust 1.70+ (edition 2021). Dependencies: `smallvec`, `rayon`.
+Rust 1.70+ (edition 2021). Dependencies: `smallvec`, `rayon`. GTK feature adds `gtk4`, `glib`, `pango`.
 
 ## Architecture
 
@@ -83,7 +119,7 @@ The C++ class hierarchy becomes a set of focused Rust modules, one concern per f
 | `value.rs` | `Value.hh`, `Value_P.hh` | ValueP = Arc<ValueInner>; COW isolate(); nested/disclose() |
 | `functions.rs` | `ScalarFunction.cc`, `Bif_F12_*` | Prim enum dispatch; monadic + dyadic eval; elementwise broadcast (Rayon-parallel above 4096 elements) |
 | `tokenizer.rs` | `Tokenizer.cc` | numbers, names (∆⍙_), strings, prim glyphs, comments ⍝, `⋄` diamond, inner/outer product `f.g` / `∘.f` |
-| `parser.rs` | `Parser.cc` + prefix machine | recursive descent, right-to-left eval, Environment (HashMap vars), structured control blocks |
+| `parser.rs` | `Parser.cc` + prefix machine | recursive descent, right-to-left eval, Environment (HashMap vars), structured control blocks, dfn control blocks |
 | `main.rs` | `main.cc` | vector/matrix/boxed formatting; )OFF quits |
 | `operators.rs` | `Bif_OPER1_REDUCE/SCAN` | right-to-left fold; empty-axis identity |
 | `rotate.rs` | `Bif_ROTATE` | reverse + rotate, per-row and per-axis |
@@ -99,6 +135,12 @@ The C++ class hierarchy becomes a set of focused Rust modules, one concern per f
 | `sysvars.rs` | — | ⎕IO, ⎕CT, ⎕PP; system commands |
 | `workspace.rs` | — | )SAVE/)LOAD persistence |
 | `boxdisplay.rs` | — | 4⎕CR-style boxed display of nested arrays |
+| `format.rs` | — | ⍕ format (value → character representation) |
+| `quad.rs` | — | ⎕ system functions (⎕IO, ⎕CR, ⎕UCS, etc.) |
+| `quad_plot.rs` | — | ⎕PLOT plotting (plotters crate) |
+| `plugins/gtk.rs` | — | GTK4 GUI (⎕GTK) |
+| `plugins/plot.rs` | — | Plot window management |
+| `plugins/python.rs` | — | ⎕PYTHON shell-out |
 
 ### Design notes
 
@@ -106,10 +148,11 @@ The C++ class hierarchy becomes a set of focused Rust modules, one concern per f
 - **Value_P as Arc with COW**: mirrors the C++ reference counting + `isolate()` semantics. Swapped `Rc`→`Arc` to enable Rayon parallelism.
 - **Errors as Result**: every primitive returns `Result<_, ErrorCode>`, mirroring the C++ `ErrorCode` convention.
 - **Indices are 0-based** in this port; `⎕IO` is honored at the primitive level where it matters (`⍳`, indexing, `⍳`, `⍋⍒`).
+- **Negative numbers** display with `−` (U+2212 MINUS SIGN) for visibility; both `¯` (U+00AF) and `−` are accepted as input.
 
 ## Status
 
-See `META-INF/PROGRESS-20260828.md` for the detailed session log. The rewrite is a working interpreter with 564 tests, 375/375 differential agreement with GNU APL, and a libapl C embedding API. Remaining future work: dfns `{}` (partial), full ⎕-system, and tokenizer spans for caret display.
+See `META-INF/PROGRESS-20260901.md` for the detailed session log. The rewrite is a working interpreter with 746 tests, 375/375 differential agreement with GNU APL, a GTK4 calculator, and a libapl C embedding API. Remaining future work: full ⎕-system, tokenizer spans for caret display, and GTK plot/table tabs.
 
 ## License
 
