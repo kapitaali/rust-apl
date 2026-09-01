@@ -287,8 +287,8 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 i += 1; // closing quote
                 toks.push(Tok::Str(s));
             }
-            '¯' if i == 0 || !matches!(chars[i - 1], c if c.is_ascii_digit() || c == '.') => {
-                // leading negative sign on a number
+            '¯' | '−' if i == 0 || !matches!(chars[i - 1], c if c.is_ascii_digit() || c == '.') => {
+                // leading negative sign on a number (both ¯ and − are accepted)
                 let (tok, len) = scan_number(&chars[i..])?;
                 debug_assert!(len > 0);
                 toks.push(match tok {
@@ -518,7 +518,7 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
     let mut num = String::new();
     let mut i = 0;
 
-    if chars[0] == '¯' {
+    if chars[0] == '¯' || chars[0] == '−' {
         num.push('-');
         i += 1;
         if i >= chars.len() || !(chars[i].is_ascii_digit()) {
@@ -533,11 +533,11 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
             i += 1;
         } else if (c == 'e' || c == 'E')
             && i + 1 < chars.len()
-            && (chars[i + 1].is_ascii_digit() || chars[i + 1] == '¯' || chars[i + 1] == '-')
+            && (chars[i + 1].is_ascii_digit() || chars[i + 1] == '¯' || chars[i + 1] == '−' || chars[i + 1] == '-')
         {
             num.push('e');
             i += 1;
-            if chars[i] == '¯' || chars[i] == '-' {
+            if chars[i] == '¯' || chars[i] == '−' || chars[i] == '-' {
                 num.push('-');
                 i += 1;
             }
@@ -546,12 +546,12 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
         }
     }
 
-    // Complex number: reJim (e.g. 1J2, ¯3J¯4)
+    // Complex number: reJim (e.g. 1J2, ¯3J¯4, −3J−4)
     if i < chars.len() && chars[i] == 'J' {
         let re_str = num.clone();
         let mut im_str = String::new();
         i += 1; // skip 'J'
-        if i < chars.len() && chars[i] == '¯' {
+        if i < chars.len() && (chars[i] == '¯' || chars[i] == '−') {
             im_str.push('-');
             i += 1;
         }

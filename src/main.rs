@@ -95,14 +95,14 @@ fn format_value(v: &apl::value::ValueP, pp: usize) -> String {
     }
 }
 
-/// replace a leading ASCII '-' with APL's high minus `¯`
+/// replace a leading ASCII '-' with a visible minus sign
 ///
 /// Must match boxdisplay::high_minus — this file keeps its own copy of the
 /// display logic (see the routing note in main()), so a fix in one place has
 /// to be mirrored here.
 fn high_minus(s: &str) -> String {
     match s.strip_prefix('-') {
-        Some(rest) => format!("¯{rest}"),
+        Some(rest) => format!("−{rest}"), // U+2212 MINUS SIGN
         None => s.to_string(),
     }
 }

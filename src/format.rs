@@ -76,9 +76,9 @@ pub fn format_dyadic(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
             Cell::Char(ch) => ch.to_string(),
             _ => return Err(ErrorCode::DomainError),
         };
-        // APL renders negatives with the high minus ¯
+        // APL renders negatives with the high minus −
         let f = if let Some(stripped) = f.strip_prefix('-') {
-            format!("¯{stripped}")
+            format!("−{stripped}")
         } else {
             f
         };
@@ -254,7 +254,7 @@ mod tests {
         let a = ValueP::scalar_from(Cell::Int(1));
         let b = ValueP::scalar_from(Cell::Float(-2.5));
         let r = format_dyadic(&a, &b).unwrap();
-        assert_eq!(chars_of(&r), "¯2.5");
+        assert_eq!(chars_of(&r), "−2.5");
     }
 
     #[test]

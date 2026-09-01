@@ -97,8 +97,7 @@ pub fn unparse(e: &Expr) -> String {
             } else {
                 let s = format!("{}", v);
                 if let Some(neg) = s.strip_prefix('-') {
-                    // APL negative literal uses ¯
-                    format!("¯{}", neg)
+                    format!("−{}", neg)
                 } else {
                     s
                 }
@@ -351,7 +350,7 @@ mod tests {
     #[test]
     fn test_unparse_simple() {
         assert_eq!(unparse(&Expr::Num(42.0)), "42");
-        assert_eq!(unparse(&Expr::Num(-1.5)), "¯1.5");
+        assert_eq!(unparse(&Expr::Num(-1.5)), "−1.5");
     }
 
     #[test]

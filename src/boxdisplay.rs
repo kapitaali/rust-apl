@@ -227,7 +227,8 @@ fn all_chars(cells: &[Cell]) -> bool {
 
 /// Render one cell as APL text.
 ///
-/// Negative numbers use APL's HIGH MINUS `¯`, not the ASCII hyphen: the
+/// Negative numbers use a visible minus sign `−`, not the ASCII hyphen: the
+/// GTK monospace font doesn't render `¯` (U+00AF) visibly.
 /// hyphen is the dyadic subtract glyph, so `-5` would read back as an
 /// incomplete expression rather than a negative literal. This matters for
 /// display AND for ⍕, which must produce text that ⍎ can re-read.
@@ -235,10 +236,10 @@ pub fn plain_cell(c: &Cell, pp: usize) -> String {
     high_minus(&plain_cell_ascii(c, pp))
 }
 
-/// replace a leading ASCII '-' with APL's high minus
+/// replace a leading ASCII '-' with a visible minus sign
 pub fn high_minus(s: &str) -> String {
     match s.strip_prefix('-') {
-        Some(rest) => format!("¯{rest}"),
+        Some(rest) => format!("−{rest}"), // U+2212 MINUS SIGN
         None => s.to_string(),
     }
 }
@@ -370,25 +371,25 @@ mod tests {
         assert_eq!(lines, vec!["ab", "cd"]);
     }
 
-    // APL writes negatives with the HIGH MINUS ¯, never the ASCII hyphen
+    // APL writes negatives with a visible minus, never the ASCII hyphen
     // (which is the subtract glyph). Verified against the reference binary.
 
     #[test]
     fn test_negative_int_uses_high_minus() {
         let v = ValueP::scalar_from(Cell::Int(-5));
-        assert_eq!(render(&v), vec!["¯5"]);
+        assert_eq!(render(&v), vec!["−5"]);
     }
 
     #[test]
     fn test_negative_float_uses_high_minus() {
         let v = ValueP::from_parts(Shape::vector(1), vec![Cell::Float(-2.5)]).unwrap();
-        assert_eq!(render(&v), vec!["¯2.5"]);
+        assert_eq!(render(&v), vec!["−2.5"]);
     }
 
     #[test]
     fn test_mixed_sign_vector_uses_high_minus() {
         let v = ValueP::int_vector(&[-5, 3, -2]);
-        assert_eq!(render(&v), vec!["¯5 3 ¯2"]);
+        assert_eq!(render(&v), vec!["−5 3 −2"]);
     }
 
     #[test]
