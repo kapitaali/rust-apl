@@ -363,6 +363,8 @@ pub fn quad_gtk(b: &ValueP) -> AplResult<ValueP> {
         handle.send(GtkMessage::Close)?;
     } else if cmd == "clear" {
         handle.send(GtkMessage::Clear)?;
+    } else if cmd == "clearhistory" {
+        handle.send(GtkMessage::ClearHistory)?;
     } else if cmd == "calc" || cmd == "calculator" {
         handle.send(GtkMessage::CreateCalculator)?;
     } else if let Some(text) = cmd.strip_prefix("text ") {
