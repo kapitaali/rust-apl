@@ -8,7 +8,8 @@ This directory documents how to build, use, and extend the Rust implementation o
 
 1. [Setting up the system](setup.md)
 2. [Using the interpreter](usage.md)
-3. [FFI reference](ffi.md) — extending APL with native C, Java, and Rust code
+3. [Embedding in other Rust projects](embedding.md) — using the `apl` crate as a library
+4. [FFI reference](ffi.md) — extending APL with native C, Java, and Rust code
 
 ---
 

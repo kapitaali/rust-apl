@@ -74,6 +74,7 @@ For installation, configuration, and usage details, see the [docs/](docs/) direc
 
 - [Setup](docs/setup.md) — building, dependencies, configuration
 - [Usage](docs/usage.md) — REPL, scripts, workspace, system commands
+- [Embedding](docs/embedding.md) — using the `apl` crate in other Rust projects
 - [FFI Reference](docs/ffi.md) — extending APL with C, Java, and Rust
 
 ## Project Status
