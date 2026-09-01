@@ -162,8 +162,13 @@ fn format_nested(cells: &[apl::cell::Cell], pp: usize) -> String {
 }
 
 fn main() {
-    println!("GNU APL 2.0 (Rust) — experimental REPL");
-    println!("Enter APL expressions, or )OFF to exit.");
+    let args: Vec<String> = std::env::args().collect();
+    let quiet = args.iter().any(|a| a == "-q" || a == "--quiet");
+
+    if !quiet {
+        println!("GNU APL 2.0 (Rust) — experimental REPL");
+        println!("Enter APL expressions, or )OFF to exit.");
+    }
     let stdin = io::stdin();
     let mut env = Environment::new();
     apl::sysvars::init_sysvars(&mut env);
