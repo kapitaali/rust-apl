@@ -176,7 +176,9 @@ pub enum Expr {
     /// Evaluation strategy: the body compiles into an anonymous
     /// DefinedFunction with arg names ⍺/⍵; calling binds them through the
     /// ordinary shadowing mechanism (see eval of Dfn/DfnCallMono/DfnCallDyad).
-    Dfn(Box<Expr>),
+    /// `control` holds any structured control blocks (:If/:While/:Repeat)
+    /// found in the body.
+    Dfn(Box<Expr>, Vec<crate::functions_def::ControlBlock>),
     /// immediate dfn call: `{BODY} ARG` — ⍵ bound to ARG's value
     DfnCallMono(Box<Expr>, Box<Expr>),
     /// immediate dfn call: `LARG {BODY} RARG` — ⍺/⍵ bound
@@ -240,14 +242,18 @@ pub enum Expr {
 /// The stored `result`/`source` use private-use markers that are NOT valid
 /// APL; such functions are marked `no_save` so workspace save() skips them
 /// (a dfn's real source text isn't retained — only named ∇-functions are).
-fn dfn_to_function(body: &Expr) -> crate::functions_def::DefinedFunction {
+fn dfn_to_function(
+    stmts: &[Expr],
+    _sources: &[String],
+    control: Vec<crate::functions_def::ControlBlock>,
+) -> crate::functions_def::DefinedFunction {
     crate::functions_def::DefinedFunction {
         name: DFNS_PREFIX.to_string(),
         result: Some(DFN_RESULT.to_string()),
         arg_left: Some("⍺".to_string()),
         arg_right: Some("⍵".to_string()),
-        body: vec![body.clone()],
-        control: Vec::new(),
+        body: stmts.to_vec(),
+        control,
         leave_lines: Vec::new(),
         source: vec![DFN_BODY_MARK.to_string()],
         no_save: true,
@@ -255,6 +261,35 @@ fn dfn_to_function(body: &Expr) -> crate::functions_def::DefinedFunction {
         is_dop: false,
         dop_lo: None,
         dop_ro: None,
+    }
+}
+
+/// Parse the condition tokens from a control marker statement inside a dfn body.
+/// `stmt` is the full statement tokens: Colon Name("If"|"While"|"Until") <cond tokens>
+/// We skip the Colon+Name prefix and parse the rest as an expression.
+fn parse_dfn_control_cond(stmt: &[Tok]) -> AplResult<Expr> {
+    // stmt[0] = Colon, stmt[1] = Name("If"|"While"|"Until")
+    if stmt.len() < 2 {
+        return Err(ErrorCode::SyntaxError);
+    }
+    let cond_toks = &stmt[2..];
+    if cond_toks.is_empty() {
+        return Err(ErrorCode::SyntaxError);
+    }
+    let (expr, used) = parse_expr(cond_toks)?;
+    if used != cond_toks.len() {
+        return Err(ErrorCode::SyntaxError);
+    }
+    Ok(expr)
+}
+
+/// Flatten a dfn body expression into individual body lines for line-by-line evaluation.
+/// Also returns any structured control blocks (:If/:While/:Repeat) found in the body.
+fn flatten_dfn_body(body: &Expr) -> (Vec<Expr>, Vec<crate::functions_def::ControlBlock>) {
+    match body {
+        Expr::DiamondList(exprs) => (exprs.clone(), Vec::new()),
+        Expr::Seq(exprs) => (exprs.clone(), Vec::new()),
+        other => (vec![other.clone()], Vec::new()),
     }
 }
 
@@ -285,7 +320,7 @@ fn substitute_dop(
             Box::new(substitute_dop(a, dop_lo, dop_ro)),
             Box::new(substitute_dop(b, dop_lo, dop_ro)),
         ),
-        Expr::Dfn(body) => Expr::Dfn(Box::new(substitute_dop(body, dop_lo, dop_ro))),
+        Expr::Dfn(body, control) => Expr::Dfn(Box::new(substitute_dop(body, dop_lo, dop_ro)), control.clone()),
         Expr::DfnCallMono(body, arg) => Expr::DfnCallMono(
             Box::new(substitute_dop(body, dop_lo, dop_ro)),
             Box::new(substitute_dop(arg, dop_lo, dop_ro)),
@@ -575,7 +610,7 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
             // dfn definition: NAME ← {BODY} — compile into a named function
             if matches!(toks.get(2), Some(Tok::LBrace)) {
                 let (rhs, used) = parse_expr(&toks[2..])?;
-                if matches!(rhs, Expr::Dfn(_) | Expr::DfnCallMono(_, _)) {
+                if matches!(rhs, Expr::Dfn(..)) {
                     return Ok((Expr::AssignDfn(name, Box::new(rhs)), used + 2));
                 }
             }
@@ -897,14 +932,14 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     // is a DYADIC dfn call (LHS is ⍺). The brace group itself was consumed
     // as lhs (parse_term returns Dfn), so check what came BEFORE: if lhs is
     // a Dfn, an argument to its right makes it a call.
-    if matches!(lhs, Expr::Dfn(_)) && !matches!(toks.get(used), Some(Tok::RBrace)) {
+    if matches!(lhs, Expr::Dfn(_, _)) && !matches!(toks.get(used), Some(Tok::RBrace)) {
         // {BODY} ARG or {BODY} alone
         if !matches!(
             toks.get(used),
             None | Some(Tok::End) | Some(Tok::Diamond) | Some(Tok::RParen) | Some(Tok::Assign)
         ) && !matches!(toks.get(used), Some(Tok::LBrace))
         {
-            if let Expr::Dfn(body) = &lhs {
+            if let Expr::Dfn(body, _) = &lhs {
                 let body = body.clone();
                 let (arg, aused) = parse_simple(&toks[used..])?;
                 return Ok((Expr::DfnCallMono(body, Box::new(arg)), used + aused));
@@ -1308,8 +1343,8 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                 }
             }
             let close = close.ok_or(ErrorCode::SyntaxError)?;
-            let body_expr = parse_dfn_body_expr(&toks[1..close])?;
-            Ok((Expr::Dfn(Box::new(body_expr)), close + 1))
+            let (body_expr, control) = parse_dfn_body_expr(&toks[1..close])?;
+            Ok((Expr::Dfn(Box::new(body_expr), control), close + 1))
         }
         Tok::Alpha => Ok((Expr::Alpha, 1)),
         Tok::Omega => Ok((Expr::Omega, 1)),
@@ -1946,14 +1981,36 @@ fn index_axes(b: &ValueP, sel: &[Option<(Vec<i64>, bool)>]) -> AplResult<ValueP>
     ValueP::from_parts(crate::shape::Shape::from_dims(&out_dims)?, out)
 }
 
-/// Parse a dfn body (tokens between `{` and `}`) into a single Expr.
+/// Check if a statement is a control marker (`:If`, `:While`, `:EndIf`, etc.).
+/// Returns the keyword name if it is, None otherwise.
+fn dfn_control_keyword(s: &[Tok]) -> Option<&str> {
+    if s.len() < 2 {
+        return None;
+    }
+    if !matches!(s[0], Tok::Colon) {
+        return None;
+    }
+    if let Tok::Name(n) = &s[1] {
+        match n.as_str() {
+            "If" | "While" | "EndIf" | "EndWhile" | "Else" | "Repeat" | "Until"
+                | "EndRepeat" | "Leave" => Some(n.as_str()),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Parse a dfn body (tokens between `{` and `}`) into a single Expr plus
+/// any structured control blocks found.
 /// Handles:
 /// - single expression: `{e}` → e
 /// - multi-statement: `{e1 ⋄ e2}` → DiamondList[e1, e2]
 /// - guarded expressions: `{c1:e1 ⋄ c2:e2 ⋄ e3}` → If(c1,e1,If(c2,e2,e3))
+/// - control blocks: `:If c ⋄ ... ⋄ :EndIf` → ControlBlock::If
 ///
 /// The last expression (or the last guard's "else" branch) is the fallback.
-fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
+fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<(Expr, Vec<crate::functions_def::ControlBlock>)> {
     // split on top-level diamonds (depth 0)
     let mut stmts: Vec<Vec<Tok>> = Vec::new();
     let mut cur: Vec<Tok> = Vec::new();
@@ -1977,11 +2034,73 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
     }
     stmts.push(cur);
 
-    // parse each statement (skip empty)
-    let exprs: Vec<Expr> = stmts
-        .into_iter()
-        .filter(|s| !s.is_empty() && !matches!(s[0], Tok::End))
-        .map(|s| {
+    // First pass: identify control markers and build control blocks.
+    // Control markers become Expr::Num(0.0) no-ops in the body.
+    // Stack entries: (kind, start_idx, marker_pos) where
+    //   kind 0=:If, 1=:While, 2=:Repeat; marker_pos holds :Else or :Until.
+    let mut control: Vec<crate::functions_def::ControlBlock> = Vec::new();
+    let mut stack: Vec<(u8, usize, Option<usize>)> = Vec::new();
+    let mut exprs: Vec<Expr> = Vec::new();
+
+    for (i, s) in stmts.iter().enumerate() {
+        if s.is_empty() || matches!(s[0], Tok::End) {
+            continue;
+        }
+
+        if let Some(kw) = dfn_control_keyword(s) {
+            match kw {
+                "If" => stack.push((0, i, None)),
+                "While" => stack.push((1, i, None)),
+                "Repeat" => stack.push((2, i, None)),
+                "Else" | "Until" => {
+                    if let Some(top) = stack.last_mut() {
+                        top.2 = Some(i);
+                    }
+                }
+                "EndIf" => {
+                    if let Some((0, start, else_pos)) = stack.pop() {
+                        let cond = parse_dfn_control_cond(&stmts[start])?;
+                        control.push(crate::functions_def::ControlBlock::If {
+                            start,
+                            end: i + 1,
+                            cond,
+                            else_start: else_pos,
+                        });
+                    }
+                }
+                "EndWhile" => {
+                    if let Some((1, start, _)) = stack.pop() {
+                        let cond = parse_dfn_control_cond(&stmts[start])?;
+                        control.push(crate::functions_def::ControlBlock::While {
+                            start,
+                            end: i + 1,
+                            cond,
+                        });
+                    }
+                }
+                "EndRepeat" => {
+                    if let Some((2, start, until_pos)) = stack.pop() {
+                        let until_cond = match until_pos {
+                            Some(u) => Some(parse_dfn_control_cond(&stmts[u])?),
+                            None => None,
+                        };
+                        control.push(crate::functions_def::ControlBlock::Repeat {
+                            start,
+                            until_pos,
+                            until_cond,
+                            end: i + 1,
+                        });
+                    }
+                }
+                "Leave" => {
+                    // :Leave is a no-op marker; no control block needed
+                }
+                _ => {}
+            }
+            // Control markers occupy a body slot as a no-op
+            exprs.push(Expr::Num(0.0));
+        } else {
+            // parse each statement (skip empty)
             // check for guard: first colon (at depth 0) splits into cond:body
             let mut colon_pos = None;
             let mut d = 0usize;
@@ -2007,61 +2126,78 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
                 if cp + 1 + bused != s.len() {
                     return Err(ErrorCode::SyntaxError);
                 }
-                Ok(Expr::If(
+                exprs.push(Expr::If(
                     Box::new(cond),
                     Box::new(body),
                     Box::new(Expr::Num(0.0)),
-                ))
+                ));
             } else {
                 // parse all terms in the statement; single term stays as-is,
                 // multiple terms become a Seq (evaluated left-to-right, last wins)
-                let mut exprs = Vec::new();
+                let mut stmt_exprs = Vec::new();
                 let mut pos = 0;
                 while pos < s.len() && !matches!(s.get(pos), Some(Tok::End)) {
                     let (e, used) = parse_expr(&s[pos..])?;
-                    exprs.push(e);
+                    stmt_exprs.push(e);
                     pos += used;
                 }
-                match exprs.len() {
-                    0 => Err(ErrorCode::SyntaxError),
-                    1 => Ok(exprs.into_iter().next().unwrap()),
+                match stmt_exprs.len() {
+                    0 => return Err(ErrorCode::SyntaxError),
+                    1 => exprs.push(stmt_exprs.into_iter().next().unwrap()),
                     _ => {
                         // fold multiple terms:
                         // 2 terms: F X → ApplyOp(F, X)  (monadic application)
                         // 3 terms: A F B → DyadicApply(A, F, B) (dyadic application)
                         //   where F is AlphaAlpha or OmegaOmega
-                        if exprs.len() == 3 {
-                            let a = &exprs[0];
-                            let f = &exprs[1];
-                            let b = &exprs[2];
+                        if stmt_exprs.len() == 3 {
+                            let a = &stmt_exprs[0];
+                            let f = &stmt_exprs[1];
+                            let b = &stmt_exprs[2];
                             if matches!(f, Expr::AlphaAlpha | Expr::OmegaOmega) {
-                                return Ok(Expr::DyadicApply(
+                                exprs.push(Expr::DyadicApply(
                                     Box::new(a.clone()),
                                     Box::new(f.clone()),
                                     Box::new(b.clone()),
                                 ));
-                            }
-                        }
-                        // otherwise fold right-to-left into monadic application
-                        let mut acc = exprs.pop().unwrap();
-                        for e in exprs.into_iter().rev() {
-                            match e {
-                                Expr::AlphaAlpha | Expr::OmegaOmega => {
-                                    acc = Expr::ApplyOp(Box::new(e), Box::new(acc));
+                            } else {
+                                // fold right-to-left into monadic application
+                                let mut acc = stmt_exprs.pop().unwrap();
+                                for e in stmt_exprs.into_iter().rev() {
+                                    match e {
+                                        Expr::AlphaAlpha | Expr::OmegaOmega => {
+                                            acc = Expr::ApplyOp(Box::new(e), Box::new(acc));
+                                        }
+                                        _ => {
+                                            exprs.push(Expr::Seq(vec![e, acc.clone()]));
+                                            break;
+                                        }
+                                    }
                                 }
-                                _ => {
-                                    // non-prim function: can't fold into Monadic,
-                                    // so emit Seq (evaluates each, returns last)
-                                    return Ok(Expr::Seq(vec![e, acc]));
+                                exprs.push(acc);
+                            }
+                        } else {
+                            // otherwise fold right-to-left into monadic application
+                            let mut acc = stmt_exprs.pop().unwrap();
+                            for e in stmt_exprs.into_iter().rev() {
+                                match e {
+                                    Expr::AlphaAlpha | Expr::OmegaOmega => {
+                                        acc = Expr::ApplyOp(Box::new(e), Box::new(acc));
+                                    }
+                                    _ => {
+                                        // non-prim function: can't fold into Monadic,
+                                        // so emit Seq (evaluates each, returns last)
+                                        exprs.push(Expr::Seq(vec![e, acc.clone()]));
+                                        break;
+                                    }
                                 }
                             }
+                            exprs.push(acc);
                         }
-                        Ok(acc)
                     }
                 }
             }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        }
+    }
 
     if exprs.is_empty() {
         return Err(ErrorCode::SyntaxError);
@@ -2078,7 +2214,7 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
     // Detect guards: if any stmt is an If (from guard), fold.
     let has_guards = exprs.iter().any(|e| matches!(e, Expr::If(_, _, _)));
 
-    if has_guards {
+    let result_expr = if has_guards {
         // In GNU APL, a dfn body with guards has the form:
         //   {c1:e1 ⋄ c2:e2 ⋄ ... ⋄ en}
         // where c1, c2, ... are guard conditions and en is the fallback.
@@ -2119,36 +2255,40 @@ fn parse_dfn_body_expr(toks: &[Tok]) -> AplResult<Expr> {
             if let Some(f) = fallback {
                 all.push(f);
             }
-            return Ok(Expr::DiamondList(all));
-        }
-        // Guards exist: an explicit fallback (statement after the last
-        // guard) wins; otherwise the LAST prologue statement is the
-        // fallback ({c:e ⋄ r} — GNU APL's most common form); otherwise 0.
-        // NOTE: pop the prologue ONLY when it must supply the fallback —
-        // a tuple-match like (fallback, prologue.pop()) would pop and then
-        // silently discard the assignment in the (Some(f), _) arm.
-        let fallback = if let Some(f) = fallback {
-            f
+            Expr::DiamondList(all)
         } else {
-            prologue.pop().unwrap_or(Expr::Num(0.0))
-        };
-        // fold right-to-left: guards[0] is the first guard (outermost)
-        let mut acc = fallback;
-        for (c, b) in guards.into_iter().rev() {
-            acc = Expr::If(Box::new(c), Box::new(b), Box::new(acc));
+            // Guards exist: an explicit fallback (statement after the last
+            // guard) wins; otherwise the LAST prologue statement is the
+            // fallback ({c:e ⋄ r} — GNU APL's most common form); otherwise 0.
+            // NOTE: pop the prologue ONLY when it must supply the fallback —
+            // a tuple-match like (fallback, prologue.pop()) would pop and then
+            // silently discard the assignment in the (Some(f), _) arm.
+            let fallback = if let Some(f) = fallback {
+                f
+            } else {
+                prologue.pop().unwrap_or(Expr::Num(0.0))
+            };
+            // fold right-to-left: guards[0] is the first guard (outermost)
+            let mut acc = fallback;
+            for (c, b) in guards.into_iter().rev() {
+                acc = Expr::If(Box::new(c), Box::new(b), Box::new(acc));
+            }
+            if prologue.is_empty() {
+                acc
+            } else {
+                let mut all = prologue;
+                all.push(acc);
+                Expr::DiamondList(all)
+            }
         }
-        if prologue.is_empty() {
-            return Ok(acc);
+    } else {
+        match exprs.len() {
+            1 => exprs.into_iter().next().unwrap(),
+            _ => Expr::DiamondList(exprs),
         }
-        let mut all = prologue;
-        all.push(acc);
-        return Ok(Expr::DiamondList(all));
-    }
+    };
 
-    match exprs.len() {
-        1 => Ok(exprs.into_iter().next().unwrap()),
-        _ => Ok(Expr::DiamondList(exprs)),
-    }
+    Ok((result_expr, control))
 }
 
 /// collect names assigned anywhere in a body (used to build local scope).
@@ -2241,7 +2381,8 @@ impl Environment {
     fn install_dfn(&mut self, body: &Expr) -> String {
         let fname = format!("{}{}", DFNS_PREFIX, self.dfn_counter);
         self.dfn_counter += 1;
-        let mut f = dfn_to_function(body);
+        let (stmts, control) = flatten_dfn_body(body);
+        let mut f = dfn_to_function(&stmts, &[], control);
         f.name = fname.clone();
         self.funcs.insert(f);
         fname
@@ -2835,14 +2976,15 @@ impl Environment {
             }
             Expr::Alpha => self.vars.get("⍺").cloned().ok_or(ErrorCode::ValueError),
             Expr::Omega => self.vars.get("⍵").cloned().ok_or(ErrorCode::ValueError),
-            Expr::Dfn(body) => {
+            Expr::Dfn(body, control) => {
                 // a bare dfn evaluates to... itself as a function value. We
                 // don't have first-class function values yet, so represent
                 // it by installing an anonymous entry in the function table
                 // under a unique name and returning that name as a Var-like
                 // reference is overkill: instead evaluate the body with
                 // ⍺/⍵ UNBOUND — only valid if the body doesn't use them.
-                let f = dfn_to_function(body);
+                let (stmts, _) = flatten_dfn_body(body);
+                let f = dfn_to_function(&stmts, &[], control.clone());
                 let fname = format!("{}{}", DFNS_PREFIX, self.dfn_counter);
                 self.dfn_counter += 1;
                 let mut f = f;
@@ -2933,8 +3075,9 @@ impl Environment {
                 // from the ARITY computation by marking it optional; an
                 // unbound ⍺ reference raises VALUE ERROR naturally.
                 match &**rhs {
-                    Expr::Dfn(body) => {
-                        let f = dfn_to_function(body);
+                    Expr::Dfn(body, control) => {
+                        let (stmts, _) = flatten_dfn_body(body);
+                        let f = dfn_to_function(&stmts, &[], control.clone());
                         let mut f = f;
                         f.name = name.clone();
                         // arity-2 with only-right-provided must not fail:
@@ -5249,7 +5392,7 @@ mod tests {
         let (e, used) = parse(&toks).unwrap();
         assert_eq!(used, toks.len() - 1);
         match &e {
-            Expr::Dfn(body) => match &**body {
+            Expr::Dfn(body, _) => match &**body {
                 Expr::If(c, t, _) => {
                     assert!(matches!(**c, Expr::Dyadic(_, _, _)));
                     assert!(matches!(**t, Expr::Monadic(_, _)));
@@ -5268,7 +5411,7 @@ mod tests {
         // FAC: outer If has condition ⍵=0, then-branch (1), else-branch
         // is the body (⍵×∇⍵-1)
         match &e {
-            Expr::Dfn(body) => match &**body {
+            Expr::Dfn(body, _) => match &**body {
                 Expr::If(_, _, else_b) => {
                     assert!(matches!(**else_b, Expr::Dyadic(_, _, _)));
                 }
@@ -5287,7 +5430,7 @@ mod tests {
         let (e, _) = parse(&toks).unwrap();
         eprintln!("EXPR: {e:#?}");
         match &e {
-            Expr::Dfn(body) => match &**body {
+            Expr::Dfn(body, _) => match &**body {
                 Expr::DiamondList(stmts) => {
                     assert!(
                         matches!(stmts[0], Expr::Assign(_, _)),

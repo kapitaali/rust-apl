@@ -297,7 +297,7 @@ fn expr_debug_tag(e: &Expr) -> String {
             format!("{}[{}]←{}", n, inner.join(";"), unparse(rhs))
         }
         Expr::AssignPick(n, _, _) => format!("AssignPick({})", n),
-        Expr::Dfn(_) => "{dfn}".to_string(),
+        Expr::Dfn(_, _) => "{dfn}".to_string(),
         Expr::DfnCallMono(_, _) => "{dfncall}".to_string(),
         Expr::DfnCallDyad(_, _, _) => "{dfndyad}".to_string(),
         Expr::ApplyOp(f, a) => format!("{{ApplyOp({},{})}}", expr_debug_tag(f), expr_debug_tag(a)),

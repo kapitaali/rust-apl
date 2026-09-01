@@ -121,7 +121,11 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
         GTK_WINDOW_COUNT.fetch_add(1, Ordering::SeqCst);
 
         thread::spawn(move || {
-            gtk::init().expect("Failed to initialize GTK");
+            if let Err(e) = gtk::init() {
+                eprintln!("GTK init failed: {}", e);
+                GTK_WINDOW_COUNT.fetch_sub(1, Ordering::SeqCst);
+                return;
+            }
 
             let window = gtk::Window::new();
             window.set_title(Some("⎕GTK — APL Window"));
