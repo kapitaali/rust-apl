@@ -67,6 +67,7 @@ pub enum GtkMessage {
     ShowText(String),
     AppendText(String),
     Clear,
+    ClearHistory,
     Close,
     Wait(u64),
     CreateCalculator,
@@ -179,12 +180,13 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
             window.show();
 
             let buttons: Vec<(&str, i32, i32, i32)> = vec![
-                ("7", 0, 0, 1), ("8", 1, 0, 1), ("9", 2, 0, 1), ("÷", 3, 0, 1),
-                ("4", 0, 1, 1), ("5", 1, 1, 1), ("6", 2, 1, 1), ("×", 3, 1, 1),
-                ("1", 0, 2, 1), ("2", 1, 2, 1), ("3", 2, 2, 1), ("-", 3, 2, 1),
-                ("0", 0, 3, 1), (".", 1, 3, 1), ("=", 2, 3, 1), ("+", 3, 3, 1),
-                ("C", 0, 4, 1), ("CE", 1, 4, 2), ("(", 3, 4, 1),
-                (")", 0, 5, 1), ("Compute", 1, 5, 2), ("Plot", 3, 5, 1),
+                ("C", 0, 0, 1), ("CE", 1, 0, 1), ("⌫", 2, 0, 1), ("÷", 3, 0, 1),
+                ("7", 0, 1, 1), ("8", 1, 1, 1), ("9", 2, 1, 1), ("×", 3, 1, 1),
+                ("4", 0, 2, 1), ("5", 1, 2, 1), ("6", 2, 2, 1), ("−", 3, 2, 1),
+                ("1", 0, 3, 1), ("2", 1, 3, 1), ("3", 2, 3, 1), ("+", 3, 3, 1),
+                ("±", 0, 4, 1), ("0", 1, 4, 1), (".", 2, 4, 1), ("%", 3, 4, 1),
+                ("(", 0, 5, 1), (")", 1, 5, 1), ("Compute", 2, 5, 2),
+                ("Plot", 0, 6, 2), ("History", 2, 6, 2),
             ];
 
             for (label, col, row_idx, width) in &buttons {
@@ -197,8 +199,30 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                 btn.connect_clicked(move |_| {
                     let current = entry_clone.text().to_string();
                     match label_str.as_str() {
-                        "C" | "CE" => {
+                        "C" => {
                             entry_clone.set_text("");
+                        }
+                        "CE" => {
+                            entry_clone.set_text("");
+                        }
+                        "⌫" => {
+                            if !current.is_empty() {
+                                let new_text = current[..current.len() - 1].to_string();
+                                entry_clone.set_text(&new_text);
+                            }
+                        }
+                        "±" => {
+                            if current.starts_with('-') {
+                                entry_clone.set_text(&current[1..]);
+                            } else if current.starts_with('−') {
+                                entry_clone.set_text(&current[3..]);
+                            } else if !current.is_empty() {
+                                entry_clone.set_text(&format!("−{}", current));
+                            }
+                        }
+                        "%" => {
+                            entry_clone.set_text(&format!("{}÷100", current));
+                            send_event(GtkEvent::ButtonClicked("Compute".to_string()));
                         }
                         "Compute" => {
                             send_event(GtkEvent::ButtonClicked("Compute".to_string()));
@@ -206,9 +230,8 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                         "Plot" => {
                             send_event(GtkEvent::ButtonClicked("Plot".to_string()));
                         }
-                        "=" => {
-                            entry_clone.set_text(&format!("{}{}", current, label_str));
-                            send_event(GtkEvent::ButtonClicked("=".to_string()));
+                        "History" => {
+                            send_event(GtkEvent::ButtonClicked("History".to_string()));
                         }
                         _ => {
                             entry_clone.set_text(&format!("{}{}", current, label_str));
@@ -252,6 +275,11 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                             *display_text.borrow_mut() = String::new();
                             buffer.set_text("");
                             status_label_clone.set_text("Cleared");
+                        }
+                        GtkMessage::ClearHistory => {
+                            *display_text.borrow_mut() = String::new();
+                            buffer.set_text("");
+                            status_label_clone.set_text("History cleared");
                         }
                         GtkMessage::Close => {
                             window.close();

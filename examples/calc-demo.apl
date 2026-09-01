@@ -18,6 +18,20 @@
         ⎕GTK 'append ',⍕result
       :EndIf
     :EndIf
+    :If evt≡'Plot'
+      expr ← ⎕GTK 'getentry'
+      :If 0=≢expr
+        ⎕GTK 'append Enter an expression to plot'
+      :Else
+        data ← ⍎expr
+        ⎕GTK 'append Plotting...'
+        result ← ⎕PLOT data
+        ⎕GTK 'append Plot created'
+      :EndIf
+    :EndIf
+    :If evt≡'History'
+      ⎕GTK 'clearhistory'
+    :EndIf
   :EndWhile
 ∇
 
