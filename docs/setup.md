@@ -62,9 +62,11 @@ cargo build --release
 
 The binary is `target/release/apl`.
 
-### With plugins enabled
+### Enable plugins
 
-Edit `config.toml` to set plugin states:
+Although rust-apl executable is around 4 megabytes (contrast that with GNU APL executable of 10x size, 47 megabytes), you don't have to include support for everything in the build. The decision to include plugin support is made in `config.toml`.
+
+Edit `config.toml` to set plugin states (`static` includes, `disabled` excludes):
 
 ```toml
 [plugins.plugin_states]
@@ -110,8 +112,8 @@ Enter APL expressions, or )OFF to exit.
 ### Pipe a script
 
 ```sh
-echo '2+3' | ./target/release/apl
-echo '⍳5' | ./target/release/apl
+echo '2+3' | ./target/release/apl -q
+echo '⍳5' | ./target/release/apl -q
 ```
 
 ### Run a script file
