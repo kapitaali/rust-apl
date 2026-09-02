@@ -3176,15 +3176,26 @@ impl Environment {
                     // Build a 2-item vector of enclosed (Pointer) cells —
                     // the Dyalog convention: dyadic ⎕NA calls desugar to
                     // monadic with the enclosed pair as right arg.
+                    // Unwrap enclosed values first so they're not double-wrapped.
+                    let av_inner = if let Some(Cell::Pointer(p)) = av.cells().first() {
+                        p.value.clone()
+                    } else {
+                        av.inner.clone()
+                    };
+                    let bv_inner = if let Some(Cell::Pointer(p)) = bv.cells().first() {
+                        p.value.clone()
+                    } else {
+                        bv.inner.clone()
+                    };
                     let pair = ValueP {
                         inner: std::sync::Arc::new(crate::value::ValueInner::new(
                             crate::shape::Shape::vector(2),
                             vec![
                                 Cell::Pointer(crate::cell::PointerCellData {
-                                    value: av.inner.clone(),
+                                    value: av_inner,
                                 }),
                                 Cell::Pointer(crate::cell::PointerCellData {
-                                    value: bv.inner.clone(),
+                                    value: bv_inner,
                                 }),
                             ],
                         )),
