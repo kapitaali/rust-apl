@@ -15,7 +15,7 @@ A high-performance, memory-safe rewrite of the [GNU APL](https://www.gnu.org/sof
 - **System commands**: `)VARS )FNS )CLEAR )SAVE )LOAD )OFF`
 - **Workspace persistence**: `)SAVE` and `)LOAD` for full workspace state
 
-### GTK4 Calculator
+### Language demo: APL Calculator in GTK4
 A graphical calculator with buttons, entry field, and scrollable results display. Write APL expressions with full control-flow logic for interactive computation.
 
 ```sh
