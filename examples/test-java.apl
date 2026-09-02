@@ -8,4 +8,4 @@
 'JSF' ⎕NA 'I4 /home/theb/Apps/apl-2.0/rust-apl/target/debug/libapl_java.so|j_set_field P <0T <0T I8'
 
 JInit '/tmp'
-JS ('AplUtils' 'reverse' '(Ljava/lang/String;)Ljava/lang/String;' 'hello' 256 '')
+JS ('AplUtils' 'reverse' '(Ljava/lang/String;)Ljava/lang/String;' 'hello' 256)
