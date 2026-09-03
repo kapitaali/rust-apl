@@ -259,7 +259,18 @@ fn ensure_gtk_initialized() -> AplResult<GtkHandle> {
                             send_event(GtkEvent::ButtonClicked("Quit".to_string()));
                         }
                         _ => {
-                            entry_clone.set_text(&format!("{}{}", current, label_str));
+                            let pos = entry_clone.position() as usize;
+                            let new_text = if pos >= current.len() {
+                                format!("{}{}", current, label_str)
+                            } else {
+                                let mut s = current.chars().collect::<Vec<_>>();
+                                if let Some(ch) = label_str.chars().next() {
+                                    s.insert(pos, ch);
+                                }
+                                s.into_iter().collect()
+                            };
+                            entry_clone.set_text(&new_text);
+                            entry_clone.set_position(pos as i32 + label_str.chars().count() as i32);
                             send_event(GtkEvent::ButtonClicked(label_str.clone()));
                         }
                     }

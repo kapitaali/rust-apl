@@ -5,14 +5,14 @@
 
 [plugins.plugin_states]
 # GUI and graphics
-gtk = "disabled"        # GTK4 GUI (requires gtk4-rs)
+gtk = "static"        # GTK4 GUI (requires gtk4-rs)
 plot = "static"         # Plotting via plotters crate
 
 # Data interchange
 python = "disabled"     # Python pipe (requires pyo3)
 sql = "disabled"        # SQL database access (requires sqlx/rusqlite)
 fft = "disabled"        # Fast Fourier Transform (requires rustfft)
-png = "disabled"        # PNG image read/write (requires image crate)
+png = "static"        # PNG image read/write (requires image crate)
 cdr = "disabled"        # CDR binary interchange format
 
 [plugins.plot]

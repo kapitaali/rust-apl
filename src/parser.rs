@@ -71,6 +71,8 @@ pub enum Expr {
     QuadLoadSo(Box<Expr>),
     /// `⎕CALL name` — call a ⎕NA-bound native function by name.
     QuadCall(Box<Expr>),
+    /// `⎕ ← expr` — print expression
+    QuadPrint(Box<Expr>),
     /// `4 ⎕CR B` — boxed display (4⎕CR-style). Returns a char matrix/vector.
     QuadCr(i64, Box<Expr>),
     /// `⎕RVAL B` — random value (rank, shape, type, depth)
@@ -600,6 +602,15 @@ fn parse_expr(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                     Expr::AssignSelector(Box::new(selector), Box::new(rhs), name),
                     close + 2 + rused,
                 ));
+            }
+        }
+    }
+    // quad output: ⎕ ← expr — print expression
+    if let Some(Tok::Name(name)) = toks.first() {
+        if name == "⎕" {
+            if let Some(Tok::Assign) = toks.get(1) {
+                let (rhs, used) = parse_expr(&toks[2..])?;
+                return Ok((Expr::QuadPrint(Box::new(rhs)), used + 2));
             }
         }
     }
@@ -1294,7 +1305,6 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
     }
     // ⎕GTK — GTK GUI (Phase 6 plugin)
-    #[cfg(feature = "plugin-gtk")]
     if let Some(Tok::Name(n)) = toks.first() {
         if n == "⎕GTK" {
             let (arg, used) = parse(&toks[1..])?;
@@ -3772,6 +3782,14 @@ impl Environment {
                     Err(_) => self.eval(fallback),
                 }
             }
+            Expr::QuadPrint(expr) => {
+                let v = self.eval(expr)?;
+                let pp = crate::sysvars::get_pp(self).unwrap_or(10);
+                for l in crate::boxdisplay::render_plain_with_pp(&v, pp) {
+                    println!("{}", l);
+                }
+                Ok(v)
+            }
             Expr::QuadNa(apl_name, decl) => {
                 // 'name' ⎕NA 'F8 lib|sym I4 I4' — associate native fn
                 let decl_v = self.eval(decl)?;
@@ -4021,52 +4039,30 @@ impl Environment {
             }
             Expr::QuadGtk(arg) => {
                 let bv = self.eval(arg)?;
-                #[cfg(feature = "plugin-gtk")]
-                {
-                    crate::plugins::gtk::quad_gtk(&bv)
-                }
-                #[cfg(not(feature = "plugin-gtk"))]
-                {
-                    Err(ErrorCode::DomainError)
-                }
+                crate::plugins::gtk::quad_gtk(&bv)
             }
             Expr::QuadGtkEvent => {
-                #[cfg(feature = "plugin-gtk")]
-                {
-                    match crate::plugins::gtk::quad_gtk_event() {
-                        Some(event) => {
-                            // Return simple event string
-                            let event_str = match event {
-                                crate::plugins::gtk::GtkEvent::ButtonClicked(label) => label,
-                                crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
-                                    format!("Entry:{}", text)
-                                }
-                                crate::plugins::gtk::GtkEvent::WindowClosed => {
-                                    "WindowClosed".to_string()
-                                }
-                            };
-                            Ok(ValueP::char_vector(
-                                &event_str.chars().map(|c| c as u32).collect::<Vec<_>>(),
-                            ))
-                        }
-                        None => Ok(ValueP::char_vector(&[])),
+                match crate::plugins::gtk::quad_gtk_event() {
+                    Some(event) => {
+                        let event_str = match event {
+                            crate::plugins::gtk::GtkEvent::ButtonClicked(label) => label,
+                            crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
+                                format!("Entry:{}", text)
+                            }
+                            crate::plugins::gtk::GtkEvent::WindowClosed => {
+                                "WindowClosed".to_string()
+                            }
+                        };
+                        Ok(ValueP::char_vector(
+                            &event_str.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                        ))
                     }
-                }
-                #[cfg(not(feature = "plugin-gtk"))]
-                {
-                    Err(ErrorCode::DomainError)
+                    None => Ok(ValueP::char_vector(&[])),
                 }
             }
             Expr::QuadGtkWait => {
-                #[cfg(feature = "plugin-gtk")]
-                {
-                    crate::plugins::gtk::quad_gtk_wait();
-                    Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))
-                }
-                #[cfg(not(feature = "plugin-gtk"))]
-                {
-                    Err(ErrorCode::DomainError)
-                }
+                crate::plugins::gtk::quad_gtk_wait();
+                Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))
             }
             Expr::QuadCdr(arg) => {
                 let bv = self.eval(arg)?;
