@@ -195,6 +195,26 @@ void transpose(double* mat, double* out, int rows, int cols);
 1 3 2 4
 ```
 
+#### Struct output
+
+When a C function returns data through an output buffer that maps to a struct, use an array type:
+
+```c
+// libstats_struct.so
+void compute_stats(double* arr, int len, double* out) {
+    // out[0] = min, out[1] = max, out[2] = mean
+}
+```
+
+```apl
+      'STATS' ⎕NA 'libstats_struct.so|compute_stats <F8[] I4 >F8[3]'
+      r ← (⊂data) STATS (≢data)
+      ⊃r
+1.2 5.6 3.075
+```
+
+**Note:** Struct types (`{F8 F8 F8}`) in declarations are parsed but rejected at call time (`check_arg` returns `DOMAIN ERROR` for by-value structs). Use array buffers (`>F8[N]`) instead — the C function receives a pointer to the buffer, identical to a struct pointer.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
