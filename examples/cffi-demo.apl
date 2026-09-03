@@ -1,12 +1,12 @@
 ⍝ C FFI Demo: Array Statistics via ⎕NA
 ⍝ Demonstrates calling C functions from APL using ⎕NA
 ⍝
-⍝ Compile the C libraries first:
+⍝ Compile the C libraries first (from repo root):
 ⍝   cd examples && gcc -shared -fPIC -o libstats.so libstats.c -lm
 ⍝   cd examples && gcc -shared -fPIC -o libstats_struct.so libstats_struct.c -lm
 ⍝
-⍝ Then run this script:
-⍝   ./target/debug/apl < examples/cffi-demo.apl
+⍝ Then run from examples directory:
+⍝   cd examples && ../target/debug/apl < cffi-demo.apl
 
 ⎕IO←1
 
