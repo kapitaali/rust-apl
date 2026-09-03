@@ -64,8 +64,7 @@ T ← 0.0 0.0 0.0 0.0
 T ← ⊃1⊃transpose (⊂A) (⊂T) 2 2
 T
 
-⍝ === Struct example ===
-'STATS' ⎕NA 'libstats_struct.so|compute_stats <F8[] I4 >F8[3]'
-r ← (⊂data) STATS (≢data)
-⊃r
-⍝ Note: structs as {F8 F8 F8} don't work directly — use array buffer >F8[N]
+⍝ === Struct example using mixed-type struct ===
+'STATS' ⎕NA 'libstats_struct.so|compute_stats <F8[] I4 >{F8 F8 F8}'
+r ← (⊂fdata) STATS (≢fdata)
+⊃¨⊃r    ⍝ disclose each member → min max mean

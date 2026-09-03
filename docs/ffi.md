@@ -197,23 +197,29 @@ void transpose(double* mat, double* out, int rows, int cols);
 
 #### Struct output
 
-When a C function returns data through an output buffer that maps to a struct, use an array type:
+When a C function returns data through an output buffer that maps to a struct, use a struct type:
 
 ```c
 // libstats_struct.so
-void compute_stats(double* arr, int len, double* out) {
-    // out[0] = min, out[1] = max, out[2] = mean
+typedef struct {
+    double min;
+    double max;
+    double mean;
+} Stats;
+
+void compute_stats(double* arr, int len, Stats* out) {
+    // out->min, out->max, out->mean
 }
 ```
 
 ```apl
-      'STATS' ⎕NA 'libstats_struct.so|compute_stats <F8[] I4 >F8[3]'
+      'STATS' ⎕NA 'libstats_struct.so|compute_stats <F8[] I4 >{F8 F8 F8}'
       r ← (⊂data) STATS (≢data)
-      ⊃r
+      ⊃¨⊃r
 1.2 5.6 3.075
 ```
 
-**Note:** Struct types (`{F8 F8 F8}`) in declarations are parsed but rejected at call time (`check_arg` returns `DOMAIN ERROR` for by-value structs). Use array buffers (`>F8[N]`) instead — the C function receives a pointer to the buffer, identical to a struct pointer.
+Each struct member is returned as an enclosed scalar — `⊃¨⊃r` discloses all members into a flat vector. This is the idiomatic way to consume struct output in APL.
 
 ### Troubleshooting
 

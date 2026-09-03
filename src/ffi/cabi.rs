@@ -576,7 +576,8 @@ fn scalar_cell(v: &ValueP) -> Result<Cell, ErrorCode> {
 
 fn check_arg(ts: &TypeSpec, _v: &ValueP) -> Result<(), ErrorCode> {
     // by-value structs unsupported in the shim (pass >{} pointers instead)
-    if ts.is_struct {
+    // BUT allow structs as output buffers (Direction::Out/InOut)
+    if ts.is_struct && !matches!(ts.dir, Direction::Out | Direction::InOut) {
         return Err(ErrorCode::DomainError);
     }
     if ts.array_len.is_some() || ts.array_open {
