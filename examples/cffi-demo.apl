@@ -4,6 +4,7 @@
 ⍝ Compile the C libraries first (from repo root):
 ⍝   cd examples && gcc -shared -fPIC -o libstats.so libstats.c -lm
 ⍝   cd examples && gcc -shared -fPIC -o libstats_struct.so libstats_struct.c -lm
+⍝   cp ../libtestmath.so .    ⍝ copy math lib to examples
 ⍝
 ⍝ Then run from examples directory:
 ⍝   cd examples && ../target/debug/apl < cffi-demo.apl
