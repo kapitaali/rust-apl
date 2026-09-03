@@ -3,4 +3,9 @@
 
 jptr ← JI '/home/theb/Apps/apl-2.0/rust-apl/examples'
 r ← JS ('AplUtils' 'reverse' '(Ljava/lang/String;)Ljava/lang/String;' 'hello' 256)
-r
+⎕ ← 'r: '
+⎕ ← r
+⎕ ← '≢r: '
+⎕ ← ≢r
+⎕ ← '⍴r: '
+⎕ ← ⍴r

@@ -71,12 +71,21 @@ impl CAbiBinding {
         let total_args = self.spec.args.len();
         let exploded: Vec<ValueP> = if args.len() == 1 {
             let v = &args[0];
-            let n = v.element_count();
+            // Unwrap scalar Pointer to look at inner value for explosion
+            let inner_v = if v.is_scalar() {
+                if let Some(Cell::Pointer(p)) = v.first_cell() {
+                    ValueP { inner: p.value.clone() }
+                } else {
+                    v.clone()
+                }
+            } else {
+                v.clone()
+            };
+            let n = inner_v.element_count();
             if n == 0 && input_args == 0 {
-                // niladic native: the empty right-arg placeholder matches
                 Vec::new()
-            } else if n > 1 && n as usize == total_args && v.shape().get_rank() >= 1 {
-                v.cells()
+            } else if n > 1 && n as usize == input_args && inner_v.shape().get_rank() >= 1 {
+                inner_v.cells()
                     .iter()
                     .map(|c| match c {
                         Cell::Pointer(p) => ValueP {
