@@ -83,8 +83,9 @@ double median(double* arr, int len) {
 }
 
 // Sort array in-place
-void sort(double* arr, int len) {
+int sort(double* arr, int len) {
     qsort(arr, len, sizeof(double), cmp_double);
+    return 0;
 }
 
 // Matrix multiplication: out = a * b

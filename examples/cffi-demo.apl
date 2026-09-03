@@ -7,6 +7,8 @@
 ⍝ Then run this script:
 ⍝   ./target/debug/apl < examples/cffi-demo.apl
 
+⎕IO←1
+
 ⍝ === Associate C functions ===
 ⍝ Format: 'APLNAME' ⎕NA 'library|function <return> <arg1> <arg2> ...'
 ⍝ <I4 = input int, <F8[] = input double array, >F8 = output double
@@ -43,7 +45,7 @@ fdata ← 1.2 3.4 2.1 5.6
 'stddev' ⎕NA 'F8 examples/libstats.so|stddev <F8[] I4'
 (⊂fdata) stddev (≢fdata)
 
-'sort' ⎕NA 'examples/libstats.so|sort <F8[] I4'
+'sort' ⎕NA 'examples/libstats.so|sort =F8[] I4'
 sorted ← 3.1 1.4 1.5 9.2 6.5
 (⊂sorted) sort (≢sorted)
 sorted
@@ -52,14 +54,14 @@ sorted
 A ← 1.0 2.0 3.0 4.0
 B ← 5.0 6.0 7.0 8.0
 C ← 0.0 0.0 0.0 0.0
-'matmul' ⎕NA 'examples/libstats.so|matmul <F8[] <F8[] >F8[] I4 I4 I4'
-matmul (⊂A) (⊂B) (⊂C) 2 2 2
+'matmul' ⎕NA 'examples/libstats.so|matmul <F8[] <F8[] =F8[] I4 I4 I4'
+matmul (⊂A) (⊂B) (⊂C) (2) (2) (2)
 C
 
-'det' ⎕NA 'F8 examples/libstats.so|determinant >F8 <F8[] I4'
+'det' ⎕NA 'F8 examples/libstats.so|determinant <F8[] I4'
 (⊂A) det 2
 
-'transpose' ⎕NA 'examples/libstats.so|transpose <F8[] >F8[] I4 I4'
 T ← 0.0 0.0 0.0 0.0
-transpose (⊂A) (⊂T) 2 2
+'transpose' ⎕NA 'examples/libstats.so|transpose <F8[] =F8[] I4 I4'
+T ← ⊃1⊃transpose (⊂A) (⊂T) (2) (2)
 T

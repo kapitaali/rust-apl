@@ -98,6 +98,8 @@ impl LibraryCache {
                 out.push(p.to_path_buf());
                 continue;
             }
+            // Always search current directory first (for ./libfoo.so in repo root)
+            out.push(Path::new(".").join(name));
             if let Ok(paths) = std::env::var("APL_LIB_PATH") {
                 for dir in paths.split(':').filter(|s| !s.is_empty()) {
                     out.push(Path::new(dir).join(name));

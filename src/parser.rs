@@ -3757,6 +3757,11 @@ impl Environment {
                 if *p == crate::functions::Prim::Transpose {
                     return crate::transpose::transpose_dyadic_io(&av, &bv, self.get_io()?);
                 }
+                // A⊃B — pick: honor ⎕IO
+                if *p == crate::functions::Prim::Disclose {
+                    let io = self.get_io()?;
+                    return crate::pick::pick_io(&av, &bv, io);
+                }
                 // A⌷B — general index: honor ⎕IO
                 if *p == crate::functions::Prim::Squad {
                     let io = self.get_io()?;

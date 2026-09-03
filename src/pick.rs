@@ -16,35 +16,31 @@ use crate::shape::Shape;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::{ValueInner, ValueP};
 
-pub fn pick(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+pub fn pick_io(a: &ValueP, b: &ValueP, io: i64) -> AplResult<ValueP> {
     if a.rank() > 1 {
         return Err(ErrorCode::RankError);
     }
     if a.element_count() == 0 {
         return Ok(b.clone());
     }
-
-    // Each element of A addresses one level of B:
-    // - a scalar element indexes into a vector-level B;
-    //   if B is higher-rank, the scalar must be replaced by an enclosed
-    //   coordinate vector — we tolerate scalars on rank-1 levels only.
-    // - an enclosed (pointer) element carries all coordinates for its
-    //   level: (⊂1 0)⊃M means M[1;0].
     let mut levels: Vec<LevelIndex> = Vec::new();
     for c in a.cells() {
         match c {
             Cell::Pointer(p) => {
                 let mut coords = Vec::new();
                 for ic in p.value.cells() {
-                    coords.push(ic.get_near_int()?);
+                    coords.push(ic.get_near_int()? - io);
                 }
-                levels.push(LevelIndex::Coords(coords));
+                levels.push(LevelIndex::Coords(coords))
             }
-            _ => levels.push(LevelIndex::Scalar(c.get_near_int()?)),
+            _ => levels.push(LevelIndex::Scalar(c.get_near_int()? - io)),
         }
     }
-
     pick_levels(&levels, b)
+}
+
+pub fn pick(a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+    pick_io(a, b, 0)
 }
 
 #[derive(Debug)]
