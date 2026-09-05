@@ -4,4 +4,5 @@ pub mod gtk;
 pub mod plot;
 pub mod png;
 pub mod python;
+pub mod security;
 pub mod sql;

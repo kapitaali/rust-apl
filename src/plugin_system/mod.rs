@@ -193,6 +193,15 @@ pub fn init_plugins(
         plugin.register(&mut reg)?;
     }
 
+    #[cfg(feature = "plugin-security")]
+    {
+        let plugin = crate::plugins::security::SecurityPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
     // Merge collected hooks into the output
     hooks.extend(collected_hooks);
 

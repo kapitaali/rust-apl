@@ -14,6 +14,7 @@ sql = "static"        # SQL database access (requires sqlx/rusqlite)
 fft = "static"        # Fast Fourier Transform (requires rustfft)
 png = "static"        # PNG image read/write (requires image crate)
 cdr = "static"        # CDR binary interchange format
+security = "static"   # Security level (⎕SEC) extension
 
 [plugins.plot]
 backend = "plotters"    # "plotters" or "gtk"

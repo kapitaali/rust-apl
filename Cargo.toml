@@ -37,7 +37,8 @@ plugin-fft = []
 plugin-python = []
 plugin-gtk = []
 plugin-cdr = []
-plugins = ["plugin-plot", "plugin-png", "plugin-sql", "plugin-fft", "plugin-python", "plugin-gtk", "plugin-cdr"]
+plugin-security = []
+plugins = ["plugin-plot", "plugin-png", "plugin-sql", "plugin-fft", "plugin-python", "plugin-gtk", "plugin-cdr", "plugin-security"]
 
 [build-dependencies]
 toml = "0.8"
