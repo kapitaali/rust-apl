@@ -276,7 +276,8 @@ These are the unfinished items from earlier phases, now the active workstream.
 - 🔲 TODO: line/scatter plots, matrix input
 
 ### 9.8 Bidirectional Python
-- 🔲 Stub: shell-out to `python3 -c`
+- ✅ Done: pyo3 integration (in-process) with shell-out fallback
+- pyo3 feature: `cargo build --features plugin-python`
 
 ---
 

@@ -3,11 +3,13 @@ use crate::plugin_system::{AplPlugin, PluginInfo, PluginRegistrar};
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
 
-/// ⎕PYTHON B — Python pipe (shell-out approach with JSON interchange).
+/// ⎕PYTHON B — Python interop.
+///
+/// With pyo3 feature: in-process Python execution.
+/// Without pyo3: shell-out to `python3 -c`.
 ///
 /// B is a character vector (Python code).
-/// The code is executed via `python3 -c {code}`.
-/// Stdout from Python is parsed and converted to APL values.
+/// Returns the result of the last expression.
 pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
     if cells.is_empty() {
@@ -15,9 +17,108 @@ pub fn quad_python(b: &ValueP) -> AplResult<ValueP> {
     }
 
     let code = cells_to_string(cells)?;
+
+    #[cfg(feature = "pyo3")]
+    {
+        pyo3_exec(&code)
+    }
+
+    #[cfg(not(feature = "pyo3"))]
+    {
+        shell_out_exec(&code)
+    }
+}
+
+/// Execute Python code via pyo3 (in-process).
+#[cfg(feature = "pyo3")]
+fn pyo3_exec(code: &str) -> AplResult<ValueP> {
+    use pyo3::prelude::*;
+    use pyo3::types::PyDict;
+
+    Python::with_gil(|py| {
+        // Create a globals dict for execution
+        let globals = PyDict::new(py);
+        globals.set_item("__builtins__", py.import("builtins")?).ok();
+
+        // Execute the code
+        let result = py.eval(code, Some(globals), None);
+
+        match result {
+            Ok(value) => {
+                // Try to convert the Python value to an APL value
+                if value.is_none() {
+                    Ok(ValueP::int_vector(&[]))
+                } else if let Ok(n) = value.extract::<i64>() {
+                    Ok(ValueP::scalar_from(Cell::Int(n)))
+                } else if let Ok(f) = value.extract::<f64>() {
+                    Ok(ValueP::scalar_from(Cell::Float(f)))
+                } else if let Ok(s) = value.extract::<String>() {
+                    Ok(ValueP::char_vector(
+                        &s.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                    ))
+                } else if let Ok(list) = value.downcast::<pyo3::types::PyList>() {
+                    // Convert Python list to APL vector
+                    let mut ints = Vec::new();
+                    let mut all_ints = true;
+                    for item in list.iter() {
+                        if let Ok(n) = item.extract::<i64>() {
+                            ints.push(n);
+                        } else {
+                            all_ints = false;
+                            break;
+                        }
+                    }
+                    if all_ints && !ints.is_empty() {
+                        Ok(ValueP::int_vector(&ints))
+                    } else {
+                        // Try floats
+                        let mut floats = Vec::new();
+                        let mut all_floats = true;
+                        for item in list.iter() {
+                            if let Ok(f) = item.extract::<f64>() {
+                                floats.push(Cell::Float(f));
+                            } else {
+                                all_floats = false;
+                                break;
+                            }
+                        }
+                        if all_floats && !floats.is_empty() {
+                            let shape = crate::shape::Shape::vector(floats.len() as i64);
+                            ValueP::from_parts(shape, floats).map_err(|_| ErrorCode::DomainError)
+                        } else {
+                            // Fall back to string representation
+                            let s = format!("{:?}", value);
+                            Ok(ValueP::char_vector(
+                                &s.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                            ))
+                        }
+                    }
+                } else {
+                    // Fall back to string representation
+                    let s = format!("{:?}", value);
+                    Ok(ValueP::char_vector(
+                        &s.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                    ))
+                }
+            }
+            Err(e) => {
+                eprintln!("⎕PYTHON: Python error: {}", e);
+                Err(ErrorCode::DomainError)
+            }
+        }
+    })
+    .map_err(|e| {
+        eprintln!("⎕PYTHON: Python error: {}", e);
+        ErrorCode::DomainError
+    })
+}
+
+/// Execute Python code via shell-out (fallback).
+#[cfg(not(feature = "pyo3"))]
+fn shell_out_exec(code: &str) -> AplResult<ValueP> {
     let output = std::process::Command::new("python3")
         .arg("-c")
-        .arg(&code)
+        .arg(code)
         .output()
         .map_err(|e| {
             eprintln!("⎕PYTHON: failed to spawn python3: {}", e);
@@ -75,10 +176,15 @@ impl AplPlugin for PythonPlugin {
     }
 
     fn register(&self, reg: &mut PluginRegistrar) -> AplResult<()> {
+        let backend = if cfg!(feature = "pyo3") {
+            "pyo3"
+        } else {
+            "shell-out"
+        };
         reg.sysvars.insert(
             "⎕PYTHON".into(),
             ValueP::char_vector(
-                &"python v0.1.0 (shell-out)"
+                &format!("python v0.1.0 ({})", backend)
                     .chars()
                     .map(|c| c as u32)
                     .collect::<Vec<_>>(),
@@ -86,7 +192,13 @@ impl AplPlugin for PythonPlugin {
         );
         reg.sysvars.insert(
             "⎕PYTHON.BACKEND".into(),
-            ValueP::scalar_from(Cell::Char('s' as u32)),
+            ValueP::scalar_from(Cell::Char(
+                if cfg!(feature = "pyo3") {
+                    'i' as u32 // 'i'n-process
+                } else {
+                    's' as u32 // 's'hell-out
+                },
+            )),
         );
         Ok(())
     }

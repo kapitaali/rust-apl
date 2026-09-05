@@ -20,6 +20,7 @@ plotters = "0.3"
 image = "0.25"
 rustfft = "6.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
+pyo3 = { version = "0.22", features = ["auto-initialize"], optional = true }
 hex = "0.4"
 gtk4 = { version = "0.11" }
 glib = { version = "0.20" }
@@ -34,7 +35,7 @@ plugin-plot = []
 plugin-png = []
 plugin-sql = []
 plugin-fft = []
-plugin-python = []
+plugin-python = ["dep:pyo3"]
 plugin-gtk = []
 plugin-cdr = []
 plugin-security = []
