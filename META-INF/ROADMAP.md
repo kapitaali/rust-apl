@@ -272,8 +272,8 @@ These are the unfinished items from earlier phases, now the active workstream.
 - ✅ Done: implemented as extension via plugin middleware hooks
 
 ### 9.7 ASCII Plotting
-- ✅ Done: bar chart rendering
-- 🔲 TODO: line/scatter plots, matrix input
+- ✅ Done: bar charts (vectors), line plots (matrices), legend for series
+- 🔲 TODO: scatter plots, smoother rendering
 
 ### 9.8 Bidirectional Python
 - ✅ Done: pyo3 integration (in-process) with shell-out fallback
