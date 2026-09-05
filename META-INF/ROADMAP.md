@@ -259,7 +259,8 @@ These are the unfinished items from earlier phases, now the active workstream.
 - 🔲 TODO: dyadic ⎕CALL with explicit args
 
 ### 9.3 Shared Variables (`⎕SVx`)
-- 🔲 Stubs: all return DomainError
+- ✅ Done: in-process registry with offer/query/read/set/cancel
+- ⎕SVC lists, ⎕SVO offers, ⎕SVQ queries, ⎕SVR reads, ⎕SVS sets
 
 ### 9.4 Session Continuity (`)CONTINUE`)
 - ✅ Done: saves workspace to CONTINUE.xml and exits

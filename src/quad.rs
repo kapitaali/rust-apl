@@ -21,6 +21,8 @@
 use crate::cell::Cell;
 use crate::types::{AplResult, ErrorCode};
 use crate::value::ValueP;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// ⎕UCS B — Unicode character set conversion
 /// Monadic: convert codepoints to characters or characters to codepoints
@@ -154,10 +156,12 @@ pub fn quad_dft() -> ValueP {
 // Monadic ⎕RVAL uses the configured parameters.
 // Mirrors src/Quad_RVAL.cc (simplified).
 
+
+
 use rand::Rng;
-use std::sync::Mutex;
 
 static RNG_STATE: Mutex<Option<rand::rngs::StdRng>> = Mutex::new(None);
+
 
 /// Configure the random number generator parameters.
 /// B is a vector of 1-4 integers: [rank, shape, type, maxdepth].
@@ -703,9 +707,8 @@ pub fn quad_map(env: &crate::parser::Environment, b: &ValueP) -> AplResult<Value
 //   7: file size
 //   8: file position
 //   9: seek position
-// Mirrors src/Quad_FIO.cc.
 
-use std::collections::HashMap;
+
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
@@ -1590,36 +1593,137 @@ pub fn quad_re(b: &ValueP) -> AplResult<ValueP> {
 }
 
 // ---------------------------------------------------------------------------
-// ⎕SVx — shared variables (Phase 6, stubs)
+// ⎕SVx — shared variables (in-process registry)
 // ---------------------------------------------------------------------------
 //
-// Shared variables are not yet supported in this port.
-// These stubs return domain errors for dyadic operations and
-// empty results for monadic queries.
+// A shared variable registry allowing variables to be shared between
+// different parts of the interpreter (workspaces, sessions).
+//
+// This is an in-process implementation (not the full cross-process
+// IPC server from GNU APL), but provides the same API surface.
 
-/// ⎕SVC — shared variable control (list).
+/// A shared variable entry.
+#[derive(Clone, Debug)]
+struct SvEntry {
+    /// Current value
+    value: ValueP,
+    /// Workspace that offered this variable
+    owner: String,
+}
+
+/// Global shared variable registry.
+static SV_REGISTRY: OnceLock<Arc<Mutex<HashMap<String, SvEntry>>>> = OnceLock::new();
+
+fn get_registry() -> Arc<Mutex<HashMap<String, SvEntry>>> {
+    SV_REGISTRY
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
+}
+
+/// ⎕SVC — shared variable control (list offered variables).
 pub fn quad_svc() -> AplResult<ValueP> {
-    Ok(ValueP::char_vector(&[]))
+    let reg = get_registry();
+    let guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    let names: Vec<String> = guard.keys().cloned().collect();
+    if names.is_empty() {
+        return Ok(ValueP::char_vector(&[]));
+    }
+    let joined = names.join(" ");
+    Ok(ValueP::char_vector(
+        &joined.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
 }
 
-/// ⎕SVO B — shared variable off (close).
-pub fn quad_svo(_b: &ValueP) -> AplResult<ValueP> {
-    Err(ErrorCode::DomainError)
+/// ⎕SVO B — offer a variable as a shared variable.
+pub fn quad_svo(b: &ValueP) -> AplResult<ValueP> {
+    let name = cells_to_sv_string(b.cells())?;
+    if name.is_empty() {
+        return Err(ErrorCode::DomainError);
+    }
+    let reg = get_registry();
+    let mut guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    guard.insert(
+        name.clone(),
+        SvEntry {
+            value: ValueP::int_vector(&[]),
+            owner: "local".to_string(),
+        },
+    );
+    Ok(ValueP::char_vector(
+        &name.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
 }
 
-/// ⎕SVQ B — shared variable query.
-pub fn quad_svq(_b: &ValueP) -> AplResult<ValueP> {
-    Err(ErrorCode::DomainError)
+/// ⎕SVQ B — query shared variable status (1 if offered, 0 if not).
+pub fn quad_svq(b: &ValueP) -> AplResult<ValueP> {
+    let name = cells_to_sv_string(b.cells())?;
+    let reg = get_registry();
+    let guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    if guard.contains_key(&name) {
+        Ok(ValueP::scalar_from(Cell::Int(1)))
+    } else {
+        Ok(ValueP::scalar_from(Cell::Int(0)))
+    }
 }
 
-/// ⎕SVR B — shared variable read.
-pub fn quad_svr(_b: &ValueP) -> AplResult<ValueP> {
-    Err(ErrorCode::DomainError)
+/// ⎕SVR B — read a shared variable's value.
+pub fn quad_svr(b: &ValueP) -> AplResult<ValueP> {
+    let name = cells_to_sv_string(b.cells())?;
+    let reg = get_registry();
+    let guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    match guard.get(&name) {
+        Some(entry) => Ok(entry.value.clone()),
+        None => Err(ErrorCode::DomainError),
+    }
 }
 
-/// ⎕SVS B — shared variable set.
-pub fn quad_svs(_b: &ValueP) -> AplResult<ValueP> {
-    Err(ErrorCode::DomainError)
+/// ⎕SVS B — set/create a shared variable.
+pub fn quad_svs(b: &ValueP) -> AplResult<ValueP> {
+    let cells = b.cells();
+    if cells.is_empty() {
+        return Err(ErrorCode::DomainError);
+    }
+    let name = cells_to_sv_string(&cells[..1])?;
+    let reg = get_registry();
+    let mut guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    guard.insert(
+        name.clone(),
+        SvEntry {
+            value: b.clone(),
+            owner: "local".to_string(),
+        },
+    );
+    Ok(ValueP::char_vector(
+        &name.chars().map(|c| c as u32).collect::<Vec<_>>(),
+    ))
+}
+
+/// ⎕SVO B — withdraw a shared variable (cancel offer).
+pub fn quad_svo_cancel(b: &ValueP) -> AplResult<ValueP> {
+    let name = cells_to_sv_string(b.cells())?;
+    let reg = get_registry();
+    let mut guard = reg.lock().map_err(|_| ErrorCode::DomainError)?;
+    if guard.remove(&name).is_some() {
+        Ok(ValueP::scalar_from(Cell::Int(1)))
+    } else {
+        Ok(ValueP::scalar_from(Cell::Int(0)))
+    }
+}
+
+/// Extract a string from cells.
+fn cells_to_sv_string(cells: &[Cell]) -> Result<String, ErrorCode> {
+    let mut s = String::new();
+    for c in cells {
+        match c {
+            Cell::Char(ch) => {
+                if let Some(ch) = char::from_u32(*ch) {
+                    s.push(ch);
+                }
+            }
+            _ => return Err(ErrorCode::DomainError),
+        }
+    }
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -1633,26 +1737,85 @@ mod sv_tests {
     }
 
     #[test]
-    fn test_quad_svo_err() {
-        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
-        assert!(quad_svo(&v).is_err());
+    fn test_quad_svq_not_found() {
+        let name = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
+        let result = quad_svq(&name).unwrap();
+        assert_eq!(result.cells()[0], Cell::Int(0));
     }
 
     #[test]
-    fn test_quad_svq_err() {
-        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
-        assert!(quad_svq(&v).is_err());
+    fn test_quad_svs_and_svr() {
+        // Set a shared variable
+        let name = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
+        let _ = quad_svs(&name).unwrap();
+
+        // Read it back
+        let result = quad_svr(&name).unwrap();
+        assert!(result.element_count() > 0);
+
+        // Query should show it exists
+        let query = quad_svq(&name).unwrap();
+        assert_eq!(query.cells()[0], Cell::Int(1));
     }
 
     #[test]
-    fn test_quad_svr_err() {
-        let v = ValueP::char_vector(&"X".chars().map(|c| c as u32).collect::<Vec<_>>());
-        assert!(quad_svr(&v).is_err());
+    fn test_quad_svc_lists_variables() {
+        let name1 = ValueP::char_vector(&"A".chars().map(|c| c as u32).collect::<Vec<_>>());
+        let name2 = ValueP::char_vector(&"B".chars().map(|c| c as u32).collect::<Vec<_>>());
+
+        let _ = quad_svs(&name1).unwrap();
+        let _ = quad_svs(&name2).unwrap();
+
+        let result = quad_svc().unwrap();
+        assert!(result.element_count() > 0);
     }
 
     #[test]
-    fn test_quad_svs_err() {
-        let v = ValueP::int_vector(&[1, 2]);
-        assert!(quad_svs(&v).is_err());
+    fn test_quad_svo_offers_variable() {
+        let name = ValueP::char_vector(&"Y".chars().map(|c| c as u32).collect::<Vec<_>>());
+        let result = quad_svo(&name).unwrap();
+        assert!(result.element_count() > 0);
+
+        // Verify it's listed
+        let list = quad_svc().unwrap();
+        assert!(list.element_count() > 0);
+    }
+
+    #[test]
+    fn test_quad_svo_cancel() {
+        let name = ValueP::char_vector(&"Z".chars().map(|c| c as u32).collect::<Vec<_>>());
+        let _ = quad_svo(&name).unwrap();
+
+        // Cancel the offer
+        let result = quad_svo_cancel(&name).unwrap();
+        assert_eq!(result.cells()[0], Cell::Int(1));
+
+        // Verify it's gone
+        let query = quad_svq(&name).unwrap();
+        assert_eq!(query.cells()[0], Cell::Int(0));
+    }
+
+    #[test]
+    fn test_quad_svr_not_found() {
+        let name = ValueP::char_vector(&"NOEXIST".chars().map(|c| c as u32).collect::<Vec<_>>());
+        assert!(quad_svr(&name).is_err());
+    }
+
+    #[test]
+    fn test_quad_svo_empty_name() {
+        let name = ValueP::char_vector(&[]);
+        assert!(quad_svo(&name).is_err());
+    }
+
+    #[test]
+    fn test_cells_to_sv_string_basic() {
+        let cells = vec![Cell::Char('a' as u32), Cell::Char('b' as u32), Cell::Char('c' as u32)];
+        assert_eq!(cells_to_sv_string(&cells).unwrap(), "abc");
+    }
+
+    #[test]
+    fn test_cells_to_sv_string_invalid() {
+        let cells = vec![Cell::Int(42)];
+        assert!(cells_to_sv_string(&cells).is_err());
     }
 }
