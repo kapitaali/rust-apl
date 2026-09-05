@@ -139,6 +139,20 @@ pub enum Expr {
     QuadDm,
     /// `⎕EN` — error number
     QuadEn,
+    /// `⎕A` — alphabetic characters (A-Z, a-z)
+    QuadA,
+    /// `⎕D` — digits (0-9)
+    QuadD,
+    /// `⎕PW` — print width
+    QuadPw,
+    /// `⎕LX` — latent expression (startup code)
+    QuadLx,
+    /// `⎕EM` — error message (last error)
+    QuadEm,
+    /// `⎕EC` — error code (last error)
+    QuadEc,
+    /// `⎕WI` — workspace information
+    QuadWi,
     /// `A F⍣N B` — power operator: apply F N times to B
     PowerOp(PowerFn, i64, Box<Expr>),
     /// `→(cond)/label` — conditional branch
@@ -1172,6 +1186,48 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     if let Some(Tok::Name(n)) = toks.first() {
         if n == "⎕EN" {
             return Ok((Expr::QuadEn, 1));
+        }
+    }
+    // ⎕A — alphabetic characters
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕A" {
+            return Ok((Expr::QuadA, 1));
+        }
+    }
+    // ⎕D — digits
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕D" {
+            return Ok((Expr::QuadD, 1));
+        }
+    }
+    // ⎕PW — print width
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕PW" {
+            return Ok((Expr::QuadPw, 1));
+        }
+    }
+    // ⎕LX — latent expression
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕LX" {
+            return Ok((Expr::QuadLx, 1));
+        }
+    }
+    // ⎕EM — error message
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕EM" {
+            return Ok((Expr::QuadEm, 1));
+        }
+    }
+    // ⎕EC — error code
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕EC" {
+            return Ok((Expr::QuadEc, 1));
+        }
+    }
+    // ⎕WI — workspace information
+    if let Some(Tok::Name(n)) = toks.first() {
+        if n == "⎕WI" {
+            return Ok((Expr::QuadWi, 1));
         }
     }
     // ⎕RVAL — random value
@@ -3964,6 +4020,13 @@ impl Environment {
             Expr::QuadTc => Ok(crate::quad::quad_tc()),
             Expr::QuadDm => Ok(crate::quad::quad_dm()),
             Expr::QuadEn => Ok(crate::quad::quad_en()),
+            Expr::QuadA => Ok(crate::quad::quad_a()),
+            Expr::QuadD => Ok(crate::quad::quad_d()),
+            Expr::QuadPw => Ok(crate::quad::quad_pw()),
+            Expr::QuadLx => Ok(crate::quad::quad_lx()),
+            Expr::QuadEm => Ok(crate::quad::quad_em()),
+            Expr::QuadEc => Ok(crate::quad::quad_ec()),
+            Expr::QuadWi => Ok(crate::quad::quad_wi()),
             Expr::QuadRval(arg) => {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_rval(&bv)

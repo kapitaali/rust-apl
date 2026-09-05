@@ -116,6 +116,20 @@ pub fn quad_wa() -> AplResult<ValueP> {
     Ok(ValueP::scalar_from(Cell::Int(total_memory)))
 }
 
+/// ⎕A — alphabetic characters (A-Z, a-z)
+/// Returns a 52-element character vector: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+pub fn quad_a() -> ValueP {
+    let chars: Vec<u32> = ('A'..='Z').chain('a'..='z').map(|c| c as u32).collect();
+    ValueP::char_vector(&chars)
+}
+
+/// ⎕D — digits (0-9)
+/// Returns a 10-element character vector: 0123456789
+pub fn quad_d() -> ValueP {
+    let chars: Vec<u32> = ('0'..='9').map(|c| c as u32).collect();
+    ValueP::char_vector(&chars)
+}
+
 /// ⎕TC — terminal control characters
 /// Returns: backspace, newline, carriage return
 pub fn quad_tc() -> ValueP {
@@ -140,6 +154,41 @@ pub fn quad_en() -> ValueP {
 pub fn quad_dft() -> ValueP {
     let chars: Vec<u32> = "DEFAULT".chars().map(|c| c as u32).collect();
     ValueP::char_vector(&chars)
+}
+
+/// ⎕PW — print width (line width for output)
+/// Returns the current print width (default 80)
+pub fn quad_pw() -> ValueP {
+    // Default print width is 80 characters
+    ValueP::scalar_from(Cell::Int(80))
+}
+
+/// ⎕LX — latent expression (startup code)
+/// Returns the latent expression (empty if none set)
+pub fn quad_lx() -> ValueP {
+    // No latent expression set by default
+    ValueP::char_vector(&[])
+}
+
+/// ⎕EM — error message (last error)
+/// Returns the last error message (empty if no error)
+pub fn quad_em() -> ValueP {
+    // In a full implementation, this would track the last error
+    ValueP::char_vector(&[])
+}
+
+/// ⎕EC — error code (last error)
+/// Returns the last error code (0 if no error)
+pub fn quad_ec() -> ValueP {
+    // In a full implementation, this would track the last error code
+    ValueP::scalar_from(Cell::Int(0))
+}
+
+/// ⎕WI — workspace information
+/// Returns workspace info as a nested array
+pub fn quad_wi() -> ValueP {
+    // Return workspace info: [name, size, variables, functions]
+    ValueP::char_vector(&[])
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,6 +1291,54 @@ mod tests {
     fn test_quad_dft() {
         let result = quad_dft();
         assert_eq!(result.element_count(), 7);
+    }
+
+    #[test]
+    fn test_quad_a() {
+        let result = quad_a();
+        assert_eq!(result.element_count(), 52);
+        assert_eq!(result.cells()[0], Cell::Char('A' as u32));
+        assert_eq!(result.cells()[25], Cell::Char('Z' as u32));
+        assert_eq!(result.cells()[26], Cell::Char('a' as u32));
+        assert_eq!(result.cells()[51], Cell::Char('z' as u32));
+    }
+
+    #[test]
+    fn test_quad_d() {
+        let result = quad_d();
+        assert_eq!(result.element_count(), 10);
+        assert_eq!(result.cells()[0], Cell::Char('0' as u32));
+        assert_eq!(result.cells()[9], Cell::Char('9' as u32));
+    }
+
+    #[test]
+    fn test_quad_pw() {
+        let result = quad_pw();
+        assert_eq!(result.cells()[0], Cell::Int(80));
+    }
+
+    #[test]
+    fn test_quad_lx() {
+        let result = quad_lx();
+        assert_eq!(result.element_count(), 0);
+    }
+
+    #[test]
+    fn test_quad_em() {
+        let result = quad_em();
+        assert_eq!(result.element_count(), 0);
+    }
+
+    #[test]
+    fn test_quad_ec() {
+        let result = quad_ec();
+        assert_eq!(result.cells()[0], Cell::Int(0));
+    }
+
+    #[test]
+    fn test_quad_wi() {
+        let result = quad_wi();
+        assert_eq!(result.element_count(), 0);
     }
 
     #[test]

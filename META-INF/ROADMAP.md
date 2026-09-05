@@ -317,3 +317,29 @@ Phase 9.1 → Phase 9.2 → Phase 9.3 → Phase 9.4 → Phase 9.5 → Phase 9.6 
 - `⎕PLOT` auto_open defaults to `false` (xdg-open triggers URI dialogs on headless systems)
 - `⎕SEC` is an extension (not in GNU APL) implemented via plugin middleware hooks
 - Plugin hooks: `before_eval` blocks expressions, `before_syscmd` blocks commands
+
+---
+
+## Phase 10 — Additional GNU APL Features
+
+These are minor system variables and features from GNU APL not yet implemented.
+
+### 10.1 System Variables
+| Variable | Description | Status |
+|---|---|---|
+| `⎕A` | Alphabetic characters (A-Z, a-z) | 🔲 Not implemented |
+| `⎕D` | Digits (0-9) | 🔲 Not implemented |
+| `⎕PW` | Print width (line width for output) | 🔲 Not implemented |
+| `⎕LX` | Latent expression (startup code) | 🔲 Not implemented |
+| `⎕EM` | Error message (last error) | 🔲 Stub (returns empty) |
+| `⎕EC` | Error code (last error) | 🔲 Stub (returns 0) |
+| `⎕WI` | Workspace information | 🔲 Not implemented |
+
+### 10.2 Cross-Process IPC
+- Shared variables across processes (currently in-process only)
+- Requires TCP socket server (AP210 equivalent)
+
+### 10.3 Implementation Order
+```
+⎕A → ⎕D → ⎕PW → ⎕LX → ⎕EM → ⎕EC → ⎕WI → IPC
+```
