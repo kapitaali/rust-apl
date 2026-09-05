@@ -206,14 +206,13 @@ fn quad_plot_with_config(b: &ValueP, config: &PlotConfig) -> AplResult<ValueP> {
 
     root.present().map_err(|_| ErrorCode::DomainError)?;
 
-    // Auto-open if configured (default true)
-    if config.auto_open.unwrap_or(true) {
+    // Auto-open if explicitly requested (default false — xdg-open can
+    // trigger URI handler dialogs on headless/desktop-less systems).
+    if config.auto_open.unwrap_or(false) {
         let path = std::env::current_dir()
             .map(|d| d.join(filename))
             .unwrap_or_else(|_| std::path::PathBuf::from(filename));
-        let _ = std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn();
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 
     Ok(ValueP::char_vector(
