@@ -5184,6 +5184,80 @@ mod tests {
     }
 
     #[test]
+    fn test_plugin_hooks_before_eval_blocks() {
+        // Test that plugin hooks can block evaluation
+        use crate::plugin_system::{AplPluginHooks, AplPlugin, PluginInfo, PluginRegistrar};
+        use std::sync::Arc;
+
+        struct BlockPlugin;
+        impl AplPlugin for BlockPlugin {
+            fn info(&self) -> PluginInfo {
+                PluginInfo { name: "block".into(), version: "0.1.0".into(), description: "blocks".into() }
+            }
+            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> { Ok(()) }
+            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> { Some(Arc::new(BlockHooks)) }
+        }
+        struct BlockHooks;
+        impl AplPluginHooks for BlockHooks {
+            fn before_eval(&self, expr: &Expr) -> AplResult<()> {
+                match expr {
+                    Expr::Monadic(crate::functions::Prim::Execute, _) => Err(ErrorCode::SecurityError),
+                    _ => Ok(()),
+                }
+            }
+        }
+
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let plugin = BlockPlugin;
+        if let Some(h) = plugin.hooks() {
+            env.hooks.push(h);
+        }
+        // ⍎ should be blocked by the hook
+        let result = env.eval_line("⍎'2+3'");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plugin_hooks_before_syscmd_blocks() {
+        // Test that plugin hooks can block system commands
+        use crate::plugin_system::{AplPluginHooks, AplPlugin, PluginInfo, PluginRegistrar};
+        use std::sync::Arc;
+
+        struct BlockSyscmdPlugin;
+        impl AplPlugin for BlockSyscmdPlugin {
+            fn info(&self) -> PluginInfo {
+                PluginInfo { name: "blocksyscmd".into(), version: "0.1.0".into(), description: "blocks syscmd".into() }
+            }
+            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> { Ok(()) }
+            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> { Some(Arc::new(BlockSyscmdHooks)) }
+        }
+        struct BlockSyscmdHooks;
+        impl AplPluginHooks for BlockSyscmdHooks {
+            fn before_syscmd(&self, cmd: &str) -> AplResult<()> {
+                if cmd.to_uppercase().starts_with("SAVE") {
+                    Err(ErrorCode::SecurityError)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let plugin = BlockSyscmdPlugin;
+        if let Some(h) = plugin.hooks() {
+            env.hooks.push(h);
+        }
+        // )SAVE should be blocked
+        let result = crate::sysvars::syscmd("SAVE test", &mut env);
+        assert!(result.unwrap()[0].contains("SECURITY"));
+        // )VARS should still work
+        let result = crate::sysvars::syscmd("VARS", &mut env);
+        assert!(result.is_some());
+    }
+
+    #[test]
     fn test_dfn_self_call_dyadic() {
         // Dyadic dfn call: body references ⍺ and ⍵
         let mut env = Environment::new();
