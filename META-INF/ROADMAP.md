@@ -251,8 +251,8 @@ These are the most-used system functions. Many are simple; a few need external c
 These are the unfinished items from earlier phases, now the active workstream.
 
 ### 9.1 File I/O (`⎕FIO`)
-- ✅ Done: Real file handle tracking, read line/bytes, seek/tell
-- 🔲 Partial: write operations return DomainError (BufReader limitation)
+- ✅ Done: Real file handle tracking, read/write line/bytes, seek/tell
+- All 10 functions (0-9) work correctly
 
 ### 9.2 Direct Native Calls (`⎕CALL`)
 - ✅ Done: Calls ⎕NA-bound functions by name

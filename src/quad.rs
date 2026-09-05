@@ -713,9 +713,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 static NEXT_FILE_HANDLE: Mutex<i64> = Mutex::new(3); // 0=stdin, 1=stdout, 2=stderr
-static OPEN_FILES: Mutex<Option<HashMap<i64, BufReader<File>>>> = Mutex::new(None);
+static OPEN_FILES: Mutex<Option<HashMap<i64, File>>> = Mutex::new(None);
 
-fn get_open_files() -> std::sync::MutexGuard<'static, Option<HashMap<i64, BufReader<File>>>> {
+fn get_open_files() -> std::sync::MutexGuard<'static, Option<HashMap<i64, File>>> {
     let mut guard = OPEN_FILES.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -763,7 +763,7 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let h = *handle;
             *handle += 1;
             let mut open = get_open_files();
-            open.as_mut().unwrap().insert(h, BufReader::new(file));
+            open.as_mut().unwrap().insert(h, file);
             Ok(ValueP::scalar_from(Cell::Int(h)))
         }
         2 => {
@@ -783,12 +783,14 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             }
             let handle = cells[1].get_int_value()?;
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
+            // Need to seek to beginning for line reads? No, sequential is fine.
+            let mut buf_reader = BufReader::new(file);
             let mut line = String::new();
-            reader
+            buf_reader
                 .read_line(&mut line)
                 .map_err(|_| ErrorCode::DomainError)?;
             // Trim trailing newline
@@ -810,16 +812,13 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let handle = cells[1].get_int_value()?;
             let data = cells_to_string(cells, 2);
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            // We need to write, but BufReader doesn't support write.
-            // For now, this is a limitation — we'd need to store File separately.
-            // Return domain error for now.
-            let _ = reader;
-            let _ = data;
-            Err(ErrorCode::DomainError)
+            let mut buf_writer = std::io::BufWriter::new(file);
+            writeln!(buf_writer, "{}", data).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
         }
         5 => {
             // Read bytes: B[1] is handle, B[2] is count
@@ -829,12 +828,13 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let handle = cells[1].get_int_value()?;
             let count = cells[2].get_int_value()? as usize;
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
+            let mut buf_reader = BufReader::new(file);
             let mut buf = vec![0u8; count];
-            let n = reader
+            let n = buf_reader
                 .read(&mut buf)
                 .map_err(|_| ErrorCode::DomainError)?;
             buf.truncate(n);
@@ -850,23 +850,20 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let handle = cells[1].get_int_value()?;
             let data: Vec<u8> = cells[2..]
                 .iter()
-                .map(|c| {
-                    if let Cell::Int(n) = c {
-                        *n as u8
-                    } else {
-                        0
-                    }
+                .map(|c| match c {
+                    Cell::Int(n) => *n as u8,
+                    _ => 0,
                 })
                 .collect();
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            // BufReader doesn't support write — limitation
-            let _ = reader;
-            let _ = data;
-            Err(ErrorCode::DomainError)
+            let mut buf_writer = std::io::BufWriter::new(file);
+            use std::io::Write;
+            buf_writer.write_all(&data).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(data.len() as i64)))
         }
         7 => {
             // File size: B[1..] is path
@@ -884,13 +881,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             }
             let handle = cells[1].get_int_value()?;
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            let pos = reader
-                .stream_position()
-                .map_err(|_| ErrorCode::DomainError)?;
+            let pos = file.stream_position().map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(pos as i64)))
         }
         9 => {
@@ -901,18 +896,17 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let handle = cells[1].get_int_value()?;
             let pos = cells[2].get_int_value()? as u64;
             let mut open = get_open_files();
-            let reader = open
+            let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            reader
-                .seek(SeekFrom::Start(pos))
-                .map_err(|_| ErrorCode::DomainError)?;
+            file.seek(SeekFrom::Start(pos)).map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
         _ => Err(ErrorCode::DomainError),
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // ⎕JSON — JSON parse/serialize
