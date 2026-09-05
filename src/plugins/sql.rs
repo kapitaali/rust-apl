@@ -9,13 +9,14 @@ use crate::value::ValueP;
 pub fn quad_sql(b: &ValueP) -> AplResult<ValueP> {
     use rusqlite::{Connection, Result};
 
-    let filename = match b {
-        ValueP::Char(s) => s
-            .iter()
-            .map(|c| char::from_u32(*c).unwrap())
-            .collect::<String>(),
-        _ => return Err(ErrorCode::DomainError),
-    };
+    let cells = b.cells();
+    let filename: String = cells
+        .iter()
+        .filter_map(|c| match c {
+            crate::cell::Cell::Char(ch) => char::from_u32(*ch),
+            _ => None,
+        })
+        .collect();
 
     let conn = Connection::open(&filename).map_err(|_| ErrorCode::DomainError)?;
     let mut stmt = conn
@@ -45,13 +46,69 @@ pub fn quad_sql(_b: &ValueP) -> AplResult<ValueP> {
     Err(ErrorCode::DomainError)
 }
 
+/// ⎕SQL plugin struct for registration.
+#[cfg(feature = "plugin-sql")]
+pub struct SqlPlugin;
+
+#[cfg(feature = "plugin-sql")]
+impl SqlPlugin {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(feature = "plugin-sql")]
+impl crate::plugin_system::AplPlugin for SqlPlugin {
+    fn info(&self) -> crate::plugin_system::PluginInfo {
+        crate::plugin_system::PluginInfo {
+            name: "sql".into(),
+            version: "0.1.0".into(),
+            description: "SQL database access (⎕SQL)".into(),
+        }
+    }
+
+    fn register(&self, reg: &mut crate::plugin_system::PluginRegistrar) -> AplResult<()> {
+        reg.sysvars.insert(
+            "⎕SQL".into(),
+            ValueP::char_vector(
+                &"sql v0.1.0 (rusqlite)"
+                    .chars()
+                    .map(|c| c as u32)
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        Ok(())
+    }
+}
+
 #[cfg(all(test, feature = "plugin-sql"))]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_sql_disabled() {
-        let v = ValueP::char_vector(&"test.db".chars().map(|c| c as u32).collect::<Vec<_>>());
-        assert!(quad_sql(&v).is_err());
+    fn test_sql_plugin_info() {
+        use crate::plugin_system::AplPlugin;
+        let plugin = SqlPlugin;
+        let info = plugin.info();
+        assert_eq!(info.name, "sql");
+        assert!(info.description.contains("⎕SQL"));
+    }
+
+    #[test]
+    fn test_sql_plugin_register() {
+        use crate::functions_def::FunctionTable;
+        use crate::plugin_system::AplPlugin;
+        use std::collections::HashMap;
+
+        let plugin = SqlPlugin;
+        let mut func_table = FunctionTable::new();
+        let mut sysvars = HashMap::new();
+        let mut reg = crate::plugin_system::PluginRegistrar {
+            func_table: &mut func_table,
+            sysvars: &mut sysvars,
+        };
+
+        plugin.register(&mut reg).unwrap();
+        assert!(sysvars.contains_key("⎕SQL"));
     }
 }

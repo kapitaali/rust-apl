@@ -19,7 +19,7 @@ regex = "1.10"
 plotters = "0.3"
 image = "0.25"
 rustfft = "6.2"
-rusqlite = "0.31"
+rusqlite = { version = "0.31", features = ["bundled"] }
 hex = "0.4"
 gtk4 = { version = "0.11" }
 glib = { version = "0.20" }
