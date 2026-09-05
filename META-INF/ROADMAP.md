@@ -265,7 +265,8 @@ These are the unfinished items from earlier phases, now the active workstream.
 - ✅ Done: saves workspace to CONTINUE.xml and exits
 
 ### 9.5 Local Symbol Tables
-- 🔲 Not started
+- ✅ Done: shadowing in `call_function` via `collect_assigned_names`
+- Locals saved/restored on function entry/exit
 
 ### 9.6 Security Enforcement (`⎕SEC`)
 - ✅ Done: implemented as extension via plugin middleware hooks
