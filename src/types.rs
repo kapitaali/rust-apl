@@ -167,6 +167,8 @@ pub enum ErrorCode {
     /// FILE ERROR (⎕NA: shared object failed to dlopen — may be a missing
     /// dependency; Dyalog reports "FILE ERROR 2 No such file or directory")
     FileError = 11,
+    /// SECURITY ERROR — operation blocked by ⎕SEC level
+    SecurityError = 12,
     // keep room; more added as subsystems are ported
 }
 
@@ -185,6 +187,7 @@ impl std::fmt::Display for ErrorCode {
             ErrorCode::SystemError => "SYSTEM ERROR",
             ErrorCode::InternalError => "INTERNAL ERROR",
             ErrorCode::FileError => "FILE ERROR",
+            ErrorCode::SecurityError => "SECURITY ERROR",
         };
         write!(f, "{}", name)
     }
@@ -301,6 +304,7 @@ impl std::fmt::Display for AplError {
             ErrorCode::SystemError => "SYSTEM ERROR",
             ErrorCode::InternalError => "INTERNAL ERROR",
             ErrorCode::FileError => "FILE ERROR",
+            ErrorCode::SecurityError => "SECURITY ERROR",
         };
         write!(f, "{}", code_name)?;
 

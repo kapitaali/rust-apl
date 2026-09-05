@@ -172,6 +172,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         }
         "CONTINUE" => {
             // )CONTINUE — save workspace to CONTINUE.xml and exit
+            // Security: )CONTINUE is blocked at ⎕SEC ≥ 2
+            if let Err(e) = crate::security::check_sec(env, "SAVE") {
+                return Some(vec![e]);
+            }
             match crate::xml_archive::save_xml(env, "CONTINUE") {
                 Ok(_) => None, // caller exits
                 Err(e) => Some(vec![format!("CONTINUE ERROR: {}", e)]),
@@ -225,6 +229,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         }
         "HISTORY" => Some(vec!["HISTORY is not supported in this port".to_string()]),
         "SAVE" | "LOAD" => {
+            // Security: )SAVE and )LOAD are blocked at ⎕SEC ≥ 2
+            if let Err(e) = crate::security::check_sec(env, "SAVE") {
+                return Some(vec![e]);
+            }
             let name = parts.next().unwrap_or("");
             if name.is_empty() {
                 return Some(vec![format!(
@@ -262,6 +270,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         "OFF" => None, // caller exits
         "" => Some(vec!["(empty system command)".to_string()]),
         "OUT" => {
+            // Security: )OUT is blocked at ⎕SEC ≥ 2
+            if let Err(e) = crate::security::check_sec(env, "OUT") {
+                return Some(vec![e]);
+            }
             // )OUT file — save session as APL source (variables + dfns)
             let name = parts.next().unwrap_or("");
             if name.is_empty() {
@@ -413,6 +425,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             }
         }
         "COPY" | "IN" => {
+            // Security: )COPY is blocked at ⎕SEC ≥ 1
+            if let Err(e) = crate::security::check_sec(env, "COPY") {
+                return Some(vec![e]);
+            }
             // minimal )COPY: evaluate each line of an APL source file in
             // the live workspace. Covers ⎕NA associations, variable and
             // dfn definitions (single-line bodies). Stops at first error.
@@ -445,6 +461,10 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
             Some(vec![format!("COPIED {}", name)])
         }
         "INP" => {
+            // Security: )INP is blocked at ⎕SEC ≥ 1
+            if let Err(e) = crate::security::check_sec(env, "INP") {
+                return Some(vec![e]);
+            }
             // )INP file — input session from file (like )COPY but prints values)
             let name = parts.next().unwrap_or("");
             if name.is_empty() {

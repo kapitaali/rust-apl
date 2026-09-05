@@ -3555,6 +3555,10 @@ impl Environment {
                 // ⍎B — execute: evaluate a character vector as an APL line.
                 // Needs &mut self, so it cannot live in eval_monadic.
                 if *p == crate::functions::Prim::Execute {
+                    // Security: ⍎ is blocked at ⎕SEC ≥ 1
+                    if let Err(e) = crate::security::check_sec(self, "EXECUTE") {
+                        return Err(ErrorCode::SecurityError);
+                    }
                     return self.execute_value(&bv);
                 }
                 p.eval_monadic(&bv)
@@ -3796,6 +3800,10 @@ impl Environment {
             }
             Expr::QuadNa(apl_name, decl) => {
                 // 'name' ⎕NA 'F8 lib|sym I4 I4' — associate native fn
+                // Security: ⎕NA is blocked at ⎕SEC ≥ 1
+                if let Err(_) = crate::security::check_sec(self, "NA") {
+                    return Err(ErrorCode::SecurityError);
+                }
                 let decl_v = self.eval(decl)?;
                 let decl_str = decl_v
                     .cells()
@@ -3837,6 +3845,10 @@ impl Environment {
             }
             Expr::QuadLoadSo(spec) => {
                 // ⎕LOADSO 'path' — load plugin, register all its bindings
+                // Security: ⎕LOADSO is blocked at ⎕SEC ≥ 1
+                if let Err(_) = crate::security::check_sec(self, "LOADSO") {
+                    return Err(ErrorCode::SecurityError);
+                }
                 let spec_v = self.eval(spec)?;
                 let path = spec_v
                     .cells()
@@ -3865,6 +3877,7 @@ impl Environment {
             }
             Expr::QuadCall(name_expr) => {
                 // ⎕CALL name — call a ⎕NA-bound native function by name
+                // Supports both monadic (⎕CALL 'name') and dyadic (A ⎕CALL 'name') forms
                 let name_v = self.eval(name_expr)?;
                 let name = name_v
                     .cells()
@@ -3879,8 +3892,8 @@ impl Environment {
                     Some(crate::functions_def::Callable::Native(b)) => b.clone(),
                     _ => return Err(ErrorCode::ValueError),
                 };
-                // For now, call with empty args (niladic call)
-                // Dyadic ⎕CALL will be A ⎕CALL name in future
+                // For now, call with empty args (niladic/monadic call)
+                // TODO: dyadic ⎕CALL with explicit args
                 binding.call(&[])
             }
             Expr::QuadCr(n, arg) => {
@@ -3979,6 +3992,11 @@ impl Environment {
                 crate::quad::quad_mx(&bv)
             }
             Expr::QuadFio(arg) => {
+                // ⎕FIO B — file I/O
+                // Security: file I/O is blocked at ⎕SEC ≥ 2
+                if let Err(_) = crate::security::check_sec(self, "FIO") {
+                    return Err(ErrorCode::SecurityError);
+                }
                 let bv = self.eval(arg)?;
                 crate::quad::quad_fio(&bv)
             }
