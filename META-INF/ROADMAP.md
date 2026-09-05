@@ -27,7 +27,7 @@ These are the most-used system functions. Many are simple; a few need external c
 ### 1.2 I/O Quad Functions
 | # | Function | Description | Depends on |
 |---|---|---|---|
-| 11 | `⎕FIO` | File I/O (open, read, write, close) | std::fs |
+| 11 | `⎕FIO` | File I/O (open, read, write, close) | std::fs | 🔲 Partial |
 | 12 | `⎕JSON` | JSON parse/serialize | serde_json |
 | 13 | `⎕XML` | XML parse/serialize | quick-xml |
 
@@ -35,7 +35,7 @@ These are the most-used system functions. Many are simple; a few need external c
 | # | Function | Description | Depends on |
 |---|---|---|---|
 | 14 | `⎕FFT` | Fast Fourier Transform | rustfft crate | ✅ Done |
-| 15 | `⎕SVx` | Shared variables (IPC) | — |
+| 15 | `⎕SVx` | Shared variables (IPC) | — | 🔲 Stubs |
 | 16 | `⎕SQL` | SQL database access | sqlx or rusqlite | ✅ Done |
 | 17 | `⎕GTK` | GTK GUI | gtk4 crate | 🔲 Stub |
 | 18 | `⎕PLOT` | Plotting | plotters crate | ✅ Done |
@@ -201,7 +201,7 @@ These are the most-used system functions. Many are simple; a few need external c
 - ASCII plot | 🔲 Not started
 
 ### 6.4 Python Integration
-- Python pipe | 🔲 Stub (pyo3 not yet integrated)
+- Python pipe | 🔲 Stub (shell-out to python3)
 - Bidirectional communication | 🔲 Not started
 
 ### 6.5 CDR / Archive Format
@@ -246,6 +246,46 @@ These are the most-used system functions. Many are simple; a few need external c
 
 ---
 
+## Phase 9 — Remaining Features (Current)
+
+These are the unfinished items from earlier phases, now the active workstream.
+
+### 9.1 File I/O (`⎕FIO`)
+- Real file handle tracking (open → read/write → close)
+- Read line/bytes, write line/bytes
+- Seek/tell support
+- Currently: stubs returning hardcoded values
+
+### 9.2 Direct Native Calls (`⎕CALL`)
+- Call ⎕NA-bound functions by name from APL expressions
+- Currently: parser recognizes it but execution is a stub
+
+### 9.3 Shared Variables (`⎕SVx`)
+- IPC for ⎕SVC, ⎕SVO, ⎕SVQ, ⎕SVR, ⎕SVS
+- Currently: all return DomainError
+
+### 9.4 Session Continuity (`)CONTINUE`)
+- Save workspace to XML and continue session
+- Currently: not implemented
+
+### 9.5 Local Symbol Tables
+- Per-function local scopes (currently only global)
+- Required for proper recursion isolation
+
+### 9.6 Security Enforcement (`⎕SEC`)
+- Actually block file/process operations at ⎕SEC ≥ 1
+- Currently: level stored but not checked
+
+### 9.7 ASCII Plotting
+- `⎕APLOT` — render plots as ASCII art in the terminal
+- Currently: not started
+
+### 9.8 Bidirectional Python
+- pyo3 integration for in-process Python
+- Currently: shell-out to `python3 -c`
+
+---
+
 ## Implementation Order
 
 ```
@@ -264,6 +304,8 @@ Phase 6.1 → Phase 6.2 → Phase 6.3 → Phase 6.4 → Phase 6.5
 Phase 7.1 → Phase 7.2 → Phase 7.3 → Phase 7.4
     ↓
 Phase 8.1 → Phase 8.2 → Phase 8.3
+    ↓
+Phase 9.1 → Phase 9.2 → Phase 9.3 → Phase 9.4 → Phase 9.5 → Phase 9.6 → Phase 9.7 → Phase 9.8
 ```
 
 ---
@@ -275,3 +317,5 @@ Phase 8.1 → Phase 8.2 → Phase 8.3
 - Cell::Char holds u32 codepoint; ValueP::char_vector takes &[u32]
 - libapl uses thread-local Environment + Mutex-protected callbacks
 - XML archive uses custom text format with ²...⁰ char mode and type tags
+- rusqlite uses `bundled` feature (compiles SQLite from source, no system lib needed)
+- `⎕PLOT` auto_open defaults to `false` (xdg-open triggers URI dialogs on headless systems)

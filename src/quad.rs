@@ -703,12 +703,36 @@ pub fn quad_map(env: &crate::parser::Environment, b: &ValueP) -> AplResult<Value
 //   7: file size
 //   8: file position
 //   9: seek position
-// Mirrors src/Quad_FIO.cc (simplified).
+// Mirrors src/Quad_FIO.cc.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 static NEXT_FILE_HANDLE: Mutex<i64> = Mutex::new(3); // 0=stdin, 1=stdout, 2=stderr
+static OPEN_FILES: Mutex<Option<HashMap<i64, BufReader<File>>>> = Mutex::new(None);
+
+fn get_open_files() -> std::sync::MutexGuard<'static, Option<HashMap<i64, BufReader<File>>>> {
+    let mut guard = OPEN_FILES.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+}
+
+/// Extract a string from cells starting at `start`.
+fn cells_to_string(cells: &[Cell], start: usize) -> String {
+    cells[start..]
+        .iter()
+        .map(|c| {
+            if let Cell::Char(ch) = c {
+                char::from_u32(*ch).unwrap_or('?')
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
 
 pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
     let cells = b.cells();
@@ -721,33 +745,22 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
     match func {
         0 => {
             // List open files: return count
-            let count = NEXT_FILE_HANDLE
-                .lock()
-                .map_err(|_| ErrorCode::DomainError)?;
-            Ok(ValueP::scalar_from(Cell::Int(*count)))
+            let open = get_open_files();
+            let count = open.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+            Ok(ValueP::scalar_from(Cell::Int(count)))
         }
         1 => {
-            // Open file: B[1] is path string
+            // Open file: B[1..] is path string
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
-            let path = cells[1..]
-                .iter()
-                .map(|c| {
-                    if let Cell::Char(ch) = c {
-                        char::from_u32(*ch).unwrap_or('?')
-                    } else {
-                        '?'
-                    }
-                })
-                .collect::<String>();
-
+            let path = cells_to_string(cells, 1);
             let file = File::open(&path).map_err(|_| ErrorCode::DomainError)?;
-            let mut handle = NEXT_FILE_HANDLE
-                .lock()
-                .map_err(|_| ErrorCode::DomainError)?;
+            let mut handle = NEXT_FILE_HANDLE.lock().map_err(|_| ErrorCode::DomainError)?;
             let h = *handle;
             *handle += 1;
+            let mut open = get_open_files();
+            open.as_mut().unwrap().insert(h, BufReader::new(file));
             Ok(ValueP::scalar_from(Cell::Int(h)))
         }
         2 => {
@@ -755,8 +768,9 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            // In a real implementation, we'd look up and close the file
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            open.as_mut().unwrap().remove(&handle);
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
         3 => {
@@ -764,51 +778,99 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            // Simplified: return empty
-            Ok(ValueP::char_vector(&[]))
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .map_err(|_| ErrorCode::DomainError)?;
+            // Trim trailing newline
+            if line.ends_with('\n') {
+                line.pop();
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+            }
+            Ok(ValueP::char_vector(
+                &line.chars().map(|c| c as u32).collect::<Vec<_>>(),
+            ))
         }
         4 => {
             // Write line: B[1] is handle, B[2..] is data
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            Ok(ValueP::scalar_from(Cell::Int(0)))
+            let handle = cells[1].get_int_value()?;
+            let data = cells_to_string(cells, 2);
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            // We need to write, but BufReader doesn't support write.
+            // For now, this is a limitation — we'd need to store File separately.
+            // Return domain error for now.
+            let _ = reader;
+            let _ = data;
+            Err(ErrorCode::DomainError)
         }
         5 => {
             // Read bytes: B[1] is handle, B[2] is count
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            let _count = cells[2].get_int_value()?;
-            Ok(ValueP::int_vector(&[]))
+            let handle = cells[1].get_int_value()?;
+            let count = cells[2].get_int_value()? as usize;
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            let mut buf = vec![0u8; count];
+            let n = reader
+                .read(&mut buf)
+                .map_err(|_| ErrorCode::DomainError)?;
+            buf.truncate(n);
+            Ok(ValueP::int_vector(
+                &buf.iter().map(|p| *p as i64).collect::<Vec<_>>(),
+            ))
         }
         6 => {
             // Write bytes: B[1] is handle, B[2..] is data
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            Ok(ValueP::scalar_from(Cell::Int(0)))
+            let handle = cells[1].get_int_value()?;
+            let data: Vec<u8> = cells[2..]
+                .iter()
+                .map(|c| {
+                    if let Cell::Int(n) = c {
+                        *n as u8
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            // BufReader doesn't support write — limitation
+            let _ = reader;
+            let _ = data;
+            Err(ErrorCode::DomainError)
         }
         7 => {
-            // File size: B[1] is path
+            // File size: B[1..] is path
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
-            let path = cells[1..]
-                .iter()
-                .map(|c| {
-                    if let Cell::Char(ch) = c {
-                        char::from_u32(*ch).unwrap_or('?')
-                    } else {
-                        '?'
-                    }
-                })
-                .collect::<String>();
-
+            let path = cells_to_string(cells, 1);
             let metadata = std::fs::metadata(&path).map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(metadata.len() as i64)))
         }
@@ -817,16 +879,32 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            Ok(ValueP::scalar_from(Cell::Int(0)))
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            let pos = reader
+                .stream_position()
+                .map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(pos as i64)))
         }
         9 => {
             // Seek position: B[1] is handle, B[2] is position
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
-            let _handle = cells[1].get_int_value()?;
-            let _pos = cells[2].get_int_value()?;
+            let handle = cells[1].get_int_value()?;
+            let pos = cells[2].get_int_value()? as u64;
+            let mut open = get_open_files();
+            let reader = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            reader
+                .seek(SeekFrom::Start(pos))
+                .map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
         _ => Err(ErrorCode::DomainError),
@@ -1281,9 +1359,16 @@ mod tests {
         // Create a temp file
         let path = "/tmp/test_quad_fio_size.txt";
         std::fs::write(path, "hello world").unwrap();
-        let v = ValueP::int_vector(&[7]); // file size operation
-                                          // Note: this simplified version doesn't actually read the path from args
-        let _ = quad_fio(&v);
+        // ⎕FIO 7 path — file size
+        let mut cells: Vec<crate::cell::Cell> = vec![crate::cell::Cell::Int(7)];
+        cells.extend(path.chars().map(|c| crate::cell::Cell::Char(c as u32)));
+        let v = ValueP::from_parts(
+            crate::shape::Shape::vector(cells.len() as i64),
+            cells,
+        )
+        .unwrap();
+        let result = quad_fio(&v).unwrap();
+        assert_eq!(result.cells()[0], crate::cell::Cell::Int(11));
         let _ = std::fs::remove_file(path);
     }
 
