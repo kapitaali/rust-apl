@@ -327,19 +327,47 @@ These are minor system variables and features from GNU APL not yet implemented.
 ### 10.1 System Variables
 | Variable | Description | Status |
 |---|---|---|
-| `⎕A` | Alphabetic characters (A-Z, a-z) | 🔲 Not implemented |
-| `⎕D` | Digits (0-9) | 🔲 Not implemented |
-| `⎕PW` | Print width (line width for output) | 🔲 Not implemented |
-| `⎕LX` | Latent expression (startup code) | 🔲 Not implemented |
-| `⎕EM` | Error message (last error) | 🔲 Stub (returns empty) |
-| `⎕EC` | Error code (last error) | 🔲 Stub (returns 0) |
-| `⎕WI` | Workspace information | 🔲 Not implemented |
+| `⎕A` | Alphabetic characters (A-Z, a-z) | ✅ Done |
+| `⎕D` | Digits (0-9) | ✅ Done |
+| `⎕PW` | Print width (line width for output) | ✅ Done |
+| `⎕LX` | Latent expression (startup code) | ✅ Done |
+| `⎕EM` | Error message (last error) | ✅ Done |
+| `⎕EC` | Error code (last error) | ✅ Done |
+| `⎕WI` | Workspace information | ✅ Done |
 
 ### 10.2 Cross-Process IPC
-- Shared variables across processes (currently in-process only)
+- 🔲 Shared variables across processes (currently in-process only)
 - Requires TCP socket server (AP210 equivalent)
 
 ### 10.3 Implementation Order
 ```
 ⎕A → ⎕D → ⎕PW → ⎕LX → ⎕EM → ⎕EC → ⎕WI → IPC
 ```
+
+---
+
+## Phase 11 — Cross-Process IPC (Shared Variables Server)
+
+GNU APL uses AP210 (shared variable server) for inter-process communication. This phase implements a TCP-based shared variable server.
+
+### 11.1 Design
+- TCP server listening on a configurable port
+- Simple text-based protocol for variable operations
+- Clients can: offer variables, query variables, read/write values
+- Backed by the existing in-process registry (extended for network)
+
+### 11.2 Protocol
+```
+OFFER <name> <value>    — offer a variable
+QUERY <name>            — check if variable exists (1/0)
+READ <name>             — read variable value
+WRITE <name> <value>    — write variable value
+LIST                    — list all offered variables
+CANCEL <name>           — withdraw an offer
+```
+
+### 11.3 Implementation
+- ✅ Done: `src/ipc/server.rs` — TCP server
+- ✅ Done: `src/ipc/client.rs` — client library
+- ✅ Done: `src/ipc/protocol.rs` — message parsing
+- ✅ Done: Integration with existing `SV_REGISTRY`

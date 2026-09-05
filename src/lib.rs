@@ -53,6 +53,7 @@ pub mod xml_archive;
 
 // GNU APL XML format (Phase 8)
 pub mod gnu_xml;
+pub mod ipc;
 
 // Security (Phase 5.5)
 pub mod security;
