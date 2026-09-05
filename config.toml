@@ -9,11 +9,11 @@ gtk = "static"        # GTK4 GUI (requires gtk4-rs)
 plot = "static"         # Plotting via plotters crate
 
 # Data interchange
-python = "disabled"     # Python pipe (requires pyo3)
+python = "static"     # Python pipe (requires pyo3)
 sql = "static"        # SQL database access (requires sqlx/rusqlite)
-fft = "disabled"        # Fast Fourier Transform (requires rustfft)
+fft = "static"        # Fast Fourier Transform (requires rustfft)
 png = "static"        # PNG image read/write (requires image crate)
-cdr = "disabled"        # CDR binary interchange format
+cdr = "static"        # CDR binary interchange format
 
 [plugins.plot]
 backend = "plotters"    # "plotters" or "gtk"
