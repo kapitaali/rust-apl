@@ -251,38 +251,31 @@ These are the most-used system functions. Many are simple; a few need external c
 These are the unfinished items from earlier phases, now the active workstream.
 
 ### 9.1 File I/O (`⎕FIO`)
-- Real file handle tracking (open → read/write → close)
-- Read line/bytes, write line/bytes
-- Seek/tell support
-- Currently: stubs returning hardcoded values
+- ✅ Done: Real file handle tracking, read line/bytes, seek/tell
+- 🔲 Partial: write operations return DomainError (BufReader limitation)
 
 ### 9.2 Direct Native Calls (`⎕CALL`)
-- Call ⎕NA-bound functions by name from APL expressions
-- Currently: parser recognizes it but execution is a stub
+- ✅ Done: Calls ⎕NA-bound functions by name
+- 🔲 TODO: dyadic ⎕CALL with explicit args
 
 ### 9.3 Shared Variables (`⎕SVx`)
-- IPC for ⎕SVC, ⎕SVO, ⎕SVQ, ⎕SVR, ⎕SVS
-- Currently: all return DomainError
+- 🔲 Stubs: all return DomainError
 
 ### 9.4 Session Continuity (`)CONTINUE`)
-- Save workspace to XML and continue session
-- Currently: not implemented
+- ✅ Done: saves workspace to CONTINUE.xml and exits
 
 ### 9.5 Local Symbol Tables
-- Per-function local scopes (currently only global)
-- Required for proper recursion isolation
+- 🔲 Not started
 
 ### 9.6 Security Enforcement (`⎕SEC`)
-- Actually block file/process operations at ⎕SEC ≥ 1
-- Currently: level stored but not checked
+- ✅ Done: implemented as extension via plugin middleware hooks
 
 ### 9.7 ASCII Plotting
-- `⎕APLOT` — render plots as ASCII art in the terminal
-- Currently: not started
+- ✅ Done: bar chart rendering
+- 🔲 TODO: line/scatter plots, matrix input
 
 ### 9.8 Bidirectional Python
-- pyo3 integration for in-process Python
-- Currently: shell-out to `python3 -c`
+- 🔲 Stub: shell-out to `python3 -c`
 
 ---
 
@@ -319,3 +312,5 @@ Phase 9.1 → Phase 9.2 → Phase 9.3 → Phase 9.4 → Phase 9.5 → Phase 9.6 
 - XML archive uses custom text format with ²...⁰ char mode and type tags
 - rusqlite uses `bundled` feature (compiles SQLite from source, no system lib needed)
 - `⎕PLOT` auto_open defaults to `false` (xdg-open triggers URI dialogs on headless systems)
+- `⎕SEC` is an extension (not in GNU APL) implemented via plugin middleware hooks
+- Plugin hooks: `before_eval` blocks expressions, `before_syscmd` blocks commands
