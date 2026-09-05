@@ -5268,6 +5268,62 @@ mod tests {
     }
 
     #[test]
+    fn test_quad_loadso_missing_file() {
+        // ⎕LOADSO with a non-existent path returns FileError
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        let result = env.eval_line("⎕LOADSO 'nonexistent_plugin.so'");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_quad_loadso_security_blocks_at_sec1() {
+        // ⎕LOADSO is blocked at ⎕SEC ≥ 1
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("⎕SEC ← 1").unwrap();
+        let result = env.eval_line("⎕LOADSO 'demo-plugin/target/debug/libdemo_plugin.so'");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_quad_loadso_loads_demo_plugin() {
+        // Load the demo-plugin and verify bindings are registered
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        // Verify registered functions are callable
+        let result = env.eval_line("STRREV 'hello'");
+        assert!(result.is_ok());
+        let v = result.unwrap().unwrap();
+        assert_eq!(v.cells()[0], crate::cell::Cell::Char('o' as u32));
+        assert_eq!(v.cells()[4], crate::cell::Cell::Char('h' as u32));
+    }
+
+    #[test]
+    fn test_quad_loadso_plugin_function_sum() {
+        // Test SUMI function from demo-plugin
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        let result = env.eval_line("SUMI 1 2 3 4 5");
+        assert!(result.is_ok());
+        let v = result.unwrap().unwrap();
+        assert_eq!(v.cells()[0], crate::cell::Cell::Int(15));
+    }
+
+    #[test]
+    fn test_quad_loadso_panic_contained() {
+        // PANICME panics but the panic is caught (not aborting the REPL)
+        let mut env = crate::parser::Environment::new();
+        crate::sysvars::init_sysvars(&mut env);
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        let result = env.eval_line("PANICME 42");
+        // Should return DOMAIN ERROR, not abort
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_inner_product_syntax_dot_product() {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
