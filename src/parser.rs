@@ -322,7 +322,10 @@ fn substitute_dop(
             Box::new(substitute_dop(a, dop_lo, dop_ro)),
             Box::new(substitute_dop(b, dop_lo, dop_ro)),
         ),
-        Expr::Dfn(body, control) => Expr::Dfn(Box::new(substitute_dop(body, dop_lo, dop_ro)), control.clone()),
+        Expr::Dfn(body, control) => Expr::Dfn(
+            Box::new(substitute_dop(body, dop_lo, dop_ro)),
+            control.clone(),
+        ),
         Expr::DfnCallMono(body, arg) => Expr::DfnCallMono(
             Box::new(substitute_dop(body, dop_lo, dop_ro)),
             Box::new(substitute_dop(arg, dop_lo, dop_ro)),
@@ -2002,8 +2005,8 @@ fn dfn_control_keyword(s: &[Tok]) -> Option<&str> {
     }
     if let Tok::Name(n) = &s[1] {
         match n.as_str() {
-            "If" | "While" | "EndIf" | "EndWhile" | "Else" | "Repeat" | "Until"
-                | "EndRepeat" | "Leave" => Some(n.as_str()),
+            "If" | "While" | "EndIf" | "EndWhile" | "Else" | "Repeat" | "Until" | "EndRepeat"
+            | "Leave" => Some(n.as_str()),
             _ => None,
         }
     } else {
@@ -3201,12 +3204,8 @@ impl Environment {
                         inner: std::sync::Arc::new(crate::value::ValueInner::new(
                             crate::shape::Shape::vector(2),
                             vec![
-                                Cell::Pointer(crate::cell::PointerCellData {
-                                    value: av_inner,
-                                }),
-                                Cell::Pointer(crate::cell::PointerCellData {
-                                    value: bv_inner,
-                                }),
+                                Cell::Pointer(crate::cell::PointerCellData { value: av_inner }),
+                                Cell::Pointer(crate::cell::PointerCellData { value: bv_inner }),
                             ],
                         )),
                     };
@@ -4046,25 +4045,21 @@ impl Environment {
                 let bv = self.eval(arg)?;
                 crate::plugins::gtk::quad_gtk(&bv)
             }
-            Expr::QuadGtkEvent => {
-                match crate::plugins::gtk::quad_gtk_event() {
-                    Some(event) => {
-                        let event_str = match event {
-                            crate::plugins::gtk::GtkEvent::ButtonClicked(label) => label,
-                            crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
-                                format!("Entry:{}", text)
-                            }
-                            crate::plugins::gtk::GtkEvent::WindowClosed => {
-                                "WindowClosed".to_string()
-                            }
-                        };
-                        Ok(ValueP::char_vector(
-                            &event_str.chars().map(|c| c as u32).collect::<Vec<_>>(),
-                        ))
-                    }
-                    None => Ok(ValueP::char_vector(&[])),
+            Expr::QuadGtkEvent => match crate::plugins::gtk::quad_gtk_event() {
+                Some(event) => {
+                    let event_str = match event {
+                        crate::plugins::gtk::GtkEvent::ButtonClicked(label) => label,
+                        crate::plugins::gtk::GtkEvent::EntryChanged(text) => {
+                            format!("Entry:{}", text)
+                        }
+                        crate::plugins::gtk::GtkEvent::WindowClosed => "WindowClosed".to_string(),
+                    };
+                    Ok(ValueP::char_vector(
+                        &event_str.chars().map(|c| c as u32).collect::<Vec<_>>(),
+                    ))
                 }
-            }
+                None => Ok(ValueP::char_vector(&[])),
+            },
             Expr::QuadGtkWait => {
                 crate::plugins::gtk::quad_gtk_wait();
                 Ok(ValueP::scalar_from(crate::cell::Cell::Int(0)))

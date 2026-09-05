@@ -18,10 +18,13 @@ pub fn quad_png(b: &ValueP) -> AplResult<ValueP> {
     match cells[0] {
         crate::cell::Cell::Char(_) => {
             // Read mode: B is a filename string
-            let filename: String = cells.iter().filter_map(|c| match c {
-                crate::cell::Cell::Char(ch) => char::from_u32(*ch),
-                _ => None,
-            }).collect();
+            let filename: String = cells
+                .iter()
+                .filter_map(|c| match c {
+                    crate::cell::Cell::Char(ch) => char::from_u32(*ch),
+                    _ => None,
+                })
+                .collect();
             let img = image::open(&filename).map_err(|_| ErrorCode::DomainError)?;
             let w = img.width();
             let h = img.height();
@@ -31,7 +34,8 @@ pub fn quad_png(b: &ValueP) -> AplResult<ValueP> {
             Ok(ValueP::from_parts(
                 crate::shape::Shape::from_dims(&shape)?,
                 crate::value::ValueP::int_vector(&data).cells().to_vec(),
-            ).unwrap_or_else(|_| ValueP::int_vector(&data)))
+            )
+            .unwrap_or_else(|_| ValueP::int_vector(&data)))
         }
         crate::cell::Cell::Int(_) => {
             // Write mode: expects [height width channels] data
@@ -41,11 +45,15 @@ pub fn quad_png(b: &ValueP) -> AplResult<ValueP> {
             }
             let h = shape.get_shape_item(0) as u32;
             let w = shape.get_shape_item(1) as u32;
-            let pixels: Vec<u8> = cells.iter().filter_map(|c| match c {
-                crate::cell::Cell::Int(i) => Some(*i as u8),
-                _ => None,
-            }).collect();
-            let img = ImageBuffer::<Rgba<u8>, _>::from_raw(w, h, pixels).ok_or(ErrorCode::DomainError)?;
+            let pixels: Vec<u8> = cells
+                .iter()
+                .filter_map(|c| match c {
+                    crate::cell::Cell::Int(i) => Some(*i as u8),
+                    _ => None,
+                })
+                .collect();
+            let img =
+                ImageBuffer::<Rgba<u8>, _>::from_raw(w, h, pixels).ok_or(ErrorCode::DomainError)?;
             let _ = DynamicImage::ImageRgba8(img);
             Ok(ValueP::char_vector(
                 &"ok".chars().map(|c| c as u32).collect::<Vec<_>>(),

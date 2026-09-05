@@ -287,7 +287,8 @@ pub fn tokenize(line: &str) -> AplResult<Vec<Tok>> {
                 i += 1; // closing quote
                 toks.push(Tok::Str(s));
             }
-            '¯' | '−' if i == 0 || !matches!(chars[i - 1], c if c.is_ascii_digit() || c == '.') => {
+            '¯' | '−' if i == 0 || !matches!(chars[i - 1], c if c.is_ascii_digit() || c == '.') =>
+            {
                 // leading negative sign on a number (both ¯ and − are accepted)
                 let (tok, len) = scan_number(&chars[i..])?;
                 debug_assert!(len > 0);
@@ -533,7 +534,10 @@ fn scan_number(chars: &[char]) -> AplResult<(Option<Tok>, usize)> {
             i += 1;
         } else if (c == 'e' || c == 'E')
             && i + 1 < chars.len()
-            && (chars[i + 1].is_ascii_digit() || chars[i + 1] == '¯' || chars[i + 1] == '−' || chars[i + 1] == '-')
+            && (chars[i + 1].is_ascii_digit()
+                || chars[i + 1] == '¯'
+                || chars[i + 1] == '−'
+                || chars[i + 1] == '-')
         {
             num.push('e');
             i += 1;

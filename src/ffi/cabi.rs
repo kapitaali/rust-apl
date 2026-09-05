@@ -74,7 +74,9 @@ impl CAbiBinding {
             // Unwrap scalar Pointer to look at inner value for explosion
             let inner_v = if v.is_scalar() {
                 if let Some(Cell::Pointer(p)) = v.first_cell() {
-                    ValueP { inner: p.value.clone() }
+                    ValueP {
+                        inner: p.value.clone(),
+                    }
                 } else {
                     v.clone()
                 }
@@ -85,7 +87,8 @@ impl CAbiBinding {
             if n == 0 && input_args == 0 {
                 Vec::new()
             } else if n > 1 && n as usize == input_args && inner_v.shape().get_rank() >= 1 {
-                inner_v.cells()
+                inner_v
+                    .cells()
                     .iter()
                     .map(|c| match c {
                         Cell::Pointer(p) => ValueP {
