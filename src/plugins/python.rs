@@ -272,6 +272,7 @@ mod tests {
         let mut reg = PluginRegistrar {
             func_table: &mut func_table,
             sysvars: &mut sysvars,
+            hooks: None,
         };
 
         plugin.register(&mut reg).unwrap();

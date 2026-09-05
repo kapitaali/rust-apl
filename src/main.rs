@@ -175,7 +175,7 @@ fn main() {
 
     // Initialize plugins (Phase 6)
     if let Err(e) =
-        apl::plugin_system::init_plugins(&mut env.funcs, &mut std::collections::HashMap::new())
+        apl::plugin_system::init_plugins(&mut env.funcs, &mut std::collections::HashMap::new(), &mut env.hooks)
     {
         eprintln!("Warning: plugin initialization failed: {}", e);
     }

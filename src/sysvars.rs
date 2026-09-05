@@ -107,6 +107,12 @@ pub fn get_ct(env: &crate::parser::Environment) -> AplResult<f64> {
 /// execute a system command (without the leading ')').
 /// Returns output lines to print; Ok(None) for )OFF handled by caller.
 pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Vec<String>> {
+    // Run plugin before_syscmd hooks
+    for hook in &env.hooks {
+        if let Err(e) = hook.before_syscmd(cmd_line) {
+            return Some(vec![format!("SECURITY ERROR: {}", e)]);
+        }
+    }
     let mut parts = cmd_line.split_whitespace();
     let cmd = parts.next().unwrap_or("").to_uppercase();
     match cmd.as_str() {

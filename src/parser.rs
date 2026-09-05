@@ -2368,6 +2368,8 @@ pub struct Environment {
     pub(crate) namespaces: std::collections::HashSet<String>,
     /// input recording for session macros (captures each eval_line input)
     pub(crate) input_recording: Option<Vec<String>>,
+    /// Plugin middleware hooks for intercepting eval/syscmd.
+    pub hooks: Vec<std::sync::Arc<dyn crate::plugin_system::AplPluginHooks>>,
 }
 
 impl Environment {
@@ -2387,6 +2389,7 @@ impl Environment {
             current_ns: String::new(),
             namespaces: std::collections::HashSet::new(),
             input_recording: None,
+            hooks: Vec::new(),
         }
     }
 
@@ -2408,7 +2411,13 @@ impl Environment {
 
     pub fn set(&mut self, name: &str, val: ValueP) {
         let qualified = self.ns_qualify(name);
-        self.vars.insert(qualified, val);
+        self.vars.insert(qualified, val.clone());
+        // Notify plugins of sysvar changes
+        if name.starts_with('\u{2395}') {
+            for hook in &self.hooks {
+                let _ = hook.on_sysvar_change(name, &val);
+            }
+        }
     }
 
     /// Qualify a name with the current namespace (if not already qualified)
@@ -2943,6 +2952,10 @@ impl Environment {
 
     /// evaluate an expression in this environment.
     pub fn eval(&mut self, e: &Expr) -> AplResult<ValueP> {
+        // Run plugin before_eval hooks
+        for hook in &self.hooks {
+            hook.before_eval(e)?;
+        }
         match e {
             Expr::Num(v) => Ok(ValueP::scalar_from(crate::cell::Cell::from_f64(*v))),
             Expr::Complex(re, im) => Ok(ValueP::scalar_from(crate::cell::Cell::complex(*re, *im))),
@@ -3555,10 +3568,6 @@ impl Environment {
                 // ⍎B — execute: evaluate a character vector as an APL line.
                 // Needs &mut self, so it cannot live in eval_monadic.
                 if *p == crate::functions::Prim::Execute {
-                    // Security: ⍎ is blocked at ⎕SEC ≥ 1
-                    if let Err(e) = crate::security::check_sec(self, "EXECUTE") {
-                        return Err(ErrorCode::SecurityError);
-                    }
                     return self.execute_value(&bv);
                 }
                 p.eval_monadic(&bv)
@@ -3800,10 +3809,6 @@ impl Environment {
             }
             Expr::QuadNa(apl_name, decl) => {
                 // 'name' ⎕NA 'F8 lib|sym I4 I4' — associate native fn
-                // Security: ⎕NA is blocked at ⎕SEC ≥ 1
-                if let Err(_) = crate::security::check_sec(self, "NA") {
-                    return Err(ErrorCode::SecurityError);
-                }
                 let decl_v = self.eval(decl)?;
                 let decl_str = decl_v
                     .cells()

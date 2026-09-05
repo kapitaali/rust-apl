@@ -106,6 +106,7 @@ mod tests {
         let mut reg = crate::plugin_system::PluginRegistrar {
             func_table: &mut func_table,
             sysvars: &mut sysvars,
+            hooks: None,
         };
 
         plugin.register(&mut reg).unwrap();

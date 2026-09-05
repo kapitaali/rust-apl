@@ -4,12 +4,12 @@
 //! Static plugins are compiled into the binary; dynamic plugins are loaded
 //! at runtime via ⎕LOADSO.
 
+use crate::functions_def::FunctionTable;
+use crate::parser::Expr;
+use crate::types::{AplResult, ErrorCode};
+use crate::value::ValueP;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-use crate::functions_def::FunctionTable;
-use crate::types::AplResult;
-use crate::value::ValueP;
 
 /// Plugin metadata.
 #[derive(Debug, Clone)]
@@ -23,6 +23,32 @@ pub struct PluginInfo {
 pub struct PluginRegistrar<'a> {
     pub func_table: &'a mut FunctionTable,
     pub sysvars: &'a mut HashMap<String, ValueP>,
+    /// Mutable reference to the environment's hook list, if available.
+    pub hooks: Option<&'a mut Vec<Arc<dyn AplPluginHooks>>>,
+}
+
+/// Middleware hooks that plugins can implement to intercept operations.
+///
+/// Hooks are called at key points during evaluation and system command
+/// execution. A hook returning `Err` blocks the operation.
+pub trait AplPluginHooks: Send + Sync {
+    /// Called before evaluating any expression.
+    /// Return `Err` to block the evaluation.
+    fn before_eval(&self, _expr: &Expr) -> AplResult<()> {
+        Ok(())
+    }
+
+    /// Called before running any system command.
+    /// Return `Err` to block the command.
+    fn before_syscmd(&self, _cmd: &str) -> AplResult<()> {
+        Ok(())
+    }
+
+    /// Called when a system variable is set.
+    /// `name` is the full name (e.g., "⎕SEC").
+    fn on_sysvar_change(&self, _name: &str, _value: &ValueP) -> AplResult<()> {
+        Ok(())
+    }
 }
 
 /// Core trait for all plugins.
@@ -34,6 +60,10 @@ pub trait AplPlugin: Send + Sync {
     }
     fn shutdown(&self) -> AplResult<()> {
         Ok(())
+    }
+    /// Return `Some(hooks)` to register middleware hooks for this plugin.
+    fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> {
+        None
     }
 }
 
@@ -80,6 +110,93 @@ impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Initialize the plugin system with all static plugins.
+/// Called once at interpreter startup.
+#[allow(dead_code)]
+pub fn init_plugins(
+    func_table: &mut FunctionTable,
+    sysvars: &mut HashMap<String, ValueP>,
+    hooks: &mut Vec<Arc<dyn AplPluginHooks>>,
+) -> AplResult<()> {
+    let mut reg = PluginRegistrar {
+        func_table,
+        sysvars,
+        hooks: None,
+    };
+
+    // Collect hooks from each plugin during registration
+    let mut collected_hooks: Vec<Arc<dyn AplPluginHooks>> = Vec::new();
+
+    // Register static plugins based on compile-time features
+    #[cfg(feature = "plugin-plot")]
+    {
+        let plugin = crate::plugins::plot::PlotPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-png")]
+    {
+        let plugin = crate::plugins::png::PngPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-sql")]
+    {
+        let plugin = crate::plugins::sql::SqlPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-fft")]
+    {
+        let plugin = crate::plugins::fft::FftPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-python")]
+    {
+        let plugin = crate::plugins::python::PythonPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-gtk")]
+    {
+        let plugin = crate::plugins::gtk::GtkPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    #[cfg(feature = "plugin-cdr")]
+    {
+        let plugin = crate::plugins::cdr::CdrPlugin::new();
+        if let Some(h) = plugin.hooks() {
+            collected_hooks.push(h);
+        }
+        plugin.register(&mut reg)?;
+    }
+
+    // Merge collected hooks into the output
+    hooks.extend(collected_hooks);
+
+    Ok(())
 }
 
 /// Global plugin registry.
@@ -143,9 +260,11 @@ mod tests {
     fn test_plugin_registrar() {
         let mut func_table = FunctionTable::new();
         let mut sysvars = HashMap::new();
+        let mut hooks = Vec::new();
         let mut reg = PluginRegistrar {
             func_table: &mut func_table,
             sysvars: &mut sysvars,
+            hooks: Some(&mut hooks),
         };
 
         let plugin = TestPlugin;
@@ -166,61 +285,4 @@ mod tests {
         assert_eq!(info.version, "0.0.1");
         assert_eq!(info.description, "Test plugin");
     }
-}
-/// Initialize the plugin system with all static plugins.
-/// Called once at interpreter startup.
-#[allow(dead_code)]
-pub fn init_plugins(
-    func_table: &mut FunctionTable,
-    sysvars: &mut HashMap<String, ValueP>,
-) -> AplResult<()> {
-    let mut reg = PluginRegistrar {
-        func_table,
-        sysvars,
-    };
-
-    // Register static plugins based on compile-time features
-    #[cfg(feature = "plugin-plot")]
-    {
-        let plugin = crate::plugins::plot::PlotPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-png")]
-    {
-        let plugin = crate::plugins::png::PngPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-sql")]
-    {
-        let plugin = crate::plugins::sql::SqlPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-fft")]
-    {
-        let plugin = crate::plugins::fft::FftPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-python")]
-    {
-        let plugin = crate::plugins::python::PythonPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-gtk")]
-    {
-        let plugin = crate::plugins::gtk::GtkPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    #[cfg(feature = "plugin-cdr")]
-    {
-        let plugin = crate::plugins::cdr::CdrPlugin::new();
-        plugin.register(&mut reg)?;
-    }
-
-    Ok(())
 }
