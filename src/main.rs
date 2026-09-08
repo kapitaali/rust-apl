@@ -306,11 +306,10 @@ fn main() {
     }
 }
 
-/// Serve mode: listen on a TCP port, evaluate APL expressions sent by clients.
-/// Each connection gets its own Environment. Lines starting with "EVAL " are
-/// evaluated; the result (or error) is sent back as a single line.
+/// Serve mode: listen on a TCP port, speak the RIDE binary-framed protocol.
+/// Framing: [4 bytes BE total length][4 bytes "RIDE"][JSON payload]
+/// This matches the protocol used by the RIDE editor (src/cn.js in the RIDE repo).
 fn serve_mode(port: u16) {
-    use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
 
     let listener = match TcpListener::bind(format!("127.0.0.1:{port}")) {
@@ -332,8 +331,18 @@ fn serve_mode(port: u16) {
     }
 }
 
-fn handle_client(stream: std::net::TcpStream) {
-    use std::io::{BufRead, BufReader};
+/// Frame a JSON payload for the RIDE protocol.
+fn frame(payload: &str) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8 + payload.len());
+    let total_len = (8 + payload.len()) as u32;
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(b"RIDE");
+    buf.extend_from_slice(payload.as_bytes());
+    buf
+}
+
+fn handle_client(mut stream: std::net::TcpStream) {
+    use std::io::{Read, Write};
 
     let mut env = Environment::new();
     apl::sysvars::init_sysvars(&mut env);
@@ -343,54 +352,121 @@ fn handle_client(stream: std::net::TcpStream) {
         &mut env.hooks,
     );
 
-    let reader = BufReader::new(&stream);
-    let mut writer = &stream;
-    const END: &[u8] = b"\x1E\n"; // Record Separator as end-of-response marker
+    let mut buf = [0u8; 4096];
+    let mut acc = Vec::new();
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => acc.extend_from_slice(&buf[..n]),
             Err(_) => break,
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
         }
 
-        // EVAL <expr> — evaluate and return result
-        let expr = if let Some(e) = trimmed.strip_prefix("EVAL ") {
-            e
-        } else {
-            trimmed
-        };
+        // Process all complete frames in the accumulator.
+        loop {
+            if acc.len() < 8 {
+                break;
+            }
+            let frame_len = u32::from_be_bytes([acc[0], acc[1], acc[2], acc[3]]) as usize;
+            if acc.len() < frame_len {
+                break; // incomplete frame
+            }
+            // Skip the 4-byte "RIDE" magic, extract JSON payload.
+            let payload = String::from_utf8_lossy(&acc[8..frame_len]).to_string();
+            acc.drain(0..frame_len);
 
-        if expr == ")OFF" || expr == ")off" {
-            let _ = writer.write_all(b"OK\x1E\n");
-            break;
+            if payload.starts_with('[') {
+                // JSON command: ["Name", {...}]
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    if let Some(arr) = val.as_array() {
+                        let cmd = arr[0].as_str().unwrap_or("");
+                        let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
+                        handle_command(&mut stream, &mut env, cmd, &args);
+                    }
+                }
+            } else if payload.starts_with("SupportedProtocols=") {
+                // Handshake step 1: client sends supported protocols
+                let _ = stream.write_all(&frame("UsingProtocol=2"));
+            }
         }
+    }
+}
 
-        match env.eval_line(expr) {
-            Ok(Some(v)) => {
-                let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
-                let all_chars =
-                    !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
-                if v.rank() >= 2 || all_chars {
-                    let lines = apl::boxdisplay::render_plain_with_pp(&v, pp);
-                    let _ = writer.write_all(lines.join("\n").as_bytes());
-                    let _ = writer.write_all(END);
-                } else {
-                    let _ = writer.write_all(format_value(&v, pp).as_bytes());
-                    let _ = writer.write_all(END);
+fn handle_command(
+    stream: &mut std::net::TcpStream,
+    env: &mut Environment,
+    cmd: &str,
+    args: &serde_json::Value,
+) {
+    use std::io::Write;
+
+    match cmd {
+        "Identify" => {
+            let reply = serde_json::json!(["ReplyIdentify", {
+                "identity": 1,
+                "version": "GNU APL 2.0 (Rust)",
+                "protocolVersion": 2
+            }]);
+            let _ = stream.write_all(&frame(&reply.to_string()));
+        }
+        "Connect" => {
+            let reply = serde_json::json!(["ReplyConnect", {
+                "remoteId": args["remoteId"],
+                "protocolVersion": 2
+            }]);
+            let _ = stream.write_all(&frame(&reply.to_string()));
+        }
+        "GetWindowLayout" => {
+            let reply = serde_json::json!(["ReplyGetWindowLayout", {
+                "windows": []
+            }]);
+            let _ = stream.write_all(&frame(&reply.to_string()));
+        }
+        "Execute" => {
+            let text = args["text"].as_str().unwrap_or("");
+            let expr = text.trim();
+            if expr.is_empty() {
+                return;
+            }
+            match env.eval_line(expr) {
+                Ok(Some(v)) => {
+                    let pp = apl::sysvars::get_pp(env).unwrap_or(10);
+                    let all_chars =
+                        !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
+                    let result = if v.rank() >= 2 || all_chars {
+                        apl::boxdisplay::render_plain_with_pp(&v, pp).join("\n")
+                    } else {
+                        format_value(&v, pp)
+                    };
+                    let output = serde_json::json!(["AppendSessionOutput", {
+                        "result": result,
+                        "group": 0,
+                        "type": 0
+                    }]);
+                    let _ = stream.write_all(&frame(&output.to_string()));
+                }
+                Ok(None) => {
+                    // Assignment — send empty output so client gets a response
+                    let output = serde_json::json!(["AppendSessionOutput", {
+                        "result": "",
+                        "group": 0,
+                        "type": 0
+                    }]);
+                    let _ = stream.write_all(&frame(&output.to_string()));
+                }
+                Err(e) => {
+                    let rich = AplError::from(e).with_source_line(expr.to_string());
+                    let output = serde_json::json!(["AppendSessionOutput", {
+                        "result": format!("ERROR {rich}"),
+                        "group": 0,
+                        "type": 1
+                    }]);
+                    let _ = stream.write_all(&frame(&output.to_string()));
                 }
             }
-            Ok(None) => {
-                let _ = writer.write_all(b"OK\x1E\n");
-            }
-            Err(e) => {
-                let rich = AplError::from(e).with_source_line(expr.to_string());
-                let _ = writer.write_all(format!("ERROR {rich}").as_bytes());
-                let _ = writer.write_all(END);
-            }
+        }
+        _ => {
+            // Unknown command — ignore
         }
     }
 }
