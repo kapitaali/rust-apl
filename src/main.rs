@@ -164,6 +164,16 @@ fn format_nested(cells: &[apl::cell::Cell], pp: usize) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let quiet = args.iter().any(|a| a == "-q" || a == "--quiet");
+    let serve = args
+        .iter()
+        .position(|a| a == "--serve")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|p| p.parse::<u16>().ok());
+
+    if let Some(port) = serve {
+        serve_mode(port);
+        return;
+    }
 
     if !quiet {
         println!("GNU APL 2.0 (Rust) — experimental REPL");
@@ -293,5 +303,94 @@ fn main() {
     #[cfg(feature = "plugin-gtk")]
     {
         apl::plugins::gtk::gtk_wait_timeout(u64::MAX);
+    }
+}
+
+/// Serve mode: listen on a TCP port, evaluate APL expressions sent by clients.
+/// Each connection gets its own Environment. Lines starting with "EVAL " are
+/// evaluated; the result (or error) is sent back as a single line.
+fn serve_mode(port: u16) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    let listener = match TcpListener::bind(format!("127.0.0.1:{port}")) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("apl server: cannot bind port {port}: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("APL server listening on port {port}");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                std::thread::spawn(move || handle_client(stream));
+            }
+            Err(e) => eprintln!("Connection failed: {e}"),
+        }
+    }
+}
+
+fn handle_client(stream: std::net::TcpStream) {
+    use std::io::{BufRead, BufReader};
+
+    let mut env = Environment::new();
+    apl::sysvars::init_sysvars(&mut env);
+    let _ = apl::plugin_system::init_plugins(
+        &mut env.funcs,
+        &mut std::collections::HashMap::new(),
+        &mut env.hooks,
+    );
+
+    let reader = BufReader::new(&stream);
+    let mut writer = &stream;
+    const END: &[u8] = b"\x1E\n"; // Record Separator as end-of-response marker
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // EVAL <expr> — evaluate and return result
+        let expr = if let Some(e) = trimmed.strip_prefix("EVAL ") {
+            e
+        } else {
+            trimmed
+        };
+
+        if expr == ")OFF" || expr == ")off" {
+            let _ = writer.write_all(b"OK\x1E\n");
+            break;
+        }
+
+        match env.eval_line(expr) {
+            Ok(Some(v)) => {
+                let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
+                let all_chars =
+                    !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
+                if v.rank() >= 2 || all_chars {
+                    let lines = apl::boxdisplay::render_plain_with_pp(&v, pp);
+                    let _ = writer.write_all(lines.join("\n").as_bytes());
+                    let _ = writer.write_all(END);
+                } else {
+                    let _ = writer.write_all(format_value(&v, pp).as_bytes());
+                    let _ = writer.write_all(END);
+                }
+            }
+            Ok(None) => {
+                let _ = writer.write_all(b"OK\x1E\n");
+            }
+            Err(e) => {
+                let rich = AplError::from(e).with_source_line(expr.to_string());
+                let _ = writer.write_all(format!("ERROR {rich}").as_bytes());
+                let _ = writer.write_all(END);
+            }
+        }
     }
 }
