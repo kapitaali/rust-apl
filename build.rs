@@ -26,6 +26,10 @@ fn main() {
                             "python" => println!("cargo:rustc-cfg=feature=\"plugin-python\""),
                             "gtk" => println!("cargo:rustc-cfg=feature=\"plugin-gtk\""),
                             "cdr" => println!("cargo:rustc-cfg=feature=\"plugin-cdr\""),
+                            "java" => {
+                                println!("cargo:rustc-cfg=feature=\"plugin-java\"");
+                                println!("cargo:rustc-cfg=java_home");
+                            }
                             _ => {}
                         }
                     }

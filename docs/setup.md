@@ -77,6 +77,7 @@ fft = "static"
 python = "disabled"
 gtk = "disabled"
 cdr = "disabled"
+java = "disabled"     # requires JDK; builds libapl_java.so
 ```
 
 Or build with features directly:
@@ -84,6 +85,25 @@ Or build with features directly:
 ```sh
 cargo build --release --features "plugin-plot,plugin-png,plugin-sql,plugin-fft"
 ```
+
+### Java FFI
+
+Java support requires a JDK. The Java bridge is a separate shared library (`libapl_java.so`) loaded at runtime via `⎕NA`, not compiled into the main binary.
+
+1. Set `JAVA_HOME` to your JDK installation
+2. Enable Java in `config.toml`:
+   ```toml
+   [plugins.plugin_states]
+   java = "static"
+
+   [plugins.java]
+   home = "/usr/lib/jvm/java-17-openjdk"  # your JAVA_HOME
+   ```
+3. Build the Java bridge:
+   ```sh
+   JAVA_HOME=/path/to/jdk cargo build -p apl-java --features java
+   ```
+4. The .so will be at `target/debug/libapl_java.so`
 
 ### Development build
 

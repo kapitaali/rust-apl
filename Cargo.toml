@@ -40,7 +40,8 @@ plugin-python = ["dep:pyo3"]
 plugin-gtk = []
 plugin-cdr = []
 plugin-security = []
-plugins = ["plugin-plot", "plugin-png", "plugin-sql", "plugin-fft", "plugin-python", "plugin-gtk", "plugin-cdr", "plugin-security"]
+plugin-java = []
+plugins = ["plugin-plot", "plugin-png", "plugin-sql", "plugin-fft", "plugin-python", "plugin-gtk", "plugin-cdr", "plugin-security", "plugin-java"]
 
 [build-dependencies]
 toml = "0.8"

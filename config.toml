@@ -15,6 +15,7 @@ fft = "static"        # Fast Fourier Transform (requires rustfft)
 png = "static"        # PNG image read/write (requires image crate)
 cdr = "static"        # CDR binary interchange format
 security = "static"   # Security level (⎕SEC) extension
+java = "disabled"     # Java FFI via JNI (requires JDK, builds libapl_java.so)
 
 [plugins.plot]
 backend = "plotters"    # "plotters" or "gtk"
@@ -30,6 +31,13 @@ executable = "python3"
 
 [plugins.gtk]
 version = "4"
+
+[plugins.java]
+# Java FFI requires a JDK. Set JAVA_HOME before building.
+# When "static", builds libapl_java.so via `cargo build -p apl-java --features java`
+# The .so is loaded at runtime via ⎕NA, not compiled into the main binary.
+state = "disabled"
+home = ""  # JAVA_HOME path (e.g., /usr/lib/jvm/java-17-openjdk)
 
 [plugins.fft]
 backend = "rustfft"     # "rustfft" or "gsl"
