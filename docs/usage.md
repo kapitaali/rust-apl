@@ -389,6 +389,58 @@ echo 'FAC←{⍵=0:1 ⋄ ⍵×∇ ⍵-1} ⋄ FAC 5' | ./target/release/apl
 
 ---
 
+## TCP Server Mode
+
+Run the interpreter as a TCP server for clients (like the rust-apl-editor) to connect to:
+
+```sh
+$ ./target/release/apl --serve 4502
+APL server listening on port 4502
+```
+
+Each connection gets its own `Environment`, so variables persist across evaluations within a session.
+
+### Protocol
+
+The server speaks the RIDE binary-framed protocol (same as the [RIDE editor](https://github.com/Dyalog/ride)):
+
+```
+Framing: [4 bytes BE total length][4 bytes "RIDE"][JSON payload]
+Commands: ["Execute", {"text": "2+2"}]
+Responses: ["AppendSessionOutput", {"result": "4"}]
+```
+
+### Handshake
+
+1. Client sends: `SupportedProtocols=2`
+2. Server replies: `UsingProtocol=2`
+3. Client sends: `["Identify", {"apiVersion":1, "identity":1}]`
+4. Server replies: `["ReplyIdentify", {...}]`
+5. Client sends: `["Connect", {"remoteId":2}]`
+6. Server replies: `["ReplyConnect", {...}]`
+
+### Example session
+
+```sh
+# Terminal 1: start server
+$ ./target/release/apl --serve 4502
+
+# Terminal 2: connect and evaluate
+$ nc 127.0.0.1 4502
+# (send handshake frames, then:)
+["Execute", {"text": "2+2"}]
+["AppendSessionOutput", {"result": "4"}]
+["Execute", {"text": "2 3⍴⍳6"}]
+["AppendSessionOutput", {"result": "0 1 2\n3 4 5"}]
+```
+
+### Error handling
+
+- Syntax errors: `["AppendSessionOutput", {"result": "ERROR SYNTAX ERROR: ...", "type": 1}]`
+- Assignments: `["AppendSessionOutput", {"result": "", "type": 0}]` (empty output)
+
+---
+
 ## Troubleshooting
 
 ### "Nix socket" warning
