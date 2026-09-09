@@ -517,12 +517,31 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 }
             }
         }
+        "HELP" => {
+            // )HELP — list all available system commands
+            let commands = [
+                "VARS", "FNS", "LIB", "DIGITS", "WIDTH", "CONTINUE", "ERASE",
+                "RESET", "CLEAR", "RECORD", "PLAY", "STOP", "DIR", "SVS",
+                "HISTORY", "SAVE", "LOAD", "SI", "SYMBOLS", "OUT", "DROP",
+                "VERSION", "HELP", "OFF",
+            ];
+            Some(vec![
+                "Available system commands:".to_string(),
+                commands.join("  "),
+                String::new(),
+                "Usage: )COMMAND [args]".to_string(),
+            ])
+        }
+        "VERSION" => {
+            // )VERSION — show interpreter version
+            Some(vec![
+                "GNU APL 2.0 (Rust)".to_string(),
+                "experimental REPL".to_string(),
+            ])
+        }
         other => Some(vec![format!("UNKNOWN SYSTEM COMMAND: {})", other)]),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
