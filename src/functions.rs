@@ -79,6 +79,8 @@ pub enum Prim {
     /// ⍥ (U+2365) — Over (Dyalog, NOT GNU APL)
     #[cfg(feature = "unofficial-ext")]
     Over,
+    /// √ (U+221A) — Square root (Kap extension)
+    Sqrt,
 }
 
 impl Prim {
@@ -100,6 +102,7 @@ impl Prim {
             "*" | "⋆" => Prim::Exponential,
             "○" => Prim::PiTimes,
             "⍟" => Prim::NatLog,
+            "√" => Prim::Sqrt,
             "∣" | "|" => Prim::Magnitude,
             "?" => Prim::Roll,      // ? = roll
             "∼" => Prim::Without,   // ∼ = without (set difference)
@@ -160,6 +163,7 @@ impl Prim {
             // ERROR while `2*10` worked.
             Prim::Power => map_cells(b, cell::bif_exponential),
             Prim::NatLog => map_cells(b, cell::bif_nat_log),
+            Prim::Sqrt => map_cells(b, cell::bif_sqrt),
             Prim::Ceiling => map_cells(b, cell::bif_ceiling),
             Prim::Floor => map_cells(b, cell::bif_floor),
             Prim::Magnitude => map_cells(b, cell::bif_magnitude),

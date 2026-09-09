@@ -170,8 +170,15 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|p| p.parse::<u16>().ok());
 
+    let ride = args.iter().any(|a| a == "--ride");
+
     if let Some(port) = serve {
         serve_mode(port);
+        return;
+    }
+
+    if ride {
+        ride_mode();
         return;
     }
 
@@ -469,4 +476,157 @@ fn handle_command(
             // Unknown command — ignore
         }
     }
+}
+
+/// Ride mode: connect to a RIDE server (like stride) as a client.
+/// Reads RIDE_INIT from environment to determine where to connect.
+fn ride_mode() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let ride_init = std::env::var("RIDE_INIT").unwrap_or_default();
+    // Parse "CONNECT:host:port" format
+    let parts: Vec<&str> = ride_init.split(':').collect();
+    if parts.len() != 3 || parts[0] != "CONNECT" {
+        eprintln!("apl --ride: RIDE_INIT must be in format CONNECT:host:port");
+        eprintln!("  e.g., RIDE_INIT=CONNECT:localhost:4502");
+        std::process::exit(1);
+    }
+
+    let host = parts[1];
+    let port: u16 = parts[2].parse().unwrap_or(4502);
+    let addr = format!("{host}:{port}");
+
+    println!("APL RIDE client connecting to {addr}...");
+
+    let mut stream = match TcpStream::connect(&addr) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("apl --ride: cannot connect to {addr}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Connected to RIDE server at {addr}");
+
+    // Perform handshake
+    if !perform_ride_handshake(&mut stream) {
+        eprintln!("apl --ride: handshake failed");
+        std::process::exit(1);
+    }
+
+    println!("Handshake complete. Waiting for commands...");
+
+    // Initialize interpreter
+    let mut env = Environment::new();
+    apl::sysvars::init_sysvars(&mut env);
+    let _ = apl::plugin_system::init_plugins(
+        &mut env.funcs,
+        &mut std::collections::HashMap::new(),
+        &mut env.hooks,
+    );
+
+    // Process commands from the server
+    let mut buf = [0u8; 4096];
+    let mut acc = Vec::new();
+
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                println!("Server closed connection");
+                break;
+            }
+            Ok(n) => acc.extend_from_slice(&buf[..n]),
+            Err(e) => {
+                eprintln!("Read error: {e}");
+                break;
+            }
+        }
+
+        // Process all complete frames
+        loop {
+            if acc.len() < 8 {
+                break;
+            }
+            let frame_len = u32::from_be_bytes([acc[0], acc[1], acc[2], acc[3]]) as usize;
+            if acc.len() < frame_len {
+                break; // incomplete frame
+            }
+            let payload = String::from_utf8_lossy(&acc[8..frame_len]).to_string();
+            acc.drain(0..frame_len);
+
+            if payload.starts_with('[') {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    if let Some(arr) = val.as_array() {
+                        let cmd = arr[0].as_str().unwrap_or("");
+                        let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
+                        handle_command(&mut stream, &mut env, cmd, &args);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Perform the RIDE handshake as a client.
+fn perform_ride_handshake(stream: &mut std::net::TcpStream) -> bool {
+    use std::io::{Read, Write};
+
+    // Step 1: Send SupportedProtocols=2
+    if stream.write_all(b"SupportedProtocols=2").is_err() {
+        return false;
+    }
+
+    // Step 2: Read UsingProtocol=2
+    let mut buf = [0u8; 1024];
+    let n = match stream.read(&mut buf) {
+        Ok(0) => return false,
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let response = String::from_utf8_lossy(&buf[..n]);
+    if !response.contains("UsingProtocol=2") {
+        return false;
+    }
+
+    // Step 3: Send ["Identify", {...}]
+    let identify = serde_json::json!(["Identify", {
+        "apiVersion": 1,
+        "identity": 1
+    }]);
+    let identify_frame = frame(&identify.to_string());
+    if stream.write_all(&identify_frame).is_err() {
+        return false;
+    }
+
+    // Step 4: Read ["ReplyIdentify", {...}]
+    let n = match stream.read(&mut buf) {
+        Ok(0) => return false,
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let response = String::from_utf8_lossy(&buf[..n]);
+    if !response.contains("ReplyIdentify") {
+        return false;
+    }
+
+    // Step 5: Send ["Connect", {"remoteId":2}]
+    let connect = serde_json::json!(["Connect", {"remoteId":2}]);
+    let connect_frame = frame(&connect.to_string());
+    if stream.write_all(&connect_frame).is_err() {
+        return false;
+    }
+
+    // Step 6: Read ["ReplyConnect", {...}]
+    let n = match stream.read(&mut buf) {
+        Ok(0) => return false,
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let response = String::from_utf8_lossy(&buf[..n]);
+    if !response.contains("ReplyConnect") {
+        return false;
+    }
+
+    true
 }

@@ -487,6 +487,30 @@ pub fn bif_nat_log(b: &Cell) -> AplResult<Cell> {
     })
 }
 
+/// Square root: √B
+pub fn bif_sqrt(b: &Cell) -> AplResult<Cell> {
+    Ok(match b {
+        Cell::Int(v) => {
+            if *v < 0 {
+                return Err(ErrorCode::DomainError);
+            }
+            Cell::Float((*v as APLFloat).sqrt())
+        }
+        Cell::Float(v) => {
+            if *v < 0.0 {
+                return Err(ErrorCode::DomainError);
+            }
+            Cell::Float(v.sqrt())
+        }
+        Cell::Complex(c) => {
+            let mag = (c.re * c.re + c.im * c.im).sqrt();
+            let theta = c.im.atan2(c.re) / 2.0;
+            Cell::Complex(APLComplex::new(mag * theta.cos(), mag * theta.sin()))
+        }
+        _ => return Err(ErrorCode::DomainError),
+    })
+}
+
 /// Dyadic logarithm: A⍟B = log_A(B) = ln(B) / ln(A)
 pub fn bif_logarithm(a: &Cell, b: &Cell) -> AplResult<Cell> {
     // For complex or mixed, compute via complex logs
