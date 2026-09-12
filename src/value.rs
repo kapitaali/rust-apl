@@ -178,6 +178,13 @@ impl ValueP {
         }
     }
 
+    /// an empty value (for optional left args in axis-form quad calls)
+    pub fn empty() -> ValueP {
+        ValueP {
+            inner: Arc::new(ValueInner::new(Shape::vector(0), vec![])),
+        }
+    }
+
     /// a new vector of length `len` filled with IntCell(0)
     pub fn vector(len: ShapeItem) -> ValueP {
         ValueP {

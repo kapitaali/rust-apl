@@ -1422,6 +1422,7 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
         // ─────────────────────────────────────────────────────────────────
         22 => {
             // fprintf(Bh, fmt, args...).
+            // Cells: [22, handle, fmt_chars..., args...]
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
@@ -1540,21 +1541,41 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
 /// ⎕FIO dyadic with axis: ⎕FIO[X] B — subfunction X on value B.
 /// Selected by the parser via bracket indexing. Mirrors
 /// Quad_FIO.cc eval_XB cases not handled above.
-pub fn quad_fio_axis(x: i64, b: &ValueP) -> AplResult<ValueP> {
-    // Prepend X to B's cells and dispatch through the monadic path.
-    // Flatten nested vectors by dereferencing Pointer cells so that
-    // strand arguments like ⎕FIO[22] h 'fmt' 42 become a flat ravel.
-    let mut cells = vec![Cell::Int(x)];
-    for c in b.cells() {
+/// Recursively flatten a ValueP into individual Cells.
+/// Dereferences Pointer cells, so nested strings become their char cells,
+/// and enclosed scalars become their inner cell.
+fn flatten_value(cells: &mut Vec<Cell>, v: &ValueP) {
+    for c in v.cells() {
         match c {
             Cell::Pointer(p) => {
-                for pc in p.value.cells() {
-                    cells.push(pc.clone());
+                let inner = ValueP { inner: p.value.clone() };
+                let inner_cells = inner.cells();
+                // Check if it's a string (all chars)
+                if inner_cells.iter().all(|c| matches!(c, Cell::Char(_))) {
+                    // String: add chars directly
+                    for pc in inner_cells {
+                        cells.push(pc.clone());
+                    }
+                } else if inner_cells.len() == 1 {
+                    // Enclosed scalar: disclose and recurse
+                    flatten_value(cells, &inner);
+                } else {
+                    // Nested vector: recurse
+                    flatten_value(cells, &inner);
                 }
             }
             _ => cells.push(c.clone()),
         }
     }
+}
+
+pub fn quad_fio_axis(x: i64, a: &ValueP, b: &ValueP) -> AplResult<ValueP> {
+    // A ⎕FIO[X] B — dyadic axis form.
+    // For subfunction 22 (fprintf): A = [format, args...], B = file handle.
+    // Build: [22, handle, fmt_chars..., args...]
+    let mut cells = vec![Cell::Int(x)];
+    flatten_value(&mut cells, b);
+    flatten_value(&mut cells, a);
     let combined = ValueP::from_ravel_like(b, cells);
     quad_fio(&combined)
 }

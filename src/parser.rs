@@ -93,8 +93,10 @@ pub enum Expr {
     QuadMx(Box<Expr>),
     /// `⎕FIO B` — file I/O operations
     QuadFio(Box<Expr>),
-    /// `⎕FIO[X] B` — file I/O with subfunction axis
-    QuadFioAxis(Box<Expr>, Box<Expr>),
+    /// `A ⎕FIO[X] B` — file I/O with subfunction axis (dyadic).
+    /// Left arg A = [format, args...], right arg B = file handle.
+    /// For monadic `⎕FIO[X] B`, left is None.
+    QuadFioAxis(Box<Expr>, Option<Box<Expr>>, Box<Expr>),
     /// `⎕JSON B` — JSON parse/serialize
     QuadJson(Box<Expr>),
     /// `⎕XML B` — XML parse/serialize
@@ -1109,7 +1111,32 @@ fn parse_simple(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         if qname == "⎕PLOT" {
             let (rhs, rused) = parse_simple(&toks[used + 1..])?;
             used += 1 + rused;
-            return Ok((Expr::QuadPlotDyad(Box::new(lhs), Box::new(rhs)), used));
+            return Ok(((Expr::QuadPlotDyad(Box::new(lhs), Box::new(rhs))), used));
+        }
+    }
+
+    // dyadic axis call: A ⎕FIO[X] B — must be checked BEFORE the
+    // dyadic defined-function call (which would catch ⎕FIO as a name)
+    if let Some(Tok::Name(n)) = toks.get(used) {
+        if n == "⎕FIO" {
+            if matches!(toks.get(used + 1), Some(Tok::LBracket)) {
+                if let Some((parts, close)) = split_index_axes(&toks[used + 2..]) {
+                    if parts.len() == 1 && !parts[0].is_empty() {
+                        let (x, _) = parse_expr(&parts[0])?;
+                        let after = used + 2 + close + 1; // past ']'
+                        let (rhs, rused) =
+                            if toks.get(after)
+                                .map(|t| matches!(t, Tok::End | Tok::Semicolon))
+                                .unwrap_or(true)
+                            {
+                                (Expr::Zilde, 0)
+                            } else {
+                                parse_fio_arg(&toks[after..])?
+                            };
+                        return Ok((Expr::QuadFioAxis(Box::new(x), Some(Box::new(lhs.clone())), Box::new(rhs)), after + rused));
+                    }
+                }
+            }
         }
     }
 
@@ -1307,7 +1334,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                             } else {
                                 parse_fio_arg(&toks[after..])?
                             };
-                        return Ok((Expr::QuadFioAxis(Box::new(x), Box::new(b)), after + bused));
+                        return Ok((Expr::QuadFioAxis(Box::new(x), None, Box::new(b)), after + bused));
                     }
                 }
             }
@@ -4121,15 +4148,20 @@ impl Environment {
                 let bv = self.eval(arg)?;
                 crate::quad::quad_fio(&bv)
             }
-            Expr::QuadFioAxis(x, b) => {
-                // ⎕FIO[X] B — file I/O with subfunction axis
+            Expr::QuadFioAxis(x, a, b) => {
+                // A ⎕FIO[X] B — file I/O with subfunction axis (dyadic)
+                // or ⎕FIO[X] B (monadic, a = None)
                 if let Err(_) = crate::security::check_sec(self, "FIO") {
                     return Err(ErrorCode::SecurityError);
                 }
                 let xv = self.eval(x)?;
                 let bv = self.eval(b)?;
+                let av = match a {
+                    Some(a_expr) => self.eval(a_expr)?,
+                    None => ValueP::empty(),
+                };
                 let x_int = xv.first_cell().and_then(|c| c.get_int_value().ok()).unwrap_or(0);
-                crate::quad::quad_fio_axis(x_int, &bv)
+                crate::quad::quad_fio_axis(x_int, &av, &bv)
             }
             Expr::QuadJson(arg) => {
                 let bv = self.eval(arg)?;
@@ -5742,10 +5774,8 @@ mod tests {
         // {r←5 ⋄ 0:99 ⋄ r} — assignment BEFORE a guard. The prologue must
         // run unconditionally; the guard's fallback is the final `r`.
         let toks = tokenize("{r←5 ⋄ 0:99 ⋄ r}").unwrap();
-        eprintln!("TOKENS: {toks:?}");
-        let (e, _) = parse(&toks).unwrap();
-        eprintln!("EXPR: {e:#?}");
-        match &e {
+                let (e, _) = parse(&toks).unwrap();
+                match &e {
             Expr::Dfn(body, _) => match &**body {
                 Expr::DiamondList(stmts) => {
                     assert!(
