@@ -733,6 +733,46 @@ pub fn quad_map(env: &crate::parser::Environment, b: &ValueP) -> AplResult<Value
     Err(ErrorCode::DomainError)
 }
 
+/// Format-string interpreter for ⎕FIO.
+/// Handles %d, %f, %s, %c, %% with the args as cells. Returns a char vector
+/// (Unicode codepoints) — the APL representation of the resulting string.
+fn fio_sprintf(fmt: &str, args: &[Cell]) -> AplResult<Vec<u32>> {
+    let mut result = String::new();
+    let mut chars = fmt.chars().peekable();
+    let mut arg_idx = 0usize;
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            match chars.next() {
+                Some('%') => result.push('%'),
+                Some('d') => {
+                    let v = if arg_idx < args.len() { args[arg_idx].get_int_value()? } else { 0 };
+                    result.push_str(&format!("{}", v));
+                    arg_idx += 1;
+                }
+                Some('f') => {
+                    let v = if arg_idx < args.len() { args[arg_idx].get_int_value()? as f64 } else { 0.0 };
+                    result.push_str(&format!("{}", v));
+                    arg_idx += 1;
+                }
+                Some('s') => {
+                    let v = if arg_idx < args.len() { args[arg_idx].get_int_value()? } else { 0 };
+                    result.push_str(&format!("{}", v));
+                    arg_idx += 1;
+                }
+                Some('c') => {
+                    let v = if arg_idx < args.len() { args[arg_idx].get_int_value()? as u32 } else { 0 };
+                    result.push(char::from_u32(v).unwrap_or('?'));
+                    arg_idx += 1;
+                }
+                _ => return Err(ErrorCode::DomainError),
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    Ok(result.chars().map(|c| c as u32).collect())
+}
+
 // ---------------------------------------------------------------------------
 // ⎕FIO — file I/O
 // ---------------------------------------------------------------------------
@@ -770,16 +810,28 @@ fn get_open_files() -> std::sync::MutexGuard<'static, Option<HashMap<i64, File>>
 
 /// Extract a string from cells starting at `start`.
 fn cells_to_string(cells: &[Cell], start: usize) -> String {
-    cells[start..]
-        .iter()
-        .map(|c| {
-            if let Cell::Char(ch) = c {
-                char::from_u32(*ch).unwrap_or('?')
-            } else {
-                '?'
+    let mut result = String::new();
+    for c in &cells[start..] {
+        match c {
+            Cell::Char(ch) => {
+                if let Some(c32) = char::from_u32(*ch) {
+                    result.push(c32);
+                }
             }
-        })
-        .collect()
+            Cell::Pointer(p) => {
+                // Dereference the pointer and collect chars from the nested value.
+                for pc in p.value.cells() {
+                    if let Cell::Char(ch) = pc {
+                        if let Some(c32) = char::from_u32(*ch) {
+                            result.push(c32);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
 }
 
 pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
@@ -787,7 +839,6 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
     if cells.is_empty() {
         return Err(ErrorCode::DomainError);
     }
-
     let func = cells[0].get_int_value()?;
 
     match func {
@@ -852,14 +903,19 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // 1: open file (read-only).
+        // 1: open file (read-write so handles work for fprintf too).
         // ─────────────────────────────────────────────────────────────────
         1 => {
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
             let path = cells_to_string(cells, 1);
-            let file = File::open(&path).map_err(|_| ErrorCode::DomainError)?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(&path)
+                .map_err(|_| ErrorCode::DomainError)?;
             let mut handle = NEXT_FILE_HANDLE
                 .lock()
                 .map_err(|_| ErrorCode::DomainError)?;
@@ -1361,7 +1417,54 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // 58: sprintf — formatted output to string.
+        // 22: fprintf — format and write to file handle.
+        //   ⎕FIO[22] handle "format" args
+        // ─────────────────────────────────────────────────────────────────
+        22 => {
+            // fprintf(Bh, fmt, args...).
+            if cells.len() < 3 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            // Find format-string boundary: first non-Char cell after handle.
+            let mut fmt_end = 2usize;
+            while fmt_end < cells.len() {
+                match cells[fmt_end] {
+                    crate::cell::Cell::Char(_) => fmt_end += 1,
+                    _ => break,
+                }
+            }
+            // Build fmt string from chars[2..fmt_end].
+            let mut fmt = String::new();
+            for c in &cells[2..fmt_end] {
+                match c {
+                    crate::cell::Cell::Char(ch) => {
+                        if let Some(c32) = char::from_u32(*ch) { fmt.push(c32); }
+                    }
+                    _ => break,
+                }
+            }
+            let args = &cells[fmt_end..];
+            let formatted = fio_sprintf(&fmt, args)?;
+            let text: String = formatted.iter().filter_map(|c| char::from_u32(*c)).collect();
+            // Handle stdout/stderr special cases.
+            if handle == 1 {
+                print!("{}", text);
+                return Ok(ValueP::scalar_from(Cell::Int(text.len() as i64)));
+            }
+            if handle == 2 {
+                eprint!("{}", text);
+                return Ok(ValueP::scalar_from(Cell::Int(text.len() as i64)));
+            }
+            let mut open = get_open_files();
+            let file = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            use std::io::Write;
+            file.write_all(text.as_bytes()).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(text.len() as i64)))
+        }
         // Simplified format interpreter supporting %d, %f, %s, %c, %%.
         // ─────────────────────────────────────────────────────────────────
         58 => {
@@ -1438,10 +1541,20 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
 /// Selected by the parser via bracket indexing. Mirrors
 /// Quad_FIO.cc eval_XB cases not handled above.
 pub fn quad_fio_axis(x: i64, b: &ValueP) -> AplResult<ValueP> {
-    // The cleanest correct implementation: prepend X to B's cells and
-    // dispatch through the monadic path. This makes ⎕FIO[X] B ≡ ⎕FIO (X, B...)
+    // Prepend X to B's cells and dispatch through the monadic path.
+    // Flatten nested vectors by dereferencing Pointer cells so that
+    // strand arguments like ⎕FIO[22] h 'fmt' 42 become a flat ravel.
     let mut cells = vec![Cell::Int(x)];
-    cells.extend_from_slice(b.cells());
+    for c in b.cells() {
+        match c {
+            Cell::Pointer(p) => {
+                for pc in p.value.cells() {
+                    cells.push(pc.clone());
+                }
+            }
+            _ => cells.push(c.clone()),
+        }
+    }
     let combined = ValueP::from_ravel_like(b, cells);
     quad_fio(&combined)
 }

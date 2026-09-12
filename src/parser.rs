@@ -1305,7 +1305,7 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
                             {
                                 (Expr::Zilde, 0)
                             } else {
-                                parse(&toks[after..])?
+                                parse_fio_arg(&toks[after..])?
                             };
                         return Ok((Expr::QuadFioAxis(Box::new(x), Box::new(b)), after + bused));
                     }
@@ -1973,6 +1973,37 @@ fn parse_atom(toks: &[Tok]) -> AplResult<(Expr, usize)> {
         }
         _ => Err(ErrorCode::SyntaxError),
     }
+}
+
+/// Parse the right argument of `⎕FIO[X] B` — captures a strand of
+/// consecutive value tokens (names, nums, strings, parens) so that
+/// `⎕FIO[22] h 'fmt' 42` becomes a single strand argument.
+fn parse_fio_arg(toks: &[Tok]) -> AplResult<(Expr, usize)> {
+    let mut items: Vec<Expr> = Vec::new();
+    let mut used = 0;
+    loop {
+        match toks.get(used) {
+            Some(Tok::Num(v)) => { items.push(Expr::Num(*v)); used += 1; }
+            Some(Tok::Str(s)) => { items.push(Expr::Str(s.clone())); used += 1; }
+            Some(Tok::Name(n)) => { items.push(Expr::Var(n.clone())); used += 1; }
+            Some(Tok::LParen) => {
+                let (e, gu) = parse_term(&toks[used + 1..])?;
+                if !matches!(toks.get(used + 1 + gu), Some(Tok::RParen)) {
+                    return Err(ErrorCode::SyntaxError);
+                }
+                items.push(e);
+                used += gu + 2;
+            }
+            _ => break,
+        }
+    }
+    if items.is_empty() {
+        return Err(ErrorCode::SyntaxError);
+    }
+    if items.len() == 1 {
+        return Ok((items.pop().unwrap(), used));
+    }
+    Ok((Expr::NestedVec(items), used))
 }
 
 /// bracket indexing: `B[idx]` — pick ravel elements by index vector.
