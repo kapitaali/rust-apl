@@ -27,7 +27,8 @@ pub const SEC_VAR: &str = "⎕SEC";
 
 /// Initialize default system variables in a fresh Environment.
 pub fn init_sysvars(env: &mut crate::parser::Environment) {
-    env.set(IO_VAR, ValueP::scalar_from(crate::cell::Cell::Int(0)));
+    // ⎕IO defaults to 1, like GNU APL
+    env.set(IO_VAR, ValueP::scalar_from(crate::cell::Cell::Int(1)));
     let ct = std::sync::Arc::new(crate::value::ValueInner::new(
         crate::shape::Shape::scalar(),
         vec![crate::cell::Cell::Float(1e-13)],
@@ -613,11 +614,12 @@ mod tests {
     fn test_init_sysvars() {
         let mut env = crate::parser::Environment::new();
         init_sysvars(&mut env);
-        assert_eq!(get_io(&env).unwrap(), 0);
+        // ⎕IO defaults to 1, like GNU APL
+        assert_eq!(get_io(&env).unwrap(), 1);
         assert!((get_ct(&env).unwrap() - 1e-13).abs() < 1e-20);
         // readable as ordinary names
         let io = env.get("⎕IO").unwrap();
-        assert_eq!(io.first_cell().unwrap(), &Cell::Int(0));
+        assert_eq!(io.first_cell().unwrap(), &Cell::Int(1));
     }
 
     #[test]

@@ -508,19 +508,19 @@ mod tests {
         assert_eq!(
             m.cells(),
             &[
-                Cell::Int(0),
                 Cell::Int(1),
                 Cell::Int(2),
                 Cell::Int(3),
                 Cell::Int(4),
-                Cell::Int(5)
+                Cell::Int(5),
+                Cell::Int(6)
             ]
         );
         // rank-3
         let t = eval_val(&mut env2, "T+0");
         assert_eq!(t.rank(), 3);
         assert_eq!(t.element_count(), 8);
-        assert_eq!(t.cells()[7], Cell::Int(7));
+        assert_eq!(t.cells()[7], Cell::Int(8));
         // float matrix (⎕PP-independent: full f64 precision stored)
         let fm = eval_val(&mut env2, "FM+0");
         assert_eq!(fm.cells()[1], Cell::Float(0.25));

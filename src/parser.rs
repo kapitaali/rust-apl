@@ -4845,10 +4845,7 @@ mod tests {
     fn test_quad_io_iota_and_indexing() {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        // default ⎕IO=0
-        assert_eq!(eval_int_env(&mut env, "⍳3"), 0);
-        // switch to 1-based: ⍳3 → 1 2 3 and B[1] reads the FIRST element
-        env.eval_line("⎕IO←1").unwrap();
+        // default ⎕IO=1 (like GNU APL): ⍳3 → 1 2 3 and B[1] reads the FIRST element
         let v = eval_one(&mut env, "⍳3");
         assert_eq!(
             v.cells(),
@@ -4858,11 +4855,13 @@ mod tests {
                 crate::cell::Cell::Int(3)
             ][..]
         );
+        assert_eq!(eval_int_env(&mut env, "⍳3"), 1);
         env.eval_line("B←10 20 30").unwrap();
         assert_eq!(eval_int_env(&mut env, "B[1]"), 10);
         assert_eq!(eval_int_env(&mut env, "B[3]"), 30);
-        // back to 0
+        // switch to 0-based: ⍳3 starts at 0 and B[0] reads the FIRST element
         env.eval_line("⎕IO←0").unwrap();
+        assert_eq!(eval_int_env(&mut env, "⍳3"), 0);
         assert_eq!(eval_int_env(&mut env, "B[0]"), 10);
     }
 
@@ -4873,11 +4872,7 @@ mod tests {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
         env.eval_line("A←10 20 30").unwrap();
-        // ⎕IO=0: 20 is at 0-based position 1; 99 not found → len=3
-        assert_eq!(eval_int_env(&mut env, "A⍳20"), 1);
-        assert_eq!(eval_int_env(&mut env, "A⍳99"), 3);
-        // ⎕IO=1: positions shift up
-        env.eval_line("⎕IO←1").unwrap();
+        // ⎕IO=1 (default): 20 is at 1-based position 2; 99 not found → len+1 = 4
         assert_eq!(eval_int_env(&mut env, "A⍳20"), 2);
         assert_eq!(eval_int_env(&mut env, "A⍳99"), 4);
         // vector result: shape follows B
@@ -4886,6 +4881,10 @@ mod tests {
             v.cells(),
             &[crate::cell::Cell::Int(2), crate::cell::Cell::Int(3)][..]
         );
+        // ⎕IO=0: positions shift down
+        env.eval_line("⎕IO←0").unwrap();
+        assert_eq!(eval_int_env(&mut env, "A⍳20"), 1);
+        assert_eq!(eval_int_env(&mut env, "A⍳99"), 3);
     }
 
     #[test]
@@ -4894,10 +4893,7 @@ mod tests {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
         env.eval_line("B←30 10 20").unwrap();
-        // ⎕IO=0: ⍋B → 1 2 0 (10,20,30)
-        assert_eq!(eval_int_env(&mut env, "⍋B"), 1);
-        // ⎕IO=1: shifted to 2 3 1
-        env.eval_line("⎕IO←1").unwrap();
+        // ⎕IO=1 (default): ⍋B → 2 3 1 (10,20,30)
         let g = eval_one(&mut env, "⍋B");
         assert_eq!(
             g.cells(),
@@ -4917,6 +4913,9 @@ mod tests {
                 crate::cell::Cell::Int(30)
             ][..]
         );
+        // ⎕IO=0: shifted down, ⍋B → 1 2 0
+        env.eval_line("⎕IO←0").unwrap();
+        assert_eq!(eval_int_env(&mut env, "⍋B"), 1);
     }
 
     #[test]
@@ -4924,48 +4923,56 @@ mod tests {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
         env.eval_line("M←2 3⍴⍳6").unwrap();
-        // 1↑[0]M takes the first ROW (axis 0)
-        let z = eval_one(&mut env, "1↑[0]M");
+        // Axis numbers follow ⎕IO (=1 by default, like GNU APL):
+        // 1↑[1]M takes the first ROW (first axis)
+        let z = eval_one(&mut env, "1↑[1]M");
         assert_eq!(z.rank(), 2);
         assert_eq!(
             z.cells(),
             &[
-                crate::cell::Cell::Int(0),
                 crate::cell::Cell::Int(1),
-                crate::cell::Cell::Int(2)
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3)
             ][..]
         );
-        // 1↓[0]M drops the first ROW
-        let d = eval_one(&mut env, "1↓[0]M");
+        // 1↓[1]M drops the first ROW
+        let d = eval_one(&mut env, "1↓[1]M");
         assert_eq!(
             d.cells(),
             &[
-                crate::cell::Cell::Int(3),
                 crate::cell::Cell::Int(4),
-                crate::cell::Cell::Int(5)
+                crate::cell::Cell::Int(5),
+                crate::cell::Cell::Int(6)
             ][..]
         );
-        // axis-1 take keeps all rows, so it equals the per-axis form 2 2↑M.
+        // axis 0 is out of range under ⎕IO=1 (GNU APL: AXIS ERROR)
+        assert!(env.eval_line("1↑[0]M").is_err());
+        // axis-2 take keeps all rows, so it equals the per-axis form 2 2↑M.
         // Plain `2↑M` on a matrix is a LENGTH ERROR: the left argument of
         // take/drop needs one count PER AXIS (reference-verified).
-        let a = eval_one(&mut env, "2↑[1]M");
+        let a = eval_one(&mut env, "2↑[2]M");
         let b = eval_one(&mut env, "2 2↑M");
         assert_eq!(a.cells(), b.cells());
         assert!(env.eval_line("2↑M").is_err());
-        // rotate along axis 0 (columns rotate vertically): 1⌽[0]M
-        // rows [0 1 2],[3 4 5] → each COLUMN rotates: col0: 0,3→3,0; col1: 1,4→4,1; col2: 2,5→5,2
-        let r = eval_one(&mut env, "1⌽[0]M");
+        // rotate along the first axis (columns rotate vertically): 1⌽[1]M
+        // rows [1 2 3],[4 5 6] → each COLUMN rotates: col0: 1,4→4,1; col1: 2,5→5,2; col2: 3,6→6,3
+        let r = eval_one(&mut env, "1⌽[1]M");
         assert_eq!(
             r.cells(),
             &[
-                crate::cell::Cell::Int(3),
                 crate::cell::Cell::Int(4),
                 crate::cell::Cell::Int(5),
-                crate::cell::Cell::Int(0),
+                crate::cell::Cell::Int(6),
                 crate::cell::Cell::Int(1),
-                crate::cell::Cell::Int(2)
+                crate::cell::Cell::Int(2),
+                crate::cell::Cell::Int(3)
             ][..]
         );
+        // Under ⎕IO=0 the same axes shift down: [0] is the first axis again.
+        env.eval_line("⎕IO←0").unwrap();
+        let z0 = eval_one(&mut env, "1↑[0]M");
+        assert_eq!(z0.cells(), z.cells());
+        assert!(env.eval_line("1↑[2]M").is_err());
     }
 
     #[test]
@@ -4982,8 +4989,10 @@ mod tests {
         // index error: B[99] on a 3-element vector errors; fallback runs
         env.eval_line("B←10 20 30").unwrap();
         assert_eq!(eval_int_env(&mut env, "⎕EA B[99] ⋄ 42"), 42);
-        // valid index returns normally
-        assert_eq!(eval_int_env(&mut env, "⎕EA B[0] ⋄ 42"), 10);
+        // valid index returns normally (⎕IO=1 → the first element is B[1])
+        assert_eq!(eval_int_env(&mut env, "⎕EA B[1] ⋄ 42"), 10);
+        // 0 is out of range under ⎕IO=1, so the guard falls back
+        assert_eq!(eval_int_env(&mut env, "⎕EA B[0] ⋄ 42"), 42);
     }
 
     #[test]
@@ -5420,11 +5429,11 @@ mod tests {
     fn test_inner_product_syntax_matrix_times_vector() {
         let mut env = Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        // M←2 3⍴⍳6; M +.× 5 6 7 → (0·5+1·6+2·7)(3·5+4·6+5·7) = 20 74
+        // M←2 3⍴⍳6; M +.× 5 6 7 → (1·5+2·6+3·7)(4·5+5·6+6·7) = 38 92
         env.eval_line("M←2 3⍴⍳6").unwrap();
         let r = eval_one(&mut env, "M+.×5 6 7");
-        // ⎕IO=0 → ⍳6 is 0..5, so rows are (0 1 2) and (3 4 5)
-        let expect = [20, 74];
+        // ⎕IO=1 → ⍳6 is 1..6, so rows are (1 2 3) and (4 5 6)
+        let expect = [38, 92];
         for (i, e) in expect.iter().enumerate() {
             assert_eq!(r.cells()[i], crate::cell::Cell::Int(*e));
         }
