@@ -366,6 +366,7 @@ fn handle_client(mut stream: std::net::TcpStream) {
 
     let mut buf = [0u8; 4096];
     let mut acc = Vec::new();
+    let mut peer_identified = false;
 
     loop {
         match stream.read(&mut buf) {
@@ -393,7 +394,8 @@ fn handle_client(mut stream: std::net::TcpStream) {
                     if let Some(arr) = val.as_array() {
                         let cmd = arr[0].as_str().unwrap_or("");
                         let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
-                        if !handle_command(&mut stream, &mut env, cmd, &args) {
+                        if !handle_command(&mut stream, &mut env, cmd, &args, &mut peer_identified)
+                        {
                             break;
                         }
                     }
@@ -462,14 +464,30 @@ fn send_interpreter_status(stream: &mut std::net::TcpStream, env: &mut Environme
 
 /// Handle one RIDE message from the peer. Returns false when the session
 /// must end (Exit/Disconnect, or the peer went away mid-write).
+/// `peer_identified` tracks whether the peer announced itself with Identify
+/// (Dyalog RIDE always does; stride never does). Only identified peers get
+/// newline-terminated session output — without the trailing newline RIDE
+/// glues consecutive results onto one line, while stride renders bare text
+/// as-is and would show a blank separator line per result.
 fn handle_command(
     stream: &mut std::net::TcpStream,
     env: &mut Environment,
     cmd: &str,
     args: &serde_json::Value,
+    peer_identified: &mut bool,
 ) -> bool {
+    /// Terminate session output for real RIDE peers (see above).
+    fn session_text(result: String, peer_identified: bool) -> String {
+        if peer_identified && !result.ends_with('\n') {
+            format!("{result}\n")
+        } else {
+            result
+        }
+    }
+
     match cmd {
         "Identify" => {
+            *peer_identified = true;
             // The peer announces itself and waits for our description.
             if !send_ride(stream, &ride_identify()) {
                 return false;
@@ -556,7 +574,7 @@ fn handle_command(
                     let out = lines.join("\n");
                     if !out.is_empty() {
                         let output = serde_json::json!(["AppendSessionOutput", {
-                            "result": out,
+                            "result": session_text(out, *peer_identified),
                             "group": 0,
                             "type": 4
                         }]);
@@ -577,7 +595,7 @@ fn handle_command(
                     let boxing = apl::sysvars::get_boxing(env);
                     let result = render_session_value(&v, pp, boxing);
                     let output = serde_json::json!(["AppendSessionOutput", {
-                        "result": result,
+                        "result": session_text(result, *peer_identified),
                         "group": 0,
                         "type": 2
                     }]);
@@ -590,7 +608,7 @@ fn handle_command(
                 Err(e) => {
                     let rich = AplError::from(e).with_source_line(expr.to_string());
                     let output = serde_json::json!(["AppendSessionOutput", {
-                        "result": format!("ERROR {rich}"),
+                        "result": session_text(format!("ERROR {rich}"), *peer_identified),
                         "group": 0,
                         "type": 5
                     }]);
@@ -683,6 +701,7 @@ fn ride_mode() {
     // ends the session instead of desyncing it.
     let mut buf = [0u8; 4096];
     let mut acc = Vec::new();
+    let mut peer_identified = false;
 
     'session: loop {
         match stream.read(&mut buf) {
@@ -722,7 +741,8 @@ fn ride_mode() {
                     if let Some(arr) = val.as_array() {
                         let cmd = arr[0].as_str().unwrap_or("");
                         let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
-                        if !handle_command(&mut stream, &mut env, cmd, &args) {
+                        if !handle_command(&mut stream, &mut env, cmd, &args, &mut peer_identified)
+                        {
                             break 'session;
                         }
                     }
