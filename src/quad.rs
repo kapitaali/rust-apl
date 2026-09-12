@@ -1448,14 +1448,13 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let args = &cells[fmt_end..];
             let formatted = fio_sprintf(&fmt, args)?;
             let text: String = formatted.iter().filter_map(|c| char::from_u32(*c)).collect();
-            // Handle stdout/stderr special cases.
-            if handle == 1 {
-                print!("{}", text);
-                return Ok(ValueP::scalar_from(Cell::Int(text.len() as i64)));
-            }
-            if handle == 2 {
-                eprint!("{}", text);
-                return Ok(ValueP::scalar_from(Cell::Int(text.len() as i64)));
+            // Handle stdout/stderr: in RIDE mode, the interpreter's raw
+            // stdout isn't visible to the peer, so we return the formatted
+            // text as the result value (type 2 AppendSessionOutput).
+            // For handle==1 (stdout) and handle==2 (stderr), return the text
+            // directly. The REPL / stride will display it in the results pane.
+            if handle == 1 || handle == 2 {
+                return Ok(ValueP::char_vector(&text.chars().map(|c| c as u32).collect::<Vec<_>>()));
             }
             let mut open = get_open_files();
             let file = open
