@@ -93,6 +93,8 @@ pub enum Expr {
     QuadMx(Box<Expr>),
     /// `⎕FIO B` — file I/O operations
     QuadFio(Box<Expr>),
+    /// `⎕FIO[X] B` — file I/O with subfunction axis
+    QuadFioAxis(Box<Expr>, Box<Expr>),
     /// `⎕JSON B` — JSON parse/serialize
     QuadJson(Box<Expr>),
     /// `⎕XML B` — XML parse/serialize
@@ -1289,6 +1291,26 @@ fn parse_term(toks: &[Tok]) -> AplResult<(Expr, usize)> {
     // ⎕FIO — file I/O
     if let Some(Tok::Name(n)) = toks.first() {
         if n == "⎕FIO" {
+            // ⎕FIO[X] B — axis form: subfunction selector in brackets.
+            if matches!(toks.get(1), Some(Tok::LBracket)) {
+                if let Some((parts, close)) = split_index_axes(&toks[2..]) {
+                    if parts.len() == 1 && !parts[0].is_empty() {
+                        let (x, _) = parse_expr(&parts[0])?;
+                        let after = 2 + close + 1; // past ']'
+                        let (b, bused) =
+                            if toks
+                                .get(after)
+                                .map(|t| matches!(t, Tok::End | Tok::Semicolon))
+                                .unwrap_or(true)
+                            {
+                                (Expr::Zilde, 0)
+                            } else {
+                                parse(&toks[after..])?
+                            };
+                        return Ok((Expr::QuadFioAxis(Box::new(x), Box::new(b)), after + bused));
+                    }
+                }
+            }
             let (arg, used) = parse(&toks[1..])?;
             return Ok((Expr::QuadFio(Box::new(arg)), 1 + used));
         }
@@ -4067,6 +4089,16 @@ impl Environment {
                 }
                 let bv = self.eval(arg)?;
                 crate::quad::quad_fio(&bv)
+            }
+            Expr::QuadFioAxis(x, b) => {
+                // ⎕FIO[X] B — file I/O with subfunction axis
+                if let Err(_) = crate::security::check_sec(self, "FIO") {
+                    return Err(ErrorCode::SecurityError);
+                }
+                let xv = self.eval(x)?;
+                let bv = self.eval(b)?;
+                let x_int = xv.first_cell().and_then(|c| c.get_int_value().ok()).unwrap_or(0);
+                crate::quad::quad_fio_axis(x_int, &bv)
             }
             Expr::QuadJson(arg) => {
                 let bv = self.eval(arg)?;

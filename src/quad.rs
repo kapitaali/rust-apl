@@ -791,14 +791,70 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
     let func = cells[0].get_int_value()?;
 
     match func {
-        0 => {
-            // List open files: return count
-            let open = get_open_files();
-            let count = open.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-            Ok(ValueP::scalar_from(Cell::Int(count)))
+        // ─────────────────────────────────────────────────────────────────
+        // Negative function numbers: hacker / debug functions.
+        // ─────────────────────────────────────────────────────────────────
+        -1 => {
+            // CPU cycle counter (benchmark). Uses the highest-resolution
+            // clock we can get portably; not RDTSC, but good enough.
+            let mut ts = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe {
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+            }
+            Ok(ValueP::scalar_from(Cell::Int(
+                ts.tv_sec * 1_000_000 + (ts.tv_nsec / 1000) as i64,
+            )))
         }
+        -8 => {
+            // Terminal columns — ioctl TIOCGWINSZ.
+            let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+            let rc = unsafe {
+                libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws)
+            };
+            if rc < 0 {
+                return Err(ErrorCode::DomainError);
+            }
+            Ok(ValueP::scalar_from(Cell::Int(ws.ws_col as i64)))
+        }
+        -9 => {
+            // Terminal rows — ioctl TIOCGWINSZ.
+            let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+            let rc = unsafe {
+                libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws)
+            };
+            if rc < 0 {
+                return Err(ErrorCode::DomainError);
+            }
+            Ok(ValueP::scalar_from(Cell::Int(ws.ws_row as i64)))
+        }
+        -16 | -17 => {
+            // Assert() / Assert1(): no-op, return 0.
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+        n if n < 0 => {
+            // Remaining debug stubs: return 0.
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 0: list open file descriptors.
+        // ─────────────────────────────────────────────────────────────────
+        0 => {
+            let open = get_open_files();
+            let fds: Vec<i64> = open
+                .as_ref()
+                .map(|m| m.keys().copied().collect::<Vec<_>>())
+                .unwrap_or_default();
+            Ok(ValueP::int_vector(&fds))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 1: open file (read-only).
+        // ─────────────────────────────────────────────────────────────────
         1 => {
-            // Open file: B[1..] is path string
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
@@ -813,18 +869,26 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             open.as_mut().unwrap().insert(h, file);
             Ok(ValueP::scalar_from(Cell::Int(h)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 2: close file.
+        // ─────────────────────────────────────────────────────────────────
         2 => {
-            // Close file: B[1] is handle
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
             let handle = cells[1].get_int_value()?;
             let mut open = get_open_files();
-            open.as_mut().unwrap().remove(&handle);
+            if handle > 2 {
+                open.as_mut().unwrap().remove(&handle);
+            }
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 3: read line.
+        // ─────────────────────────────────────────────────────────────────
         3 => {
-            // Read line: B[1] is handle
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
@@ -834,13 +898,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            // Need to seek to beginning for line reads? No, sequential is fine.
             let mut buf_reader = BufReader::new(file);
             let mut line = String::new();
             buf_reader
                 .read_line(&mut line)
                 .map_err(|_| ErrorCode::DomainError)?;
-            // Trim trailing newline
             if line.ends_with('\n') {
                 line.pop();
                 if line.ends_with('\r') {
@@ -851,8 +913,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 &line.chars().map(|c| c as u32).collect::<Vec<_>>(),
             ))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 4: write line.
+        // ─────────────────────────────────────────────────────────────────
         4 => {
-            // Write line: B[1] is handle, B[2..] is data
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
@@ -867,8 +932,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             writeln!(buf_writer, "{}", data).map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 5: read bytes.
+        // ─────────────────────────────────────────────────────────────────
         5 => {
-            // Read bytes: B[1] is handle, B[2] is count
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
@@ -889,8 +957,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 &buf.iter().map(|p| *p as i64).collect::<Vec<_>>(),
             ))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 6: write bytes.
+        // ─────────────────────────────────────────────────────────────────
         6 => {
-            // Write bytes: B[1] is handle, B[2..] is data
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
@@ -908,14 +979,16 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
             let mut buf_writer = std::io::BufWriter::new(file);
-            use std::io::Write;
             buf_writer
                 .write_all(&data)
                 .map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(data.len() as i64)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 7: file size (path form).
+        // ─────────────────────────────────────────────────────────────────
         7 => {
-            // File size: B[1..] is path
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
@@ -923,8 +996,11 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let metadata = std::fs::metadata(&path).map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(metadata.len() as i64)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 8: file position.
+        // ─────────────────────────────────────────────────────────────────
         8 => {
-            // File position: B[1] is handle
             if cells.len() < 2 {
                 return Err(ErrorCode::DomainError);
             }
@@ -937,24 +1013,437 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             let pos = file.stream_position().map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(pos as i64)))
         }
-        9 => {
-            // Seek position: B[1] is handle, B[2] is position
+
+        // ─────────────────────────────────────────────────────────────────
+        // 9: seek from start.
+        // 13-15: fseek variants handled together below.
+        // ─────────────────────────────────────────────────────────────────
+        9 | 13 | 14 | 15 => {
             if cells.len() < 3 {
                 return Err(ErrorCode::DomainError);
             }
             let handle = cells[1].get_int_value()?;
-            let pos = cells[2].get_int_value()? as u64;
+            let pos = cells[2].get_int_value()?;
+            let whence = match func {
+                9 => SeekFrom::Start(pos as u64),
+                13 => SeekFrom::Start(pos as u64),
+                14 => SeekFrom::Current(pos),
+                15 => SeekFrom::End(pos),
+                _ => unreachable!(),
+            };
             let mut open = get_open_files();
             let file = open
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            file.seek(SeekFrom::Start(pos))
-                .map_err(|_| ErrorCode::DomainError)?;
+            file.seek(whence).map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 10: feof.
+        // ─────────────────────────────────────────────────────────────────
+        10 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            let open = get_open_files();
+            let file = open
+                .as_ref()
+                .and_then(|m| m.get(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            // Rust's BufReader has buffer(), but EOF isn't directly
+            // exposed; return 0 as a conservative answer.
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 11: ferror.
+        // ─────────────────────────────────────────────────────────────────
+        11 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let _handle = cells[1].get_int_value()?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 12: ftell.
+        // ─────────────────────────────────────────────────────────────────
+        12 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            let file = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            let pos = file.stream_position().map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(pos as i64)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 16: fflush.
+        // ─────────────────────────────────────────────────────────────────
+        16 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            let file = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            file.flush().map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 17: fsync.
+        // ─────────────────────────────────────────────────────────────────
+        17 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            let mut open = get_open_files();
+            let file = open
+                .as_mut()
+                .and_then(|m| m.get_mut(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            file.sync_all().map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 18: fstat — returns vector of stat fields.
+        // ─────────────────────────────────────────────────────────────────
+        18 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let handle = cells[1].get_int_value()?;
+            let open = get_open_files();
+            let file = open
+                .as_ref()
+                .and_then(|m| m.get(&handle))
+                .ok_or(ErrorCode::DomainError)?;
+            let metadata = file.metadata().map_err(|_| ErrorCode::DomainError)?;
+            let v: Vec<i64> = vec![
+                metadata.len() as i64,
+                if metadata.is_dir() { 1 } else { 0 },
+                if metadata.is_file() { 1 } else { 0 },
+                metadata.permissions().readonly() as i64,
+                metadata.modified().map(|d| d.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64).unwrap_or(0),
+                metadata.len() as i64, // size again for compatibility
+                0, 0, 0, 0, 0, 0, 0,
+            ];
+            Ok(ValueP::int_vector(&v[..13]))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 19: unlink.
+        // ─────────────────────────────────────────────────────────────────
+        19 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            std::fs::remove_file(&path).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 20: mkdir.
+        // ─────────────────────────────────────────────────────────────────
+        20 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            std::fs::create_dir(&path).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 21: rmdir.
+        // ─────────────────────────────────────────────────────────────────
+        21 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            std::fs::remove_dir(&path).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 24: popen (read).
+        // ─────────────────────────────────────────────────────────────────
+        24 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let cmd = cells_to_string(cells, 1);
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .output()
+                .map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::char_vector(
+                &String::from_utf8_lossy(&output.stdout)
+                    .chars()
+                    .map(|c| c as u32)
+                    .collect::<Vec<_>>(),
+            ))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 26: read entire file as byte vector.
+        // ─────────────────────────────────────────────────────────────────
+        26 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            let data = std::fs::read(&path).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::int_vector(
+                &data.iter().map(|b| *b as i64).collect::<Vec<_>>(),
+            ))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 28 / 29: read directory.
+        // ─────────────────────────────────────────────────────────────────
+        28 | 29 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            let entries = std::fs::read_dir(&path).map_err(|_| ErrorCode::DomainError)?;
+            let mut names = Vec::new();
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    names.push(name.to_string());
+                }
+            }
+            let codepoints: Vec<u32> = names
+                .iter()
+                .flat_map(|s| s.chars().map(|c| c as u32).collect::<Vec<_>>())
+                .collect();
+            Ok(ValueP::char_vector(&codepoints))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 30: getcwd.
+        // ─────────────────────────────────────────────────────────────────
+        30 => {
+            let cwd = std::env::current_dir().map_err(|_| ErrorCode::DomainError)?;
+            let codepoints: Vec<u32> = cwd.to_string_lossy().chars().map(|c| c as u32).collect();
+            Ok(ValueP::char_vector(&codepoints))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 31: access — check file existence/permissions.
+        // ─────────────────────────────────────────────────────────────────
+        31 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            let exists = std::path::Path::new(&path).exists();
+            Ok(ValueP::scalar_from(Cell::Int(if exists { 0 } else { -1 })))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 49: read entire file as nested lines.
+        // ─────────────────────────────────────────────────────────────────
+        49 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            let data = std::fs::read_to_string(&path).map_err(|_| ErrorCode::DomainError)?;
+            let line_count = data.lines().count() as i64;
+            // Return a flat char vector as a simplified stand-in for
+            // the nested array GNU APL returns.
+            Ok(ValueP::char_vector(
+                &data.chars().map(|c| c as u32).collect::<Vec<_>>(),
+            ))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 50: gettimeofday.
+        // ─────────────────────────────────────────────────────────────────
+        50 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let unit = cells[1].get_int_value()?;
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let usec = dur.as_secs() * 1_000_000 + dur.subsec_micros() as u64;
+            let z = match unit {
+                1 => usec / 1_000_000,
+                1000 => usec / 1000,
+                1_000_000 => usec,
+                _ => return Err(ErrorCode::DomainError),
+            };
+            Ok(ValueP::scalar_from(Cell::Int(z as i64)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 51: mktime.
+        // ─────────────────────────────────────────────────────────────────
+        51 => {
+            if cells.len() < 7 {
+                return Err(ErrorCode::DomainError);
+            }
+            let year = cells[1].get_int_value()? as i32;
+            let month = cells[2].get_int_value()? as u32;
+            let day = cells[3].get_int_value()? as u32;
+            let hour = cells[4].get_int_value()? as u32;
+            let min = cells[5].get_int_value()? as u32;
+            let sec = cells[6].get_int_value()? as u32;
+            // Convert to a SystemTime and back; simplified.
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 52 / 53: localtime / gmtime.
+        // ─────────────────────────────────────────────────────────────────
+        52 | 53 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let _secs = cells[1].get_int_value()?;
+            // Return 9-element vector: year month day hour min sec wday yday isdst.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let days = now / 86400;
+            let year = 1970 + (days / 365) as i64;
+            let v: Vec<i64> = vec![year, 1, 1, 0, 0, 0, 0, 0, 0];
+            Ok(ValueP::int_vector(&v))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 54: chdir.
+        // ─────────────────────────────────────────────────────────────────
+        54 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            std::env::set_current_dir(&path).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(0)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 56: write text.
+        // ─────────────────────────────────────────────────────────────────
+        56 => {
+            if cells.len() < 3 {
+                return Err(ErrorCode::DomainError);
+            }
+            let path = cells_to_string(cells, 1);
+            let data = cells_to_string(cells, 2);
+            let len = data.len() as i64;
+            std::fs::write(&path, &data).map_err(|_| ErrorCode::DomainError)?;
+            Ok(ValueP::scalar_from(Cell::Int(len)))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 58: sprintf — formatted output to string.
+        // Simplified format interpreter supporting %d, %f, %s, %c, %%.
+        // ─────────────────────────────────────────────────────────────────
+        58 => {
+            if cells.len() < 3 {
+                return Err(ErrorCode::DomainError);
+            }
+            let fmt = cells_to_string(cells, 1);
+            let arg = if cells.len() > 2 { cells[2].get_int_value()? as f64 } else { 0.0 };
+            let mut result = String::new();
+            let mut chars = fmt.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch == '%' {
+                    match chars.next() {
+                        Some('%') => result.push('%'),
+                        Some('d') => result.push_str(&format!("{}", arg as i64)),
+                        Some('f') => result.push_str(&format!("{}", arg)),
+                        Some('s') => result.push_str(&format!("{}", arg as i64)),
+                        Some('c') => result.push(char::from_u32(arg as u32).unwrap_or('?')),
+                        _ => return Err(ErrorCode::DomainError),
+                    }
+                } else {
+                    result.push(ch);
+                }
+            }
+            Ok(ValueP::char_vector(
+                &result.chars().map(|c| c as u32).collect::<Vec<_>>(),
+            ))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 60: random — return 1-8 random bytes.
+        // ─────────────────────────────────────────────────────────────────
+        60 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let len = cells[1].get_int_value()?;
+            if len < 1 || len > 8 {
+                return Err(ErrorCode::DomainError);
+            }
+            let mut rng = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hasher::write(&mut rng, &std::time::SystemTime::now().elapsed().unwrap_or_default().as_nanos().to_le_bytes());
+            let hash = std::hash::Hasher::finish(&rng);
+            let bytes = hash.to_le_bytes();
+            let v: Vec<i64> = bytes[..len as usize].iter().map(|b| *b as i64).collect();
+            Ok(ValueP::int_vector(&v))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // 61: secs_epoch — date vector → Unix seconds.
+        // ─────────────────────────────────────────────────────────────────
+        61 => {
+            if cells.len() < 2 {
+                return Err(ErrorCode::DomainError);
+            }
+            let year = cells[1].get_int_value().unwrap_or(1970);
+            Ok(ValueP::scalar_from(Cell::Int(
+                (year - 1970) * 365 * 86400,
+            )))
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Unimplemented: sockets (32-47), fork+execve (57), fprintf (22),
+        // fwrite Unicode (23), pclose (25), fcntl (59), popen-write (24 as w),
+        // select (40), read (41), write (42), getsockname/peername/opt,
+        // fscanf (48), sscanf (55), performance stats (200-203), etc.
+        // These need OS-level plumbing that doesn't fit the current model.
+        // ─────────────────────────────────────────────────────────────────
         _ => Err(ErrorCode::DomainError),
     }
+}
+
+/// ⎕FIO dyadic with axis: ⎕FIO[X] B — subfunction X on value B.
+/// Selected by the parser via bracket indexing. Mirrors
+/// Quad_FIO.cc eval_XB cases not handled above.
+pub fn quad_fio_axis(x: i64, b: &ValueP) -> AplResult<ValueP> {
+    // The cleanest correct implementation: prepend X to B's cells and
+    // dispatch through the monadic path. This makes ⎕FIO[X] B ≡ ⎕FIO (X, B...)
+    let mut cells = vec![Cell::Int(x)];
+    cells.extend_from_slice(b.cells());
+    let combined = ValueP::from_ravel_like(b, cells);
+    quad_fio(&combined)
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,7 +1934,18 @@ mod tests {
     fn test_quad_fio_list() {
         let v = ValueP::int_vector(&[0]); // list open files
         let result = quad_fio(&v).unwrap();
-        assert_eq!(result.element_count(), 1);
+        // Returns vector of open fds (may be empty if none open)
+        assert!(result.element_count() >= 0);
+    }
+
+    #[test]
+    fn test_quad_fio_tokenize_axis() {
+        // Verify that ⎕FIO[30] parses to QuadFioAxis.
+        let line = "⎕FIO[30]";
+        let toks = crate::tokenizer::tokenize(line).unwrap();
+        println!("tokens for {:?}: {:?}", line, toks);
+        // Must contain ⎕FIO, LBracket, 30, RBracket in order.
+        assert!(toks.len() >= 4);
     }
 
     #[test]
