@@ -393,7 +393,9 @@ fn handle_client(mut stream: std::net::TcpStream) {
                     if let Some(arr) = val.as_array() {
                         let cmd = arr[0].as_str().unwrap_or("");
                         let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
-                        handle_command(&mut stream, &mut env, cmd, &args);
+                        if !handle_command(&mut stream, &mut env, cmd, &args) {
+                            break;
+                        }
                     }
                 }
             } else if payload.starts_with("SupportedProtocols=") {
@@ -404,41 +406,147 @@ fn handle_client(mut stream: std::net::TcpStream) {
     }
 }
 
+/// Send one framed RIDE message. Returns false when the peer is gone —
+/// callers must end the session instead of writing into a broken pipe.
+fn send_ride(stream: &mut std::net::TcpStream, payload: &str) -> bool {
+    use std::io::Write;
+    if let Err(e) = stream.write_all(&frame(payload)) {
+        eprintln!("ride: write failed ({e}); closing session");
+        return false;
+    }
+    if let Err(e) = stream.flush() {
+        eprintln!("ride: flush failed ({e}); closing session");
+        return false;
+    }
+    true
+}
+
+/// Full interpreter description for ReplyIdentify (protocol.md). RIDE reads
+/// `arch[0]` and `version` with no guards, so both must be non-empty —
+/// a minimal reply crashes the peer.
+fn ride_identify() -> String {
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
+        .unwrap_or_default();
+    let user = std::env::var("USER").unwrap_or_default();
+    serde_json::json!(["ReplyIdentify", {
+        "apiVersion": 1,
+        "Port": 0,
+        "IPAddress": "",
+        "Vendor": "rust-apl",
+        "Language": "APL",
+        "version": "GNU APL 2.0 (Rust)",
+        "Machine": hostname,
+        "arch": "Unicode/64",
+        "Project": "CLEAR WS",
+        "Process": "apl",
+        "User": user,
+        "pid": std::process::id() as i64,
+        "token": "",
+        "date": "",
+        "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+    }])
+    .to_string()
+}
+
+/// Status-bar snapshot for InterpreterStatus. ⎕IO is live; the interpreter
+/// has no trap/thread/SI accounting, so those report idle values.
+fn send_interpreter_status(stream: &mut std::net::TcpStream, env: &mut Environment) -> bool {
+    let io = env.get_io().unwrap_or(1);
+    let msg = serde_json::json!(["InterpreterStatus", {
+        "IO": io, "DQ": 0, "WA": 0, "SI": 0, "TRAP": 0, "ML": 1,
+        "NumThreads": 1, "TID": 0, "CompactCount": 0, "GarbageCount": 0,
+    }]);
+    send_ride(stream, &msg.to_string())
+}
+
+/// Handle one RIDE message from the peer. Returns false when the session
+/// must end (Exit/Disconnect, or the peer went away mid-write).
 fn handle_command(
     stream: &mut std::net::TcpStream,
     env: &mut Environment,
     cmd: &str,
     args: &serde_json::Value,
-) {
-    use std::io::Write;
-
+) -> bool {
     match cmd {
         "Identify" => {
-            let reply = serde_json::json!(["ReplyIdentify", {
-                "identity": 1,
-                "version": "GNU APL 2.0 (Rust)",
-                "protocolVersion": 2
-            }]);
-            let _ = stream.write_all(&frame(&reply.to_string()));
+            // The peer announces itself and waits for our description.
+            if !send_ride(stream, &ride_identify()) {
+                return false;
+            }
+            // Advertise readiness: RIDE queues session lines until it sees
+            // SetPromptType with type>0 (or HadError).
+            send_ride(
+                stream,
+                &serde_json::json!(["SetPromptType", {"type": 1}]).to_string(),
+            )
         }
-        "Connect" => {
-            let reply = serde_json::json!(["ReplyConnect", {
-                "remoteId": args["remoteId"],
-                "protocolVersion": 2
-            }]);
-            let _ = stream.write_all(&frame(&reply.to_string()));
+        // "Connect" has no reply in the protocol — it just opens the
+        // session (the old ReplyConnect was stride-only and real RIDE
+        // clients ignore unknown replies, so stay silent like Kap does).
+        "Connect" => true,
+        // Legacy/setup queries we have nothing for; Kap ignores these too
+        // and RIDE carries on regardless.
+        "GetWindowLayout" => true,
+        "GetSyntaxInformation" => true,
+        "GetLog" => true,
+        "SetPW" => true,
+        "GetLanguageBar" => {
+            let reply = serde_json::json!(["ReplyGetLanguageBar", {"entries": []}]);
+            send_ride(stream, &reply.to_string())
         }
-        "GetWindowLayout" => {
-            let reply = serde_json::json!(["ReplyGetWindowLayout", {
-                "windows": []
-            }]);
-            let _ = stream.write_all(&frame(&reply.to_string()));
+        "GetKeyboardLayout" => {
+            let reply = serde_json::json!(["ReplyGetKeyboardLayout", {"keyMappings": {}}]);
+            send_ride(stream, &reply.to_string())
         }
+        "GetConfiguration" => {
+            let names: Vec<String> = args["names"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|n| n.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let cfgs: Vec<serde_json::Value> = names
+                .iter()
+                .map(|n| serde_json::json!({"name": n, "value": ""}))
+                .collect();
+            let reply = serde_json::json!(["ReplyGetConfiguration", {"configurations": cfgs}]);
+            send_ride(stream, &reply.to_string())
+        }
+        "Subscribe" => {
+            let wants_status = args["status"]
+                .as_array()
+                .map(|a| a.iter().any(|s| s.as_str() == Some("statusfields")))
+                .unwrap_or(false);
+            if wants_status {
+                send_interpreter_status(stream, env)
+            } else {
+                true
+            }
+        }
+        "Exit" | "Disconnect" => false,
         "Execute" => {
             let text = args["text"].as_str().unwrap_or("");
             let expr = text.trim();
             if expr.is_empty() {
-                return;
+                return true;
+            }
+            // RIDE shows the line in the session only when it is echoed.
+            if !send_ride(
+                stream,
+                &serde_json::json!(["EchoInput", {"input": text, "group": 0}]).to_string(),
+            ) {
+                return false;
+            }
+            // No prompt while evaluating; RIDE holds queued lines until
+            // SetPromptType with type>0 comes back.
+            if !send_ride(
+                stream,
+                &serde_json::json!(["SetPromptType", {"type": 0}]).to_string(),
+            ) {
+                return false;
             }
             // System commands ( )… and ]… ) run locally, exactly like in a
             // session; their output is "system command output" (type 4).
@@ -452,12 +560,17 @@ fn handle_command(
                             "group": 0,
                             "type": 4
                         }]);
-                        let _ = stream.write_all(&frame(&output.to_string()));
+                        if !send_ride(stream, &output.to_string()) {
+                            return false;
+                        }
                     }
                 }
-                return;
+                return send_ride(
+                    stream,
+                    &serde_json::json!(["SetPromptType", {"type": 1}]).to_string(),
+                );
             }
-            match env.eval_line(expr) {
+            let evaluated = match env.eval_line(expr) {
                 Ok(Some(v)) => {
                     // Same display rules as the REPL, so boxing shows here too.
                     let pp = apl::sysvars::get_pp(env).unwrap_or(10);
@@ -468,10 +581,11 @@ fn handle_command(
                         "group": 0,
                         "type": 2
                     }]);
-                    let _ = stream.write_all(&frame(&output.to_string()));
+                    send_ride(stream, &output.to_string())
                 }
                 Ok(None) => {
                     // Assignment: APL produces no output for it — stay silent.
+                    true
                 }
                 Err(e) => {
                     let rich = AplError::from(e).with_source_line(expr.to_string());
@@ -480,33 +594,40 @@ fn handle_command(
                         "group": 0,
                         "type": 5
                     }]);
-                    let _ = stream.write_all(&frame(&output.to_string()));
+                    send_ride(stream, &output.to_string())
                 }
+            };
+            if !evaluated {
+                return false;
             }
+            // Keep the status bar truthful when ⎕IO changes mid-session.
+            send_interpreter_status(stream, env);
+            send_ride(
+                stream,
+                &serde_json::json!(["SetPromptType", {"type": 1}]).to_string(),
+            )
         }
+        // Replies from a stride-like peer answering our own Identify.
+        "ReplyIdentify" | "ReplyConnect" => true,
         _ => {
-            // Unknown command — ignore
+            println!("ride: ignoring unhandled message {cmd}");
+            true
         }
     }
 }
 
-/// Ride mode: connect to a RIDE server (like stride) as a client.
+/// Ride mode: connect to a RIDE peer (Dyalog RIDE, or stride) as the interpreter.
 /// Reads RIDE_INIT from environment to determine where to connect.
 fn ride_mode() {
     use std::io::{Read, Write};
     use std::net::TcpStream;
 
     let ride_init = std::env::var("RIDE_INIT").unwrap_or_default();
-    // Parse "CONNECT:host:port" format
-    let parts: Vec<&str> = ride_init.split(':').collect();
-    if parts.len() != 3 || parts[0] != "CONNECT" {
+    let Some((host, port)) = parse_ride_init(&ride_init) else {
         eprintln!("apl --ride: RIDE_INIT must be in format CONNECT:host:port");
         eprintln!("  e.g., RIDE_INIT=CONNECT:localhost:4502");
         std::process::exit(1);
-    }
-
-    let host = parts[1];
-    let port: u16 = parts[2].parse().unwrap_or(4502);
+    };
     let addr = format!("{host}:{port}");
 
     println!("APL RIDE client connecting to {addr}...");
@@ -521,13 +642,24 @@ fn ride_mode() {
 
     println!("Connected to RIDE server at {addr}");
 
-    // Perform handshake
-    if !perform_ride_handshake(&mut stream) {
-        eprintln!("apl --ride: handshake failed");
+    // Handshake in frames, like Kap and Dyalog RIDE do: raw text would
+    // desync the peer's framed parser and get the connection dropped.
+    for hello in ["SupportedProtocols=2", "UsingProtocol=2"] {
+        if stream.write_all(&frame(hello)).is_err() {
+            eprintln!("apl --ride: handshake failed (peer went away)");
+            std::process::exit(1);
+        }
+    }
+    // Both peers announce themselves; the peer's own Identify arrives as a
+    // regular framed message and is answered in the main loop below.
+    let identify = serde_json::json!(["Identify", {"apiVersion": 1, "identity": 2}]);
+    if stream.write_all(&frame(&identify.to_string())).is_err() {
+        eprintln!("apl --ride: handshake failed (peer went away)");
         std::process::exit(1);
     }
+    stream.flush().ok();
 
-    println!("Handshake complete. Waiting for commands...");
+    println!("Handshake sent. Waiting for commands...");
 
     // Initialize interpreter
     let mut env = Environment::new();
@@ -538,14 +670,27 @@ fn ride_mode() {
         &mut env.hooks,
     );
 
-    // Process commands from the server
+    // Announce readiness up front (Kap does the same): RIDE queues
+    // session lines until SetPromptType with type>0.
+    if !send_ride(
+        &mut stream,
+        &serde_json::json!(["SetPromptType", {"type": 1}]).to_string(),
+    ) {
+        eprintln!("apl --ride: peer went away during handshake");
+        std::process::exit(1);
+    }
+
+    // Unified framed read loop: the peer pipelines handshake + setup
+    // messages, so every frame goes through one accumulator (handles
+    // coalesced and split TCP segments). Anything without the RIDE magic
+    // ends the session instead of desyncing it.
     let mut buf = [0u8; 4096];
     let mut acc = Vec::new();
 
-    loop {
+    'session: loop {
         match stream.read(&mut buf) {
             Ok(0) => {
-                println!("Server closed connection");
+                println!("RIDE disconnected");
                 break;
             }
             Ok(n) => acc.extend_from_slice(&buf[..n]),
@@ -561,8 +706,16 @@ fn ride_mode() {
                 break;
             }
             let frame_len = u32::from_be_bytes([acc[0], acc[1], acc[2], acc[3]]) as usize;
+            if frame_len < 8 {
+                eprintln!("ride: bad frame length {frame_len}; closing session");
+                break 'session;
+            }
             if acc.len() < frame_len {
                 break; // incomplete frame
+            }
+            if &acc[4..8] != b"RIDE" {
+                eprintln!("ride: bad frame magic; closing session");
+                break 'session;
             }
             let payload = String::from_utf8_lossy(&acc[8..frame_len]).to_string();
             acc.drain(0..frame_len);
@@ -572,73 +725,81 @@ fn ride_mode() {
                     if let Some(arr) = val.as_array() {
                         let cmd = arr[0].as_str().unwrap_or("");
                         let args = arr.get(1).cloned().unwrap_or(serde_json::Value::Null);
-                        handle_command(&mut stream, &mut env, cmd, &args);
+                        if !handle_command(&mut stream, &mut env, cmd, &args) {
+                            break 'session;
+                        }
                     }
                 }
+            } else if payload == "SupportedProtocols=2" {
+                // Peer's handshake opener; ours was already sent. Nothing to do.
+            } else if payload.starts_with("UsingProtocol=") {
+                // Protocol version agreed.
+            } else {
+                println!("ride: ignoring handshake text {payload:?}");
             }
         }
     }
 }
 
-/// Perform the RIDE handshake as a client.
-fn perform_ride_handshake(stream: &mut std::net::TcpStream) -> bool {
-    use std::io::{Read, Write};
+/// Parse RIDE_INIT=CONNECT:host:port (set by the RIDE side when it spawns
+/// the interpreter, or by hand for a listening RIDE). Split from the right
+/// so IPv6 hosts survive.
+fn parse_ride_init(ride_init: &str) -> Option<(String, u16)> {
+    let rest = ride_init.strip_prefix("CONNECT:")?;
+    let (host, port) = rest.rsplit_once(':')?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port.parse::<u16>().ok()?))
+}
 
-    // Step 1: Send SupportedProtocols=2
-    if stream.write_all(b"SupportedProtocols=2").is_err() {
-        return false;
+#[cfg(test)]
+mod ride_tests {
+    use super::*;
+
+    #[test]
+    fn ride_init_parses_host_port() {
+        assert_eq!(
+            parse_ride_init("CONNECT:localhost:4502"),
+            Some(("localhost".to_string(), 4502))
+        );
+        assert_eq!(
+            parse_ride_init("CONNECT:127.0.0.1:4502"),
+            Some(("127.0.0.1".to_string(), 4502))
+        );
     }
 
-    // Step 2: Read UsingProtocol=2
-    let mut buf = [0u8; 1024];
-    let n = match stream.read(&mut buf) {
-        Ok(0) => return false,
-        Ok(n) => n,
-        Err(_) => return false,
-    };
-    let response = String::from_utf8_lossy(&buf[..n]);
-    if !response.contains("UsingProtocol=2") {
-        return false;
+    #[test]
+    fn ride_init_rejects_garbage() {
+        assert_eq!(parse_ride_init(""), None);
+        assert_eq!(parse_ride_init("SERVE:127.0.0.1:4502"), None);
+        assert_eq!(parse_ride_init("CONNECT::4502"), None);
+        assert_eq!(parse_ride_init("CONNECT:host:notaport"), None);
     }
 
-    // Step 3: Send ["Identify", {...}]
-    let identify = serde_json::json!(["Identify", {
-        "apiVersion": 1,
-        "identity": 1
-    }]);
-    let identify_frame = frame(&identify.to_string());
-    if stream.write_all(&identify_frame).is_err() {
-        return false;
+    #[test]
+    fn reply_identify_satisfies_ride() {
+        // RIDE indexes arch[0] and reads version with no guards.
+        let v: serde_json::Value = serde_json::from_str(&ride_identify()).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr[0].as_str().unwrap(), "ReplyIdentify");
+        let body = &arr[1];
+        assert_eq!(body["apiVersion"].as_i64().unwrap(), 1);
+        assert!(!body["arch"].as_str().unwrap().is_empty());
+        assert!(!body["version"].as_str().unwrap().is_empty());
     }
 
-    // Step 4: Read ["ReplyIdentify", {...}]
-    let n = match stream.read(&mut buf) {
-        Ok(0) => return false,
-        Ok(n) => n,
-        Err(_) => return false,
-    };
-    let response = String::from_utf8_lossy(&buf[..n]);
-    if !response.contains("ReplyIdentify") {
-        return false;
+    #[test]
+    fn handshake_frames_round_trip() {
+        // Every handshake payload must survive framing with the RIDE magic.
+        for payload in ["SupportedProtocols=2", "UsingProtocol=2"] {
+            let f = frame(payload);
+            assert_eq!(
+                u32::from_be_bytes([f[0], f[1], f[2], f[3]]) as usize,
+                f.len()
+            );
+            assert_eq!(&f[4..8], b"RIDE");
+            assert_eq!(&f[8..], payload.as_bytes());
+        }
     }
-
-    // Step 5: Send ["Connect", {"remoteId":2}]
-    let connect = serde_json::json!(["Connect", {"remoteId":2}]);
-    let connect_frame = frame(&connect.to_string());
-    if stream.write_all(&connect_frame).is_err() {
-        return false;
-    }
-
-    // Step 6: Read ["ReplyConnect", {...}]
-    let n = match stream.read(&mut buf) {
-        Ok(0) => return false,
-        Ok(n) => n,
-        Err(_) => return false,
-    };
-    let response = String::from_utf8_lossy(&buf[..n]);
-    if !response.contains("ReplyConnect") {
-        return false;
-    }
-
-    true
 }
