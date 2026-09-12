@@ -650,15 +650,12 @@ fn ride_mode() {
             std::process::exit(1);
         }
     }
-    // Both peers announce themselves; the peer's own Identify arrives as a
-    // regular framed message and is answered in the main loop below.
-    let identify = serde_json::json!(["Identify", {"apiVersion": 1, "identity": 2}]);
-    if stream.write_all(&frame(&identify.to_string())).is_err() {
-        eprintln!("apl --ride: handshake failed (peer went away)");
-        std::process::exit(1);
-    }
     stream.flush().ok();
 
+    // NOTE: no Identify of our own here. The peer announces itself first
+    // and the main loop answers with ReplyIdentify. Sending our own
+    // Identify upfront crashes Dyalog RIDE: its Identify handler indexes
+    // arch[0] with no guards, and only ReplyIdentify carries full fields.
     println!("Handshake sent. Waiting for commands...");
 
     // Initialize interpreter
