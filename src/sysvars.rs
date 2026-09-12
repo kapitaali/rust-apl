@@ -520,10 +520,9 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         "HELP" => {
             // )HELP — list all available system commands
             let commands = [
-                "VARS", "FNS", "LIB", "DIGITS", "WIDTH", "CONTINUE", "ERASE",
-                "RESET", "CLEAR", "RECORD", "PLAY", "STOP", "DIR", "SVS",
-                "HISTORY", "SAVE", "LOAD", "SI", "SYMBOLS", "OUT", "DROP",
-                "VERSION", "HELP", "OFF",
+                "VARS", "FNS", "LIB", "DIGITS", "WIDTH", "CONTINUE", "ERASE", "RESET", "CLEAR",
+                "RECORD", "PLAY", "STOP", "DIR", "SVS", "HISTORY", "SAVE", "LOAD", "SI", "SYMBOLS",
+                "OUT", "DROP", "VERSION", "HELP", "OFF",
             ];
             Some(vec![
                 "Available system commands:".to_string(),

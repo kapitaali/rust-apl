@@ -5249,22 +5249,32 @@ mod tests {
     #[test]
     fn test_plugin_hooks_before_eval_blocks() {
         // Test that plugin hooks can block evaluation
-        use crate::plugin_system::{AplPluginHooks, AplPlugin, PluginInfo, PluginRegistrar};
+        use crate::plugin_system::{AplPlugin, AplPluginHooks, PluginInfo, PluginRegistrar};
         use std::sync::Arc;
 
         struct BlockPlugin;
         impl AplPlugin for BlockPlugin {
             fn info(&self) -> PluginInfo {
-                PluginInfo { name: "block".into(), version: "0.1.0".into(), description: "blocks".into() }
+                PluginInfo {
+                    name: "block".into(),
+                    version: "0.1.0".into(),
+                    description: "blocks".into(),
+                }
             }
-            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> { Ok(()) }
-            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> { Some(Arc::new(BlockHooks)) }
+            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> {
+                Ok(())
+            }
+            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> {
+                Some(Arc::new(BlockHooks))
+            }
         }
         struct BlockHooks;
         impl AplPluginHooks for BlockHooks {
             fn before_eval(&self, expr: &Expr) -> AplResult<()> {
                 match expr {
-                    Expr::Monadic(crate::functions::Prim::Execute, _) => Err(ErrorCode::SecurityError),
+                    Expr::Monadic(crate::functions::Prim::Execute, _) => {
+                        Err(ErrorCode::SecurityError)
+                    }
                     _ => Ok(()),
                 }
             }
@@ -5284,16 +5294,24 @@ mod tests {
     #[test]
     fn test_plugin_hooks_before_syscmd_blocks() {
         // Test that plugin hooks can block system commands
-        use crate::plugin_system::{AplPluginHooks, AplPlugin, PluginInfo, PluginRegistrar};
+        use crate::plugin_system::{AplPlugin, AplPluginHooks, PluginInfo, PluginRegistrar};
         use std::sync::Arc;
 
         struct BlockSyscmdPlugin;
         impl AplPlugin for BlockSyscmdPlugin {
             fn info(&self) -> PluginInfo {
-                PluginInfo { name: "blocksyscmd".into(), version: "0.1.0".into(), description: "blocks syscmd".into() }
+                PluginInfo {
+                    name: "blocksyscmd".into(),
+                    version: "0.1.0".into(),
+                    description: "blocks syscmd".into(),
+                }
             }
-            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> { Ok(()) }
-            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> { Some(Arc::new(BlockSyscmdHooks)) }
+            fn register(&self, _reg: &mut PluginRegistrar) -> AplResult<()> {
+                Ok(())
+            }
+            fn hooks(&self) -> Option<Arc<dyn AplPluginHooks>> {
+                Some(Arc::new(BlockSyscmdHooks))
+            }
         }
         struct BlockSyscmdHooks;
         impl AplPluginHooks for BlockSyscmdHooks {
@@ -5354,7 +5372,8 @@ mod tests {
         // Load the demo-plugin and verify bindings are registered
         let mut env = crate::parser::Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'")
+            .unwrap();
         // Verify registered functions are callable
         let result = env.eval_line("STRREV 'hello'");
         assert!(result.is_ok());
@@ -5368,7 +5387,8 @@ mod tests {
         // Test SUMI function from demo-plugin
         let mut env = crate::parser::Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'")
+            .unwrap();
         let result = env.eval_line("SUMI 1 2 3 4 5");
         assert!(result.is_ok());
         let v = result.unwrap().unwrap();
@@ -5380,7 +5400,8 @@ mod tests {
         // PANICME panics but the panic is caught (not aborting the REPL)
         let mut env = crate::parser::Environment::new();
         crate::sysvars::init_sysvars(&mut env);
-        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'").unwrap();
+        env.eval_line("⎕LOADSO 'target/debug/libdemo_plugin.so'")
+            .unwrap();
         let result = env.eval_line("PANICME 42");
         // Should return DOMAIN ERROR, not abort
         assert!(result.is_err());

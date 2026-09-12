@@ -82,11 +82,20 @@ impl IpcServer {
     }
 }
 
-fn handle_client(mut stream: TcpStream, registry: Arc<Mutex<std::collections::HashMap<String, SvEntry>>>) {
-    let peer = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
+fn handle_client(
+    mut stream: TcpStream,
+    registry: Arc<Mutex<std::collections::HashMap<String, SvEntry>>>,
+) {
+    let peer = stream
+        .peer_addr()
+        .unwrap_or_else(|_| "unknown".parse().unwrap());
     println!("Client connected: {}", peer);
 
-    let reader = BufReader::new(stream.try_clone().unwrap_or_else(|_| stream.try_clone().expect("clone")));
+    let reader = BufReader::new(
+        stream
+            .try_clone()
+            .unwrap_or_else(|_| stream.try_clone().expect("clone")),
+    );
 
     for line in reader.lines() {
         match line {

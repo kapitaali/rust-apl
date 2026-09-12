@@ -205,12 +205,9 @@ pub fn quad_wi() -> ValueP {
 // Monadic ⎕RVAL uses the configured parameters.
 // Mirrors src/Quad_RVAL.cc (simplified).
 
-
-
 use rand::Rng;
 
 static RNG_STATE: Mutex<Option<rand::rngs::StdRng>> = Mutex::new(None);
-
 
 /// Configure the random number generator parameters.
 /// B is a vector of 1-4 integers: [rank, shape, type, maxdepth].
@@ -757,7 +754,6 @@ pub fn quad_map(env: &crate::parser::Environment, b: &ValueP) -> AplResult<Value
 //   8: file position
 //   9: seek position
 
-
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
@@ -808,7 +804,9 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
             }
             let path = cells_to_string(cells, 1);
             let file = File::open(&path).map_err(|_| ErrorCode::DomainError)?;
-            let mut handle = NEXT_FILE_HANDLE.lock().map_err(|_| ErrorCode::DomainError)?;
+            let mut handle = NEXT_FILE_HANDLE
+                .lock()
+                .map_err(|_| ErrorCode::DomainError)?;
             let h = *handle;
             *handle += 1;
             let mut open = get_open_files();
@@ -911,7 +909,9 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 .ok_or(ErrorCode::DomainError)?;
             let mut buf_writer = std::io::BufWriter::new(file);
             use std::io::Write;
-            buf_writer.write_all(&data).map_err(|_| ErrorCode::DomainError)?;
+            buf_writer
+                .write_all(&data)
+                .map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(data.len() as i64)))
         }
         7 => {
@@ -949,13 +949,13 @@ pub fn quad_fio(b: &ValueP) -> AplResult<ValueP> {
                 .as_mut()
                 .and_then(|m| m.get_mut(&handle))
                 .ok_or(ErrorCode::DomainError)?;
-            file.seek(SeekFrom::Start(pos)).map_err(|_| ErrorCode::DomainError)?;
+            file.seek(SeekFrom::Start(pos))
+                .map_err(|_| ErrorCode::DomainError)?;
             Ok(ValueP::scalar_from(Cell::Int(0)))
         }
         _ => Err(ErrorCode::DomainError),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // ⎕JSON — JSON parse/serialize
@@ -1456,11 +1456,7 @@ mod tests {
         // ⎕FIO 7 path — file size
         let mut cells: Vec<crate::cell::Cell> = vec![crate::cell::Cell::Int(7)];
         cells.extend(path.chars().map(|c| crate::cell::Cell::Char(c as u32)));
-        let v = ValueP::from_parts(
-            crate::shape::Shape::vector(cells.len() as i64),
-            cells,
-        )
-        .unwrap();
+        let v = ValueP::from_parts(crate::shape::Shape::vector(cells.len() as i64), cells).unwrap();
         let result = quad_fio(&v).unwrap();
         assert_eq!(result.cells()[0], crate::cell::Cell::Int(11));
         let _ = std::fs::remove_file(path);
@@ -1900,7 +1896,11 @@ mod sv_tests {
 
     #[test]
     fn test_cells_to_sv_string_basic() {
-        let cells = vec![Cell::Char('a' as u32), Cell::Char('b' as u32), Cell::Char('c' as u32)];
+        let cells = vec![
+            Cell::Char('a' as u32),
+            Cell::Char('b' as u32),
+            Cell::Char('c' as u32),
+        ];
         assert_eq!(cells_to_sv_string(&cells).unwrap(), "abc");
     }
 

@@ -38,7 +38,9 @@ fn pyo3_exec(code: &str) -> AplResult<ValueP> {
     Python::with_gil(|py| {
         // Create a globals dict for execution
         let globals = PyDict::new(py);
-        globals.set_item("__builtins__", py.import("builtins")?).ok();
+        globals
+            .set_item("__builtins__", py.import("builtins")?)
+            .ok();
 
         // Execute the code
         let result = py.eval(code, Some(globals), None);
@@ -192,13 +194,11 @@ impl AplPlugin for PythonPlugin {
         );
         reg.sysvars.insert(
             "⎕PYTHON.BACKEND".into(),
-            ValueP::scalar_from(Cell::Char(
-                if cfg!(feature = "pyo3") {
-                    'i' as u32 // 'i'n-process
-                } else {
-                    's' as u32 // 's'hell-out
-                },
-            )),
+            ValueP::scalar_from(Cell::Char(if cfg!(feature = "pyo3") {
+                'i' as u32 // 'i'n-process
+            } else {
+                's' as u32 // 's'hell-out
+            })),
         );
         Ok(())
     }

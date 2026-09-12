@@ -153,7 +153,7 @@ const PRIM_SYMBOLS: &[(&str, Prim)] = &[
     ("∨", Prim::Or),
     ("*", Prim::Power), // APL power (dyadic) / exponential (monadic)
     ("⋆", Prim::Power), // STAR OPERATOR — alias for power (GNU APL accepts both)
-    ("√", Prim::Sqrt),   // SQUARE ROOT (Kap extension)
+    ("√", Prim::Sqrt),  // SQUARE ROOT (Kap extension)
 ];
 
 /// Tokenize an APL source line.

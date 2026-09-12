@@ -191,9 +191,11 @@ fn main() {
     apl::sysvars::init_sysvars(&mut env);
 
     // Initialize plugins (Phase 6)
-    if let Err(e) =
-        apl::plugin_system::init_plugins(&mut env.funcs, &mut std::collections::HashMap::new(), &mut env.hooks)
-    {
+    if let Err(e) = apl::plugin_system::init_plugins(
+        &mut env.funcs,
+        &mut std::collections::HashMap::new(),
+        &mut env.hooks,
+    ) {
         eprintln!("Warning: plugin initialization failed: {}", e);
     }
 
@@ -448,25 +450,19 @@ fn handle_command(
                     let output = serde_json::json!(["AppendSessionOutput", {
                         "result": result,
                         "group": 0,
-                        "type": 0
+                        "type": 2
                     }]);
                     let _ = stream.write_all(&frame(&output.to_string()));
                 }
                 Ok(None) => {
-                    // Assignment — send empty output so client gets a response
-                    let output = serde_json::json!(["AppendSessionOutput", {
-                        "result": "",
-                        "group": 0,
-                        "type": 0
-                    }]);
-                    let _ = stream.write_all(&frame(&output.to_string()));
+                    // Assignment: APL produces no output for it — stay silent.
                 }
                 Err(e) => {
                     let rich = AplError::from(e).with_source_line(expr.to_string());
                     let output = serde_json::json!(["AppendSessionOutput", {
                         "result": format!("ERROR {rich}"),
                         "group": 0,
-                        "type": 1
+                        "type": 5
                     }]);
                     let _ = stream.write_all(&frame(&output.to_string()));
                 }

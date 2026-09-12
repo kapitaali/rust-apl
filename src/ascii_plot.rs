@@ -237,10 +237,18 @@ mod tests {
     fn test_aplot_matrix_line_plot() {
         // 4x3 matrix (4 rows, 3 columns) → 3 series
         let cells = vec![
-            Cell::Float(1.0), Cell::Float(2.0), Cell::Float(3.0),
-            Cell::Float(2.0), Cell::Float(3.0), Cell::Float(1.0),
-            Cell::Float(3.0), Cell::Float(1.0), Cell::Float(2.0),
-            Cell::Float(4.0), Cell::Float(4.0), Cell::Float(4.0),
+            Cell::Float(1.0),
+            Cell::Float(2.0),
+            Cell::Float(3.0),
+            Cell::Float(2.0),
+            Cell::Float(3.0),
+            Cell::Float(1.0),
+            Cell::Float(3.0),
+            Cell::Float(1.0),
+            Cell::Float(2.0),
+            Cell::Float(4.0),
+            Cell::Float(4.0),
+            Cell::Float(4.0),
         ];
         let shape = crate::shape::Shape::matrix(4, 3);
         let v = ValueP::from_parts(shape, cells).unwrap();
@@ -248,7 +256,7 @@ mod tests {
         assert!(result.is_ok());
         let plot = result.unwrap();
         assert_eq!(plot.rank(), 2); // matrix
-        // Should have legend for multiple series
+                                    // Should have legend for multiple series
     }
 
     #[test]
@@ -268,20 +276,14 @@ mod tests {
 
     #[test]
     fn test_render_line_plot_basic() {
-        let series = vec![
-            vec![1.0, 2.0, 3.0, 4.0, 5.0],
-            vec![5.0, 4.0, 3.0, 2.0, 1.0],
-        ];
+        let series = vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5.0, 4.0, 3.0, 2.0, 1.0]];
         let result = render_line_plot(&series);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_render_line_plot_unequal_series() {
-        let series = vec![
-            vec![1.0, 2.0, 3.0],
-            vec![1.0, 2.0],
-        ];
+        let series = vec![vec![1.0, 2.0, 3.0], vec![1.0, 2.0]];
         let result = render_line_plot(&series);
         assert!(result.is_err());
     }
