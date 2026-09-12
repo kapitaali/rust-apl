@@ -95,6 +95,25 @@ fn format_value(v: &apl::value::ValueP, pp: usize) -> String {
     }
 }
 
+/// Render an evaluation result exactly the way a session displays it: boxed
+/// when boxing is on and the value is nested, plain for flat matrices and
+/// character output, simple one-line formatting otherwise. Both the
+/// interactive REPL and the RIDE gateway evaluate path use this so the two
+/// can never drift apart again.
+fn render_session_value(v: &apl::value::ValueP, pp: usize, boxing: bool) -> String {
+    let all_chars = !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
+    let has_pointer = v.cells().iter().any(|c| c.is_pointer_cell());
+    if v.rank() >= 2 || all_chars || (has_pointer && boxing) {
+        if boxing && has_pointer {
+            apl::boxdisplay::render_with_pp(v, pp).join("\n")
+        } else {
+            apl::boxdisplay::render_plain_with_pp(v, pp).join("\n")
+        }
+    } else {
+        format_value(v, pp)
+    }
+}
+
 /// replace a leading ASCII '-' with a visible minus sign
 ///
 /// Must match boxdisplay::high_minus — this file keeps its own copy of the
@@ -219,7 +238,7 @@ fn main() {
         }
         let trimmed = line.trim_end();
         // system commands: )CMD — handled before anything else
-        if trimmed.starts_with(')') {
+        if trimmed.starts_with(')') || trimmed.starts_with(']') {
             let cmd = trimmed.chars().skip(1).collect::<String>();
             match apl::sysvars::syscmd(&cmd, &mut env) {
                 None => break, // )OFF
@@ -277,26 +296,10 @@ fn main() {
 
         match env.eval_line(trimmed) {
             Ok(Some(v)) => {
-                // ⎕PP print precision (default 10)
+                // ⎕PP print precision and ⎕BOXING style, as in a session
                 let pp = apl::sysvars::get_pp(&env).unwrap_or(10);
-                // ⎕BOXING: 1 = boxed display, 0 = plain (GNU APL default: 1)
                 let boxing = apl::sysvars::get_boxing(&env);
-                let all_chars =
-                    !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
-                let has_pointer = v.cells().iter().any(|c| c.is_pointer_cell());
-                if v.rank() >= 2 || all_chars || (has_pointer && boxing) {
-                    if boxing && has_pointer {
-                        for l in apl::boxdisplay::render_with_pp(&v, pp) {
-                            println!("{}", l);
-                        }
-                    } else {
-                        for l in apl::boxdisplay::render_plain_with_pp(&v, pp) {
-                            println!("{}", l);
-                        }
-                    }
-                } else {
-                    println!("{}", format_value(&v, pp));
-                }
+                println!("{}", render_session_value(&v, pp, boxing));
             }
             Ok(None) => {} // assignment — no output
             Err(e) => {
@@ -437,16 +440,29 @@ fn handle_command(
             if expr.is_empty() {
                 return;
             }
+            // System commands ( )… and ]… ) run locally, exactly like in a
+            // session; their output is "system command output" (type 4).
+            if expr.starts_with(')') || expr.starts_with(']') {
+                let cmd = expr.chars().skip(1).collect::<String>();
+                if let Some(lines) = apl::sysvars::syscmd(&cmd, env) {
+                    let out = lines.join("\n");
+                    if !out.is_empty() {
+                        let output = serde_json::json!(["AppendSessionOutput", {
+                            "result": out,
+                            "group": 0,
+                            "type": 4
+                        }]);
+                        let _ = stream.write_all(&frame(&output.to_string()));
+                    }
+                }
+                return;
+            }
             match env.eval_line(expr) {
                 Ok(Some(v)) => {
+                    // Same display rules as the REPL, so boxing shows here too.
                     let pp = apl::sysvars::get_pp(env).unwrap_or(10);
-                    let all_chars =
-                        !v.cells().is_empty() && v.cells().iter().all(|c| c.is_character_cell());
-                    let result = if v.rank() >= 2 || all_chars {
-                        apl::boxdisplay::render_plain_with_pp(&v, pp).join("\n")
-                    } else {
-                        format_value(&v, pp)
-                    };
+                    let boxing = apl::sysvars::get_boxing(env);
+                    let result = render_session_value(&v, pp, boxing);
                     let output = serde_json::json!(["AppendSessionOutput", {
                         "result": result,
                         "group": 0,

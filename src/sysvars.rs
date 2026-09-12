@@ -34,20 +34,39 @@ pub fn init_sysvars(env: &mut crate::parser::Environment) {
     ));
     env.set(CT_VAR, ValueP { inner: ct });
     env.set(PP_VAR, ValueP::scalar_from(crate::cell::Cell::Int(10)));
-    env.set(BOXING_VAR, ValueP::scalar_from(crate::cell::Cell::Int(1)));
+    env.set(
+        BOXING_VAR,
+        ValueP::scalar_from(crate::cell::Cell::Int(DEFAULT_BOXING_STYLE)),
+    );
     env.set(SEC_VAR, ValueP::scalar_from(crate::cell::Cell::Int(0)));
 }
 
-/// read ⎕BOXING (1 = nested arrays print boxed, 0 = plain)
+/// read ⎕BOXING: nonzero means nested/matrix values print boxed
 pub fn get_boxing(env: &crate::parser::Environment) -> bool {
+    get_boxing_style(env) != 0
+}
+
+/// Read the ⎕BOXING style code (0 = off, other values select a box style).
+/// The codes mirror what ]BOXING accepts, which in GNU APL is an integer
+/// style: ]BOXING OFF / N with N ∈ {±2, ±3, ±4, ±7, ±8, ±9, ±20..±25, ±29}.
+pub fn get_boxing_style(env: &crate::parser::Environment) -> i64 {
     match env.get(BOXING_VAR) {
         Some(v) => match v.first_cell().unwrap() {
-            crate::cell::Cell::Int(i) => *i != 0,
-            _ => true, // default: boxing on
+            crate::cell::Cell::Int(i) => *i,
+            _ => DEFAULT_BOXING_STYLE,
         },
-        None => true, // default: boxing on
+        None => DEFAULT_BOXING_STYLE,
     }
 }
+
+/// Default boxing style: 2 = boxed display on (matches GNU APL's "boxed" codes).
+pub const DEFAULT_BOXING_STYLE: i64 = 2;
+
+/// Style codes accepted by ]BOXING, mirroring GNU APL's cmd_BOXING switch.
+pub const BOXING_STYLES: &[i64] = &[
+    0, 2, 3, 4, 7, 8, 9, 20, 21, 22, 23, 24, 25, 29, -2, -3, -4, -7, -8, -9, -20, -21, -22, -23,
+    -24, -25, -29,
+];
 
 /// read ⎕SEC security level (0=normal, 1=restricted, 2=locked down)
 pub fn get_sec(env: &crate::parser::Environment) -> i64 {
@@ -174,6 +193,46 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                     Ok(val) if val >= 30 && val <= 9999 => Some(vec![format!("⎕PW = {}", val)]),
                     _ => Some(vec!["WIDTH must be 30-9999".to_string()]),
                 }
+            }
+        }
+        "BOXING" => {
+            // ]BOXING [OFF|ON|N] — box-drawing style for nested/matrix values.
+            // Without an argument, report the current style like GNU APL:
+            //   ]BOXING OFF   (style 0)
+            //   ]BOXING 2     (nonzero style = boxing on)
+            // Valid N mirror GNU APL's cmd_BOXING: 0, ±2..±4, ±7..±9, ±20..±25, ±29.
+            let arg = parts.next().unwrap_or("");
+            if arg.is_empty() {
+                let style = get_boxing_style(env);
+                return Some(vec![if style == 0 {
+                    "]BOXING OFF".to_string()
+                } else {
+                    format!("]BOXING {}", style)
+                }]);
+            }
+            let style = if arg.eq_ignore_ascii_case("off") {
+                Some(0i64)
+            } else if arg.eq_ignore_ascii_case("on") {
+                // GNU APL parses "on" via atoi() and silently sets the style
+                // to 0 (off). Accepting ON as "enable boxing with the default
+                // style" is deliberate here: it is what a user who types
+                // ]BOXING ON means.
+                Some(DEFAULT_BOXING_STYLE)
+            } else {
+                arg.parse::<i64>()
+                    .ok()
+                    .filter(|n| BOXING_STYLES.contains(n))
+            };
+            match style {
+                Some(n) => {
+                    env.set(BOXING_VAR, ValueP::scalar_from(crate::cell::Cell::Int(n)));
+                    Some(vec![])
+                }
+                None => Some(vec![
+                    "BAD ]BOXING PARAMETER+".to_string(),
+                    "  Valid parameters are OFF, N, and -N with".to_string(),
+                    "  N ∈ { 2, 3, 4, 7, 8, 9, 20, 21, 22, 23, 24, 25, 29 }".to_string(),
+                ]),
             }
         }
         "CONTINUE" => {
@@ -520,9 +579,9 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
         "HELP" => {
             // )HELP — list all available system commands
             let commands = [
-                "VARS", "FNS", "LIB", "DIGITS", "WIDTH", "CONTINUE", "ERASE", "RESET", "CLEAR",
-                "RECORD", "PLAY", "STOP", "DIR", "SVS", "HISTORY", "SAVE", "LOAD", "SI", "SYMBOLS",
-                "OUT", "DROP", "VERSION", "HELP", "OFF",
+                "VARS", "FNS", "LIB", "DIGITS", "WIDTH", "BOXING", "CONTINUE", "ERASE", "RESET",
+                "CLEAR", "RECORD", "PLAY", "STOP", "DIR", "SVS", "HISTORY", "SAVE", "LOAD", "SI",
+                "SYMBOLS", "OUT", "DROP", "VERSION", "HELP", "OFF",
             ];
             Some(vec![
                 "Available system commands:".to_string(),
@@ -538,7 +597,7 @@ pub fn syscmd(cmd_line: &str, env: &mut crate::parser::Environment) -> Option<Ve
                 "experimental REPL".to_string(),
             ])
         }
-        other => Some(vec![format!("UNKNOWN SYSTEM COMMAND: {})", other)]),
+        other => Some(vec![format!("UNKNOWN SYSTEM COMMAND: ){}", other)]),
     }
 }
 // ---------------------------------------------------------------------------
@@ -647,6 +706,37 @@ mod tests {
         // turn on
         env.set(BOXING_VAR, ValueP::scalar_from(Cell::Int(1)));
         assert!(get_boxing(&env));
+    }
+
+    #[test]
+    fn test_syscmd_boxing_report_and_set() {
+        let mut env = crate::parser::Environment::new();
+        init_sysvars(&mut env);
+        // ]BOXING without argument reports the style
+        let out = syscmd("BOXING", &mut env).unwrap();
+        assert_eq!(out[0], format!("]BOXING {}", DEFAULT_BOXING_STYLE));
+
+        // ]BOXING OFF disables boxing (silently, like GNU APL)
+        let out = syscmd("BOXING off", &mut env).unwrap();
+        assert!(out.is_empty());
+        assert!(!get_boxing(&env));
+        let out = syscmd("BOXING", &mut env).unwrap();
+        assert_eq!(out[0], "]BOXING OFF");
+
+        // ]BOXING ON enables boxing with the default style
+        let out = syscmd("BOXING on", &mut env).unwrap();
+        assert!(out.is_empty());
+        assert!(get_boxing(&env));
+
+        // GNU APL style codes are accepted
+        let out = syscmd("BOXING 9", &mut env).unwrap();
+        assert!(out.is_empty());
+        assert_eq!(get_boxing_style(&env), 9);
+
+        // invalid parameters are rejected, like GNU APL's BAD ]BOXING PARAMETER+
+        let out = syscmd("BOXING 1", &mut env).unwrap();
+        assert!(out[0].starts_with("BAD ]BOXING PARAMETER+"));
+        assert_eq!(get_boxing_style(&env), 9); // unchanged
     }
 
     #[test]
